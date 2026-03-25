@@ -1925,6 +1925,32 @@ STATUS_SORT_ORDER = {
     "Not observed": 4,
 }
 
+INTERNAL_EVENT_KEYS = {
+    "gtm_container_id",
+    "measurement_id",
+    "client_id",
+    "session_id",
+    "ads_data_redaction",
+    "page_location",
+    "page_title",
+}
+
+KEY_LABEL_OVERRIDES = {
+    "sub_category": "Subcategory",
+    "publish_date": "Published",
+    "update_date": "Updated",
+    "story_id": "Story ID",
+    "author_id": "Author ID",
+    "page_type": "Page Type",
+    "article_type": "Article Type",
+    "event_category": "Event Category",
+    "event_action": "Event Action",
+    "event_label": "Event Label",
+    "gtm_container_id": "GTM Container ID",
+    "page_location": "Page URL",
+    "page_title": "Page Title",
+}
+
 
 def merged_event_payload(event: dict):
     payload = {}
@@ -1979,18 +2005,133 @@ def preview_value_set(values, limit: int = 6):
     return " | ".join(values[:limit]) + f" (+{len(values) - limit} more)"
 
 
-def format_event_values(value_map, max_params: int = 8):
+def humanize_key(key: str) -> str:
+    key_text = str(key or "").strip()
+    if key_text in KEY_LABEL_OVERRIDES:
+        return KEY_LABEL_OVERRIDES[key_text]
+    text = key_text.replace("user.", "user ")
+    text = text.replace("_", " ").strip()
+    return text.title() if text else ""
+
+
+def format_readable_value(key: str, value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    if text.lower() in {"na", "n/a", "none", "null"}:
+        return "Not available"
+
+    if key in {"publish_date", "update_date"} or ("T" in text and ":" in text):
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            return parsed.strftime("%d %b %Y, %I:%M %p")
+        except Exception:
+            pass
+
+    if key in {"percent_scrolled", "scroll_percentage", "video_percent"} and re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return f"{text}%"
+
+    if key in {"category", "sub_category", "page_type", "article_type", "author"}:
+        if re.fullmatch(r"[a-z0-9]+(?:[-_ ][a-z0-9]+)+", text.lower()):
+            return text.replace("-", " ").replace("_", " ").title()
+
+    return text
+
+
+def format_readable_values(key: str, values):
+    readable = []
+    for value in values or []:
+        formatted = format_readable_value(key, value)
+        if formatted and formatted not in readable:
+            readable.append(formatted)
+    return readable
+
+
+def build_event_detail_rows(value_map, *, internal_only: bool = False):
+    rows = []
+    for key, values in value_map.items():
+        is_internal = key in INTERNAL_EVENT_KEYS
+        if internal_only and not is_internal:
+            continue
+        if not internal_only and is_internal:
+            continue
+
+        readable_values = format_readable_values(key, values)
+        if not readable_values:
+            continue
+
+        rows.append(
+            {
+                "Field": humanize_key(key),
+                "Value": ", ".join(readable_values),
+            }
+        )
+
+    return rows
+
+
+def concise_event_highlights(value_map, max_items: int = 4):
     if not value_map:
         return ""
 
-    parts = []
-    for index, (key, values) in enumerate(value_map.items()):
-        if index >= max_params:
-            parts.append(f"+{len(value_map) - max_params} more")
-            break
-        parts.append(f"{key}={preview_value_set(values)}")
+    priority_keys = [
+        "percent_scrolled",
+        "scroll_percentage",
+        "video_percent",
+        "category",
+        "sub_category",
+        "page_type",
+        "article_type",
+        "author",
+        "story_id",
+        "publish_date",
+        "update_date",
+        "link_url",
+        "link_text",
+        "video_title",
+        "video_provider",
+        "event_label",
+        "event_category",
+        "event_action",
+        "name",
+        "label",
+    ]
 
-    return "; ".join(parts)
+    candidate_keys = [key for key in value_map.keys() if key not in INTERNAL_EVENT_KEYS]
+    if not candidate_keys:
+        candidate_keys = list(value_map.keys())
+
+    selected_keys = []
+    for key in priority_keys:
+        if key in candidate_keys and key not in selected_keys:
+            selected_keys.append(key)
+        if len(selected_keys) >= max_items:
+            break
+
+    if len(selected_keys) < max_items:
+        for key in candidate_keys:
+            if key not in selected_keys:
+                selected_keys.append(key)
+            if len(selected_keys) >= max_items:
+                break
+
+    highlights = []
+    for key in selected_keys:
+        readable_values = format_readable_values(key, value_map.get(key, []))
+        if not readable_values:
+            continue
+        label = humanize_key(key)
+        if len(readable_values) == 1:
+            highlights.append(f"{label}: {readable_values[0]}")
+        else:
+            highlights.append(f"{label}: {', '.join(readable_values)}")
+
+    remaining = len(candidate_keys) - len(selected_keys)
+    if remaining > 0:
+        highlights.append(f"+{remaining} more fields")
+
+    return " | ".join(highlights)
 
 
 def build_event_audit_rows(result: dict):
@@ -2033,10 +2174,18 @@ def build_event_audit_rows(result: dict):
             {
                 "event_name": event_name,
                 "status": status,
-                "network_occurrences": network_count,
-                "execution_occurrences": execution_count,
-                "network_values": format_event_values(network_group.get("values", {})),
-                "execution_values": format_event_values(execution_group.get("values", {})),
+                "times_fired": network_count or execution_count,
+                "capture_layer": "Network" if network_count else "Execution only",
+                "key_values_seen": concise_event_highlights(
+                    network_group.get("values", {}) or execution_group.get("values", {})
+                ),
+                "details": build_event_detail_rows(
+                    network_group.get("values", {}) or execution_group.get("values", {})
+                ),
+                "technical_details": build_event_detail_rows(
+                    network_group.get("values", {}) or execution_group.get("values", {}),
+                    internal_only=True,
+                ),
             }
         )
 
@@ -2284,7 +2433,41 @@ This capture is split into three layers:
                         st.info("No GA4 events were detected during the audit window.")
                     else:
                         st.caption("Repeated event fires are grouped, so values like scroll thresholds stay visible in one row.")
-                        st.dataframe(event_df, use_container_width=True, hide_index=True)
+                        event_display_df = event_df[
+                            ["event_name", "status", "times_fired", "capture_layer", "key_values_seen"]
+                        ].rename(
+                            columns={
+                                "event_name": "Event",
+                                "status": "Status",
+                                "times_fired": "Times Fired",
+                                "capture_layer": "Seen In",
+                                "key_values_seen": "What Was Sent",
+                            }
+                        )
+                        st.dataframe(event_display_df, use_container_width=True, hide_index=True)
+                        with st.expander("Detailed event values", expanded=False):
+                            for event_row in audit_summary["event_rows"]:
+                                title = f"{event_row['event_name']} ({event_row['times_fired']} time"
+                                if event_row["times_fired"] != 1:
+                                    title += "s"
+                                title += ")"
+                                with st.expander(title, expanded=False):
+                                    if event_row["details"]:
+                                        st.dataframe(
+                                            pd.DataFrame(event_row["details"]),
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
+                                    else:
+                                        st.info("No user-facing values were captured for this event.")
+
+                                    if event_row["technical_details"]:
+                                        with st.expander("Technical fields", expanded=False):
+                                            st.dataframe(
+                                                pd.DataFrame(event_row["technical_details"]),
+                                                use_container_width=True,
+                                                hide_index=True,
+                                            )
 
                     st.markdown("### Custom Dimensions / Parameters")
                     mapping_df = pd.DataFrame(audit_summary["mapping_rows"])
