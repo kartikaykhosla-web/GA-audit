@@ -12,6 +12,7 @@ from urllib.parse import urlparse, parse_qs
 import pandas as pd
 import requests
 import streamlit as st
+from bs4 import BeautifulSoup
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -309,13 +310,21 @@ def create_driver(headless: bool = True):
     chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
 
     chrome_binary = os.environ.get("CHROME_BINARY")
-    default_binary = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    if chrome_binary and os.path.exists(chrome_binary):
-        chrome_options.binary_location = chrome_binary
-    elif os.path.exists(default_binary):
-        chrome_options.binary_location = default_binary
-
-    browser_cmd = chrome_options.binary_location or default_binary
+    binary_candidates = [
+        chrome_binary,
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    ]
+    browser_cmd = ""
+    for candidate in binary_candidates:
+        if candidate and os.path.exists(candidate):
+            chrome_options.binary_location = candidate
+            browser_cmd = candidate
+            break
+    if not browser_cmd:
+        browser_cmd = chrome_binary or ""
 
     def _major_version(text: str) -> str:
         match = re.search(r"(\d+)\.", text or "")
@@ -363,6 +372,11 @@ def create_driver(headless: bool = True):
         return candidates[0][2]
 
     chromedriver_path = os.environ.get("CHROMEDRIVER_PATH") or _locate_cached_chromedriver(browser_major)
+    if not chromedriver_path:
+        for candidate in ("/usr/bin/chromedriver", shutil.which("chromedriver")):
+            if candidate and os.path.exists(candidate):
+                chromedriver_path = candidate
+                break
     service = Service(executable_path=chromedriver_path) if chromedriver_path else None
 
     try:
