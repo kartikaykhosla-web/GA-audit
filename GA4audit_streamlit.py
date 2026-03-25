@@ -1917,6 +1917,133 @@ def extract_event_names(result: dict):
     return names
 
 
+STATUS_SORT_ORDER = {
+    "Captured in network": 0,
+    "Captured in execution": 1,
+    "Only in trigger": 2,
+    "Missing": 3,
+    "Not observed": 4,
+}
+
+
+def merged_event_payload(event: dict):
+    payload = {}
+    for field in ("params", "event_params"):
+        raw = event.get(field)
+        if isinstance(raw, dict):
+            payload.update(raw)
+
+    user_properties = event.get("user_properties")
+    if isinstance(user_properties, dict):
+        for key, value in user_properties.items():
+            payload[f"user.{key}"] = value
+
+    return payload
+
+
+def build_event_groups(events):
+    groups = {}
+
+    for event in events or []:
+        if not isinstance(event, dict):
+            continue
+
+        display_name = str(event.get("event_name") or "").strip() or "(unnamed event)"
+        event_key = normalize_event_name(display_name) or display_name
+        group = groups.setdefault(
+            event_key,
+            {
+                "event_name": display_name,
+                "count": 0,
+                "values": {},
+            },
+        )
+        group["count"] += 1
+
+        for key, value in merged_event_payload(event).items():
+            value_text = stringify_value(value)
+            if value_text == "":
+                continue
+            seen_values = group["values"].setdefault(key, [])
+            if value_text not in seen_values:
+                seen_values.append(value_text)
+
+    return groups
+
+
+def preview_value_set(values, limit: int = 6):
+    if not values:
+        return ""
+    if len(values) <= limit:
+        return " | ".join(values)
+    return " | ".join(values[:limit]) + f" (+{len(values) - limit} more)"
+
+
+def format_event_values(value_map, max_params: int = 8):
+    if not value_map:
+        return ""
+
+    parts = []
+    for index, (key, values) in enumerate(value_map.items()):
+        if index >= max_params:
+            parts.append(f"+{len(value_map) - max_params} more")
+            break
+        parts.append(f"{key}={preview_value_set(values)}")
+
+    return "; ".join(parts)
+
+
+def build_event_audit_rows(result: dict):
+    execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
+    network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
+
+    execution_groups = build_event_groups(execution_events)
+    network_groups = build_event_groups(network_events)
+
+    ordered_event_keys = []
+    for event in network_events + execution_events:
+        if not isinstance(event, dict):
+            continue
+        event_name = str(event.get("event_name") or "").strip() or "(unnamed event)"
+        event_key = normalize_event_name(event_name) or event_name
+        if event_key not in ordered_event_keys:
+            ordered_event_keys.append(event_key)
+
+    rows = []
+    for event_key in ordered_event_keys:
+        execution_group = execution_groups.get(event_key, {})
+        network_group = network_groups.get(event_key, {})
+        event_name = (
+            network_group.get("event_name")
+            or execution_group.get("event_name")
+            or event_key
+        )
+
+        network_count = int(network_group.get("count", 0) or 0)
+        execution_count = int(execution_group.get("count", 0) or 0)
+
+        if network_count:
+            status = "Captured in network"
+        elif execution_count:
+            status = "Captured in execution"
+        else:
+            status = "Not observed"
+
+        rows.append(
+            {
+                "event_name": event_name,
+                "status": status,
+                "network_occurrences": network_count,
+                "execution_occurrences": execution_count,
+                "network_values": format_event_values(network_group.get("values", {})),
+                "execution_values": format_event_values(execution_group.get("values", {})),
+            }
+        )
+
+    rows.sort(key=lambda row: (STATUS_SORT_ORDER.get(row["status"], 99), row["event_name"].lower()))
+    return rows
+
+
 def is_user_facing_row(row: dict) -> bool:
     keys = [row.get("dl_key"), row.get("exec_key"), row.get("ga4_key")]
     for key in keys:
@@ -1971,6 +2098,7 @@ def build_audit_mapping_rows(result: dict):
         }
         cleaned_rows.append(cleaned)
 
+    cleaned_rows.sort(key=lambda row: (STATUS_SORT_ORDER.get(row["status"], 99), row["dimension"].lower()))
     return cleaned_rows
 
 
@@ -2023,6 +2151,7 @@ def build_audit_focus_summary(result: dict):
         "pageview_triggered": pageview_triggered,
         "pageview_source": pageview_source,
         "events_fired": extract_event_names(result),
+        "event_rows": build_event_audit_rows(result),
         "mapping_rows": mapping_rows,
         "captured_network": captured_network,
         "captured_execution": captured_execution,
@@ -2149,13 +2278,15 @@ This capture is split into three layers:
                     stat_col2.metric("Pageview Source", audit_summary["pageview_source"])
                     stat_col3.metric("Events Fired", str(len(audit_summary["events_fired"])))
 
-                    st.markdown("### Events Fired")
-                    if audit_summary["events_fired"]:
-                        st.write(", ".join(audit_summary["events_fired"]))
-                    else:
+                    st.markdown("### Events")
+                    event_df = pd.DataFrame(audit_summary["event_rows"])
+                    if event_df.empty:
                         st.info("No GA4 events were detected during the audit window.")
+                    else:
+                        st.caption("Repeated event fires are grouped, so values like scroll thresholds stay visible in one row.")
+                        st.dataframe(event_df, use_container_width=True, hide_index=True)
 
-                    st.markdown("### Trigger → Execution → Network Mapping")
+                    st.markdown("### Custom Dimensions / Parameters")
                     mapping_df = pd.DataFrame(audit_summary["mapping_rows"])
                     if mapping_df.empty:
                         st.info("No mapping table available.")
