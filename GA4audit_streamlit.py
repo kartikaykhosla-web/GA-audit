@@ -2029,6 +2029,13 @@ def format_readable_value(key: str, value: str) -> str:
         except Exception:
             pass
 
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        lower_key = key.lower()
+        if key in {"percent_scrolled", "scroll_percentage", "video_percent"} or any(
+            token in lower_key for token in ("percent", "percentage", "scroll")
+        ):
+            return f"{text}%"
+
     if key in {"percent_scrolled", "scroll_percentage", "video_percent"} and re.fullmatch(r"\d+(?:\.\d+)?", text):
         return f"{text}%"
 
@@ -2049,8 +2056,17 @@ def format_readable_values(key: str, values):
 
 
 def build_event_detail_rows(value_map, *, internal_only: bool = False):
+    varying_keys = {
+        key
+        for key, values in value_map.items()
+        if len(format_readable_values(key, values)) > 1
+    }
     rows = []
-    for key, values in value_map.items():
+    ordered_items = sorted(
+        value_map.items(),
+        key=lambda item: (item[0] not in varying_keys, humanize_key(item[0]).lower()),
+    )
+    for key, values in ordered_items:
         is_internal = key in INTERNAL_EVENT_KEYS
         if internal_only and not is_internal:
             continue
@@ -2103,6 +2119,17 @@ def concise_event_highlights(value_map, max_items: int = 4):
         candidate_keys = list(value_map.keys())
 
     selected_keys = []
+    varying_keys = [
+        key
+        for key in candidate_keys
+        if len(format_readable_values(key, value_map.get(key, []))) > 1
+    ]
+    for key in varying_keys:
+        if key not in selected_keys:
+            selected_keys.append(key)
+        if len(selected_keys) >= max_items:
+            break
+
     for key in priority_keys:
         if key in candidate_keys and key not in selected_keys:
             selected_keys.append(key)
