@@ -2161,6 +2161,30 @@ def concise_event_highlights(value_map, max_items: int = 4):
     return " | ".join(highlights)
 
 
+def is_scroll_event_name(event_name: str) -> bool:
+    normalized = normalize_event_name(event_name)
+    return "scroll" in normalized
+
+
+def extract_scroll_percent_values(value_map):
+    if not isinstance(value_map, dict):
+        return []
+
+    preferred_keys = [
+        key
+        for key in value_map.keys()
+        if "percent" in str(key).lower()
+    ]
+
+    readable_values = []
+    for key in preferred_keys:
+        for value in format_readable_values(key, value_map.get(key, [])):
+            if value and value not in readable_values:
+                readable_values.append(value)
+
+    return readable_values
+
+
 def build_event_audit_rows(result: dict):
     execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
     network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
@@ -2197,20 +2221,34 @@ def build_event_audit_rows(result: dict):
         else:
             status = "Not observed"
 
+        event_values = network_group.get("values", {}) or execution_group.get("values", {})
+        scroll_percent_values = (
+            extract_scroll_percent_values(event_values)
+            if is_scroll_event_name(event_name)
+            else []
+        )
+        details = build_event_detail_rows(event_values)
+        if scroll_percent_values:
+            summary_text = f"Scroll Percent: {', '.join(scroll_percent_values)}"
+            details = [
+                {
+                    "Field": "Scroll Percent",
+                    "Value": ", ".join(scroll_percent_values),
+                }
+            ]
+        else:
+            summary_text = concise_event_highlights(event_values)
+
         rows.append(
             {
                 "event_name": event_name,
                 "status": status,
                 "times_fired": network_count or execution_count,
                 "capture_layer": "Network" if network_count else "Execution only",
-                "key_values_seen": concise_event_highlights(
-                    network_group.get("values", {}) or execution_group.get("values", {})
-                ),
-                "details": build_event_detail_rows(
-                    network_group.get("values", {}) or execution_group.get("values", {})
-                ),
+                "key_values_seen": summary_text,
+                "details": details,
                 "technical_details": build_event_detail_rows(
-                    network_group.get("values", {}) or execution_group.get("values", {}),
+                    event_values,
                     internal_only=True,
                 ),
             }
