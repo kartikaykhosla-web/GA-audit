@@ -2398,12 +2398,6 @@ This capture is split into three layers:
         value=8,
     )
 
-    headful = st.checkbox(
-        "Run Chrome in visible mode",
-        value=False,
-        help="Use this if tracking is blocked in headless mode.",
-    )
-
     if st.button("Run audit"):
         urls = [
             url.strip()
@@ -2422,7 +2416,7 @@ This capture is split into three layers:
             for index, url in enumerate(urls, start=1):
                 status_box.write(f"Auditing {url} ({index}/{len(urls)})")
                 try:
-                    driver = create_driver(headless=not headful)
+                    driver = create_driver(headless=True)
                     try:
                         results.append(audit_single_url(driver, url, wait_seconds))
                     finally:
@@ -2644,13 +2638,11 @@ with tab_compare:
     stage_url = stage_col.text_input("Stage URL")
 
     wait_cmp = st.slider("Wait seconds", 4, 20, 8, key="wait_compare")
-    headful_cmp = st.checkbox("Visible browser", value=False, key="cmp_headful")
-
     if st.button("Run comparison"):
         if not prod_url or not stage_url:
             st.error("Enter both URLs.")
         else:
-            driver = create_driver(headless=not headful_cmp)
+            driver = create_driver(headless=True)
             try:
                 prod = audit_single_url(driver, prod_url, wait_cmp)
                 stage = audit_single_url(driver, stage_url, wait_cmp)
