@@ -1917,6 +1917,21 @@ def find_event_by_name(events, target_name: str):
     return None
 
 
+def count_datalayer_events(result: dict, target_name: str) -> int:
+    data_layer = load_json_payload(result.get("all_datalayer_json", ""), [])
+    if not isinstance(data_layer, list):
+        return 0
+
+    target = normalize_event_name(target_name)
+    count = 0
+    for item in data_layer:
+        if not isinstance(item, dict):
+            continue
+        if normalize_event_name(item.get("event")) == target:
+            count += 1
+    return count
+
+
 def extract_event_names(result: dict):
     names = []
     seen = set()
@@ -2273,6 +2288,12 @@ def build_event_audit_rows(result: dict):
         else:
             status = "Not observed"
 
+        display_count = network_count or execution_count
+        if normalize_event_name(event_name) == "pageview":
+            datalayer_count = count_datalayer_events(result, "page_view")
+            if datalayer_count:
+                display_count = datalayer_count
+
         event_values = network_group.get("values", {}) or execution_group.get("values", {})
         scroll_percent_values = (
             extract_scroll_percent_values(event_values)
@@ -2295,7 +2316,7 @@ def build_event_audit_rows(result: dict):
             {
                 "event_name": event_name,
                 "status": status,
-                "times_fired": network_count or execution_count,
+                "times_fired": display_count,
                 "capture_layer": "Network" if network_count else "Execution only",
                 "key_values_seen": summary_text,
                 "details": details,
