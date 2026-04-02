@@ -51,6 +51,14 @@ def _flatten_qs(values):
     return flat
 
 
+def _stringify_value(value):
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
 def _normalize_key(name: str) -> str:
     if not isinstance(name, str):
         return ""
@@ -84,7 +92,7 @@ def decode_ga4_collect_url(url: str) -> dict:
         "dl": "page_location",
         "dt": "page_title",
         "dr": "page_referrer",
-        "ul": "language",
+        "ul": "browser_language",
     }
     for raw_key, clean_key in fallback_fields.items():
         if raw_key in flat and clean_key not in event_params:
@@ -133,13 +141,29 @@ def merge_ga4_events(event_list):
     return merged
 
 
-def _collect_params(event_list):
+def _collect_param_values(event_list):
     params = {}
     for event in merge_ga4_events(event_list):
         raw = event.get("params")
-        if isinstance(raw, dict):
-            params.update(raw)
+        if not isinstance(raw, dict):
+            continue
+        for key, value in raw.items():
+            norm = _normalize_key(key)
+            if not norm:
+                continue
+            entry = params.setdefault(norm, {"key": key, "values": []})
+            value_text = _stringify_value(value)
+            if value_text and value_text not in entry["values"]:
+                entry["values"].append(value_text)
     return params
+
+
+def _compact_values(values):
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    return values
 
 
 def map_dl_to_ga4(
@@ -151,8 +175,8 @@ def map_dl_to_ga4(
     exec_events = _safe_json_load(ga4_exec_events_json, [])
     network_events = _safe_json_load(ga4_network_events_json, [])
 
-    exec_params = _collect_params(exec_events)
-    network_params = _collect_params(network_events)
+    exec_params = _collect_param_values(exec_events)
+    network_params = _collect_param_values(network_events)
 
     rows = []
     matched_exec = set()
@@ -164,23 +188,17 @@ def map_dl_to_ga4(
 
         dl_norm = _normalize_key(dl_key)
 
-        exec_key = None
-        exec_value = None
-        for current_key, current_value in exec_params.items():
-            if _normalize_key(current_key) == dl_norm:
-                exec_key = current_key
-                exec_value = current_value
-                matched_exec.add(current_key)
-                break
+        exec_entry = exec_params.get(dl_norm)
+        exec_key = exec_entry["key"] if exec_entry else None
+        exec_value = _compact_values(exec_entry["values"]) if exec_entry else None
+        if exec_entry:
+            matched_exec.add(dl_norm)
 
-        ga4_key = None
-        ga4_value = None
-        for current_key, current_value in network_params.items():
-            if _normalize_key(current_key) == dl_norm:
-                ga4_key = current_key
-                ga4_value = current_value
-                matched_network.add(current_key)
-                break
+        ga4_entry = network_params.get(dl_norm)
+        ga4_key = ga4_entry["key"] if ga4_entry else None
+        ga4_value = _compact_values(ga4_entry["values"]) if ga4_entry else None
+        if ga4_entry:
+            matched_network.add(dl_norm)
 
         rows.append(
             {
@@ -193,8 +211,8 @@ def map_dl_to_ga4(
             }
         )
 
-    for ga4_key, ga4_value in network_params.items():
-        if ga4_key in matched_network:
+    for norm_key, ga4_entry in network_params.items():
+        if norm_key in matched_network:
             continue
         rows.append(
             {
@@ -202,20 +220,20 @@ def map_dl_to_ga4(
                 "dl_value": None,
                 "exec_key": None,
                 "exec_value": None,
-                "ga4_key": ga4_key,
-                "ga4_value": ga4_value,
+                "ga4_key": ga4_entry["key"],
+                "ga4_value": _compact_values(ga4_entry["values"]),
             }
         )
 
-    for exec_key, exec_value in exec_params.items():
-        if exec_key in matched_exec:
+    for norm_key, exec_entry in exec_params.items():
+        if norm_key in matched_exec:
             continue
         rows.append(
             {
                 "dl_key": None,
                 "dl_value": None,
-                "exec_key": exec_key,
-                "exec_value": exec_value,
+                "exec_key": exec_entry["key"],
+                "exec_value": _compact_values(exec_entry["values"]),
                 "ga4_key": None,
                 "ga4_value": None,
             }
@@ -463,7 +481,7 @@ GA4_CONTEXT_FIELD_MAP = {
     "dl": "page_location",
     "dt": "page_title",
     "dr": "page_referrer",
-    "ul": "language",
+    "ul": "browser_language",
     "tid": "measurement_id",
     "cid": "client_id",
     "sid": "session_id",
@@ -1933,6 +1951,19 @@ INTERNAL_EVENT_KEYS = {
     "ads_data_redaction",
     "page_location",
     "page_title",
+    "browser_language",
+}
+
+NON_CUSTOM_MAPPING_KEYS = {
+    "gtmcontainerid",
+    "measurementid",
+    "clientid",
+    "sessionid",
+    "adsdataredaction",
+    "pagelocation",
+    "pagetitle",
+    "pagereferrer",
+    "browserlanguage",
 }
 
 KEY_LABEL_OVERRIDES = {
@@ -1949,6 +1980,7 @@ KEY_LABEL_OVERRIDES = {
     "gtm_container_id": "GTM Container ID",
     "page_location": "Page URL",
     "page_title": "Page Title",
+    "browser_language": "Browser Language",
 }
 
 
@@ -1981,18 +2013,29 @@ def build_event_groups(events):
             {
                 "event_name": display_name,
                 "count": 0,
+                "unique_count": 0,
+                "signatures": set(),
                 "values": {},
             },
         )
         group["count"] += 1
 
-        for key, value in merged_event_payload(event).items():
+        payload = merged_event_payload(event)
+        signature_items = []
+        for key, value in payload.items():
             value_text = stringify_value(value)
             if value_text == "":
                 continue
             seen_values = group["values"].setdefault(key, [])
             if value_text not in seen_values:
                 seen_values.append(value_text)
+            if key not in INTERNAL_EVENT_KEYS:
+                signature_items.append((normalize_dimension_name(key), value_text))
+
+        signature = tuple(sorted(signature_items))
+        if signature not in group["signatures"]:
+            group["signatures"].add(signature)
+            group["unique_count"] += 1
 
     return groups
 
@@ -2185,6 +2228,15 @@ def extract_scroll_percent_values(value_map):
     return readable_values
 
 
+def format_mapping_value(key, value):
+    if isinstance(value, list):
+        readable = format_readable_values(str(key or ""), value)
+        return ", ".join(readable) if readable else ""
+
+    formatted = format_readable_value(str(key or ""), value)
+    return formatted if formatted else stringify_value(value)
+
+
 def build_event_audit_rows(result: dict):
     execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
     network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
@@ -2211,8 +2263,8 @@ def build_event_audit_rows(result: dict):
             or event_key
         )
 
-        network_count = int(network_group.get("count", 0) or 0)
-        execution_count = int(execution_group.get("count", 0) or 0)
+        network_count = int(network_group.get("unique_count", 0) or network_group.get("count", 0) or 0)
+        execution_count = int(execution_group.get("unique_count", 0) or execution_group.get("count", 0) or 0)
 
         if network_count:
             status = "Captured in network"
@@ -2286,6 +2338,8 @@ def build_audit_mapping_rows(result: dict):
         dimension = str(dimension or "").strip()
         if not dimension:
             continue
+        if normalize_dimension_name(dimension) in NON_CUSTOM_MAPPING_KEYS:
+            continue
 
         ga4_value = row.get("ga4_value")
         exec_value = row.get("exec_value")
@@ -2303,11 +2357,11 @@ def build_audit_mapping_rows(result: dict):
         cleaned = {
             "dimension": dimension,
             "dl_key": row.get("dl_key") or "",
-            "dl_value": dl_value if dl_value is not None else "",
+            "dl_value": format_mapping_value(row.get("dl_key") or dimension, dl_value),
             "exec_key": row.get("exec_key") or "",
-            "exec_value": exec_value if exec_value is not None else "",
+            "exec_value": format_mapping_value(row.get("exec_key") or dimension, exec_value),
             "ga4_key": row.get("ga4_key") or "",
-            "ga4_value": ga4_value if ga4_value is not None else "",
+            "ga4_value": format_mapping_value(row.get("ga4_key") or dimension, ga4_value),
             "status": status,
         }
         cleaned_rows.append(cleaned)
