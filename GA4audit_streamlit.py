@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple, Optional, Set
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlunparse
 
 import pandas as pd
 import requests
@@ -39,6 +39,45 @@ def _safe_json_load(value, fallback):
         except Exception:
             return fallback
     return value if isinstance(value, type(fallback)) else fallback
+
+
+def normalize_single_url(raw_value: str):
+    text = str(raw_value or "").strip()
+    if not text:
+        return "", "", "Please enter a URL."
+
+    tokens = [token.strip() for token in text.replace(",", " ").split() if token.strip()]
+    if len(tokens) != 1:
+        return "", "", "Please enter only one URL."
+
+    original = tokens[0]
+    candidate = original
+    had_scheme = "://" in candidate
+    if not had_scheme:
+        candidate = f"https://{candidate}"
+
+    parsed = urlparse(candidate)
+    if not parsed.netloc and parsed.path:
+        parsed = urlparse(f"https://{parsed.path}")
+
+    host = (parsed.netloc or "").strip()
+    if not host or "." not in host:
+        return "", "", "Please enter a valid URL."
+
+    if not had_scheme and not host.startswith("www.") and host.count(".") == 1:
+        host = f"www.{host}"
+
+    normalized = urlunparse(
+        (
+            parsed.scheme or "https",
+            host,
+            parsed.path or "/",
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+    return original, normalized, ""
 
 
 def _flatten_qs(values):
@@ -2451,7 +2490,7 @@ def build_audit_focus_summary(result: dict):
 with tab_main:
     st.markdown(
         """
-Paste one or more URLs and run the audit.
+Paste one URL and run the audit.
 
 This capture is split into three layers:
 - `dataLayer` trigger state
@@ -2460,10 +2499,9 @@ This capture is split into three layers:
 """
     )
 
-    urls_text = st.text_area(
-        "URLs",
-        height=160,
-        placeholder="https://www.example.com/\nhttps://www.example.com/article-1",
+    url_text = st.text_input(
+        "URL",
+        placeholder="https://www.example.com/article-1 or www.example.com/article-1",
     )
 
     wait_seconds = st.slider(
@@ -2474,32 +2512,29 @@ This capture is split into three layers:
     )
 
     if st.button("Run audit"):
-        urls = [
-            url.strip()
-            for line in urls_text.splitlines()
-            for url in line.split(",")
-            if url.strip()
-        ]
+        original_url, normalized_url, input_error = normalize_single_url(url_text)
 
-        if not urls:
-            st.error("Please enter at least one URL.")
+        if input_error:
+            st.error(input_error)
         else:
+            if normalized_url != original_url:
+                st.info(f"Using normalized URL: `{normalized_url}`")
+
             results = []
             progress = st.progress(0)
             status_box = st.empty()
 
-            for index, url in enumerate(urls, start=1):
-                status_box.write(f"Auditing {url} ({index}/{len(urls)})")
+            status_box.write(f"Auditing {normalized_url} (1/1)")
+            try:
+                driver = create_driver(headless=True)
                 try:
-                    driver = create_driver(headless=True)
-                    try:
-                        results.append(audit_single_url(driver, url, wait_seconds))
-                    finally:
-                        driver.quit()
-                except Exception as exc:
-                    st.error(f"Error auditing {url}")
-                    st.exception(exc)
-                progress.progress(index / len(urls))
+                    results.append(audit_single_url(driver, normalized_url, wait_seconds))
+                finally:
+                    driver.quit()
+            except Exception as exc:
+                st.error(f"Error auditing {normalized_url}")
+                st.exception(exc)
+            progress.progress(1.0)
 
             status_box.write("Done.")
 
