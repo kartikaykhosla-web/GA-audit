@@ -1961,7 +1961,7 @@ def format_log_worksheet(worksheet, headers):
 def build_execution_dimension_map(audit_summary: dict):
     execution_dimensions = {}
     for row in audit_summary.get("mapping_rows", []):
-        value = row.get("exec_value")
+        value = row.get("execution_value")
         dimension = str(row.get("dimension") or "").strip()
         if not dimension or value in ("", None):
             continue
@@ -2359,8 +2359,72 @@ def snapshot_rows_from_payload(payload):
 
     rows = []
     for key, value in payload.items():
-        formatted = format_mapping_value(key, value)
+        formatted = format_exact_value(value)
         rows.append({"Field": str(key), "Value": formatted})
+
+    return pd.DataFrame(rows)
+
+
+def snapshot_ga4_payload(event):
+    if not isinstance(event, dict):
+        return {}
+
+    payload = {}
+    event_name = event.get("event_name")
+    if event_name not in (None, ""):
+        payload["event_name"] = event_name
+
+    params = event.get("params") or {}
+    if isinstance(params, dict):
+        payload.update(params)
+
+    user_properties = event.get("user_properties") or {}
+    if isinstance(user_properties, dict):
+        for key, value in user_properties.items():
+            payload[f"user.{key}"] = value
+
+    return payload
+
+
+def include_snapshot_field(key: str) -> bool:
+    key_text = str(key or "").strip()
+    if not key_text:
+        return False
+    if key_text in {"event", "event_name"}:
+        return True
+    if key_text.startswith("gtm."):
+        return False
+    if normalize_dimension_name(key_text) in NON_CUSTOM_MAPPING_KEYS:
+        return False
+    return True
+
+
+def build_snapshot_comparison_table(trigger_payload, computed_payload, execution_payload, network_payload):
+    ordered_keys = []
+    for payload in (trigger_payload, computed_payload, execution_payload, network_payload):
+        if not isinstance(payload, dict):
+            continue
+        for key in payload.keys():
+            if key not in ordered_keys and include_snapshot_field(key):
+                ordered_keys.append(key)
+
+    rows = []
+    for key in ordered_keys:
+        trigger_value = format_exact_value((trigger_payload or {}).get(key))
+        computed_value = format_exact_value((computed_payload or {}).get(key))
+        execution_value = format_exact_value((execution_payload or {}).get(key))
+        network_value = format_exact_value((network_payload or {}).get(key))
+        if not any([trigger_value, computed_value, execution_value, network_value]):
+            continue
+        rows.append(
+            {
+                "Field": key,
+                "Trigger": trigger_value,
+                "Computed State": computed_value,
+                "Execution": execution_value,
+                "Network": network_value,
+            }
+        )
 
     return pd.DataFrame(rows)
 
@@ -2382,33 +2446,18 @@ def build_datalayer_snapshot_export(result: dict):
     matched_execution = best_matching_event(selected_event, execution_events)
     matched_network = best_matching_event(selected_event, network_events)
 
-    trigger_df = snapshot_rows_from_payload(selected_event)
-    computed_df = snapshot_rows_from_payload(computed_state)
-    execution_df = ga4_event_rows(matched_execution).rename(columns={"key": "Field", "value": "Value"})
-    network_df = ga4_event_rows(matched_network).rename(columns={"key": "Field", "value": "Value"})
-
-    export_frames = []
-    for section_name, frame in (
-        ("Trigger Event", trigger_df),
-        ("Computed State", computed_df),
-        ("Execution Payload", execution_df),
-        ("Network Payload", network_df),
-    ):
-        if frame.empty:
-            continue
-        export_frames.append(frame.assign(Section=section_name))
-
-    export_df = pd.concat(export_frames, ignore_index=True) if export_frames else pd.DataFrame(columns=["Section", "Field", "Value"])
-    if not export_df.empty:
-        export_df = export_df[["Section", "Field", "Value"]]
+    execution_payload = snapshot_ga4_payload(matched_execution)
+    network_payload = snapshot_ga4_payload(matched_network)
+    comparison_df = build_snapshot_comparison_table(
+        selected_event,
+        computed_state,
+        execution_payload,
+        network_payload,
+    )
 
     return {
         "selected_index": selected_index,
-        "trigger_df": trigger_df,
-        "computed_df": computed_df,
-        "execution_df": execution_df,
-        "network_df": network_df,
-        "export_df": export_df,
+        "comparison_df": comparison_df,
     }
 
 
@@ -2478,12 +2527,15 @@ NON_CUSTOM_MAPPING_KEYS = {
     "gtmcontainerid",
     "measurementid",
     "clientid",
+    "clientidevent",
+    "clientiduser",
     "sessionid",
     "adsdataredaction",
     "pagelocation",
     "pagetitle",
     "pagereferrer",
     "browserlanguage",
+    "tvceventname",
 }
 
 KEY_LABEL_OVERRIDES = {
@@ -2601,10 +2653,6 @@ def format_readable_value(key: str, value: str) -> str:
 
     if key in {"percent_scrolled", "scroll_percentage", "video_percent"} and re.fullmatch(r"\d+(?:\.\d+)?", text):
         return f"{text}%"
-
-    if key in {"category", "sub_category", "page_type", "article_type", "author"}:
-        if re.fullmatch(r"[a-z0-9]+(?:[-_ ][a-z0-9]+)+", text.lower()):
-            return text.replace("-", " ").replace("_", " ").title()
 
     return text
 
@@ -2755,6 +2803,18 @@ def format_mapping_value(key, value):
 
     formatted = format_readable_value(str(key or ""), value)
     return formatted if formatted else stringify_value(value)
+
+
+def format_exact_value(value):
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        parts = [format_exact_value(item) for item in value]
+        parts = [part for part in parts if part != ""]
+        return ", ".join(parts)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
 
 
 def build_event_audit_rows(result: dict):
@@ -2924,12 +2984,9 @@ def build_audit_mapping_rows(result: dict):
 
         cleaned = {
             "dimension": dimension,
-            "dl_key": row.get("dl_key") or "",
-            "dl_value": format_mapping_value(row.get("dl_key") or dimension, dl_value),
-            "exec_key": row.get("exec_key") or "",
-            "exec_value": format_mapping_value(row.get("exec_key") or dimension, exec_value),
-            "ga4_key": row.get("ga4_key") or "",
-            "ga4_value": format_mapping_value(row.get("ga4_key") or dimension, ga4_value),
+            "trigger_value": format_exact_value(dl_value),
+            "execution_value": format_exact_value(exec_value),
+            "network_value": format_exact_value(ga4_value),
             "status": status,
         }
         cleaned_rows.append(cleaned)
@@ -2946,11 +3003,11 @@ def summarize_mapping_values(mapping_rows):
     for row in mapping_rows:
         dimension = row.get("dimension")
         if row.get("status") == "Captured in network":
-            captured_network.append(f"{dimension}={stringify_value(row.get('ga4_value'))}")
+            captured_network.append(f"{dimension}={stringify_value(row.get('network_value'))}")
         elif row.get("status") == "Captured in execution":
-            captured_execution.append(f"{dimension}={stringify_value(row.get('exec_value'))}")
+            captured_execution.append(f"{dimension}={stringify_value(row.get('execution_value'))}")
         elif row.get("status") == "Only in trigger":
-            trigger_only.append(f"{dimension}={stringify_value(row.get('dl_value'))}")
+            trigger_only.append(f"{dimension}={stringify_value(row.get('trigger_value'))}")
 
     return captured_network, captured_execution, trigger_only
 
@@ -3124,36 +3181,18 @@ This capture is split into three layers:
                     if snapshot:
                         st.markdown("### DataLayer Snapshot")
                         st.caption(
-                            "Generated from the captured run. This is the closest in-app view to the GTM "
-                            "dataLayer browser extension."
+                            "Generated from the captured run with exact raw values. "
+                            "This view is intentionally concise and excludes noisy technical fields."
                         )
                         st.caption(f"Selected dataLayer index: {snapshot['selected_index']}")
 
-                        trigger_col, state_col, exec_col, network_col = st.columns(4)
-                        with trigger_col:
-                            st.markdown("#### Trigger Event")
-                            st.dataframe(snapshot["trigger_df"], use_container_width=True, hide_index=True)
-                        with state_col:
-                            st.markdown("#### Computed State")
-                            st.dataframe(snapshot["computed_df"], use_container_width=True, hide_index=True)
-                        with exec_col:
-                            st.markdown("#### Execution Payload")
-                            if snapshot["execution_df"].empty:
-                                st.info("No execution payload matched this event.")
-                            else:
-                                st.dataframe(snapshot["execution_df"], use_container_width=True, hide_index=True)
-                        with network_col:
-                            st.markdown("#### Network Payload")
-                            if snapshot["network_df"].empty:
-                                st.info("No network payload matched this event.")
-                            else:
-                                st.dataframe(snapshot["network_df"], use_container_width=True, hide_index=True)
-
-                        if not snapshot["export_df"].empty:
-                            snapshot_csv = snapshot["export_df"].to_csv(index=False).encode("utf-8")
+                        if snapshot["comparison_df"].empty:
+                            st.info("No snapshot rows were available for this event.")
+                        else:
+                            st.dataframe(snapshot["comparison_df"], use_container_width=True, hide_index=True)
                             st.download_button(
                                 "Download DataLayer Snapshot CSV",
-                                snapshot_csv,
+                                snapshot["comparison_df"].to_csv(index=False).encode("utf-8"),
                                 export_filename("datalayer_snapshot", "csv"),
                                 "text/csv",
                             )
@@ -3188,10 +3227,21 @@ This capture is split into three layers:
                         if not audit_summary["captured_network"]:
                             st.warning(
                                 "No decodable final GA4 network payload was captured in this run. "
-                                "`ga4_key` and `ga4_value` stay blank when the request is seen only at "
+                                "Network values stay blank when the request is seen only at "
                                 "trigger/execution stage or the final network hit cannot be decoded."
                             )
-                        st.dataframe(mapping_df, use_container_width=True, hide_index=True)
+                        mapping_display_df = mapping_df[
+                            ["dimension", "trigger_value", "execution_value", "network_value", "status"]
+                        ].rename(
+                            columns={
+                                "dimension": "Dimension",
+                                "trigger_value": "Trigger",
+                                "execution_value": "Execution",
+                                "network_value": "Network",
+                                "status": "Status",
+                            }
+                        )
+                        st.dataframe(mapping_display_df, use_container_width=True, hide_index=True)
                         mapping_csv = mapping_df.to_csv(index=False).encode("utf-8")
                         st.download_button(
                             "Download mapping CSV",
