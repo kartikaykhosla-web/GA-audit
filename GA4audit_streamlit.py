@@ -2566,6 +2566,31 @@ def extract_event_names(result: dict):
     return names
 
 
+def extract_container_id(result: dict):
+    execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
+    network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
+
+    candidate_events = [
+        find_event_by_name(network_events, "page_view"),
+        find_event_by_name(execution_events, "page_view"),
+    ]
+
+    if isinstance(network_events, list):
+        candidate_events.extend(network_events)
+    if isinstance(execution_events, list):
+        candidate_events.extend(execution_events)
+
+    for event in candidate_events:
+        if not isinstance(event, dict):
+            continue
+        payload = merged_event_payload(event)
+        container_id = payload.get("gtm_container_id")
+        if container_id not in (None, ""):
+            return format_exact_value(container_id)
+
+    return "Not found"
+
+
 STATUS_SORT_ORDER = {
     "Captured in network": 0,
     "Captured in execution": 1,
@@ -3137,6 +3162,7 @@ def build_audit_focus_summary(result: dict):
     return {
         "pageview_triggered": pageview_triggered,
         "pageview_source": pageview_source,
+        "container_id": extract_container_id(result),
         "events_fired": extract_event_names(result),
         "event_rows": build_event_audit_rows(result),
         "mapping_rows": mapping_rows,
@@ -3263,13 +3289,14 @@ This capture is split into three layers:
                             f"Details: {result['preload_hook_error']}"
                         )
 
-                    stat_col1, stat_col2, stat_col3 = st.columns(3)
+                    stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
                     stat_col1.metric(
                         "Pageview Triggered",
                         "Yes" if audit_summary["pageview_triggered"] else "No",
                     )
                     stat_col2.metric("Pageview Source", audit_summary["pageview_source"])
                     stat_col3.metric("Events Fired", str(len(audit_summary["events_fired"])))
+                    stat_col4.metric("Container ID", audit_summary["container_id"])
 
                     snapshot = build_datalayer_snapshot_export(result)
                     st.markdown("### DataLayer Snapshot")
