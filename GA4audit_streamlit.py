@@ -2359,6 +2359,8 @@ def snapshot_rows_from_payload(payload):
 
     rows = []
     for key, value in payload.items():
+        if not include_snapshot_field(key):
+            continue
         formatted = format_exact_value(value)
         rows.append({"Field": str(key), "Value": formatted})
 
@@ -2394,39 +2396,7 @@ def include_snapshot_field(key: str) -> bool:
         return True
     if key_text.startswith("gtm."):
         return False
-    if normalize_dimension_name(key_text) in NON_CUSTOM_MAPPING_KEYS:
-        return False
     return True
-
-
-def build_snapshot_comparison_table(trigger_payload, computed_payload, execution_payload, network_payload):
-    ordered_keys = []
-    for payload in (trigger_payload, computed_payload, execution_payload, network_payload):
-        if not isinstance(payload, dict):
-            continue
-        for key in payload.keys():
-            if key not in ordered_keys and include_snapshot_field(key):
-                ordered_keys.append(key)
-
-    rows = []
-    for key in ordered_keys:
-        trigger_value = format_exact_value((trigger_payload or {}).get(key))
-        computed_value = format_exact_value((computed_payload or {}).get(key))
-        execution_value = format_exact_value((execution_payload or {}).get(key))
-        network_value = format_exact_value((network_payload or {}).get(key))
-        if not any([trigger_value, computed_value, execution_value, network_value]):
-            continue
-        rows.append(
-            {
-                "Field": key,
-                "Trigger": trigger_value,
-                "Computed State": computed_value,
-                "Execution": execution_value,
-                "Network": network_value,
-            }
-        )
-
-    return pd.DataFrame(rows)
 
 
 def build_datalayer_snapshot_export(result: dict):
@@ -2448,16 +2418,33 @@ def build_datalayer_snapshot_export(result: dict):
 
     execution_payload = snapshot_ga4_payload(matched_execution)
     network_payload = snapshot_ga4_payload(matched_network)
-    comparison_df = build_snapshot_comparison_table(
-        selected_event,
-        computed_state,
-        execution_payload,
-        network_payload,
-    )
+    trigger_df = snapshot_rows_from_payload(selected_event)
+    computed_df = snapshot_rows_from_payload(computed_state)
+    execution_df = snapshot_rows_from_payload(execution_payload)
+    network_df = snapshot_rows_from_payload(network_payload)
+
+    export_frames = []
+    for section_name, frame in (
+        ("Trigger Event", trigger_df),
+        ("Computed State", computed_df),
+        ("Execution Payload", execution_df),
+        ("Network Payload", network_df),
+    ):
+        if frame.empty:
+            continue
+        export_frames.append(frame.assign(Section=section_name))
+
+    export_df = pd.concat(export_frames, ignore_index=True) if export_frames else pd.DataFrame(columns=["Section", "Field", "Value"])
+    if not export_df.empty:
+        export_df = export_df[["Section", "Field", "Value"]]
 
     return {
         "selected_index": selected_index,
-        "comparison_df": comparison_df,
+        "trigger_df": trigger_df,
+        "computed_df": computed_df,
+        "execution_df": execution_df,
+        "network_df": network_df,
+        "export_df": export_df,
     }
 
 
@@ -3181,18 +3168,35 @@ This capture is split into three layers:
                     if snapshot:
                         st.markdown("### DataLayer Snapshot")
                         st.caption(
-                            "Generated from the captured run with exact raw values. "
-                            "This view is intentionally concise and excludes noisy technical fields."
+                            "Generated from the captured run with exact raw values."
                         )
                         st.caption(f"Selected dataLayer index: {snapshot['selected_index']}")
 
-                        if snapshot["comparison_df"].empty:
-                            st.info("No snapshot rows were available for this event.")
-                        else:
-                            st.dataframe(snapshot["comparison_df"], use_container_width=True, hide_index=True)
+                        trigger_col, state_col, exec_col, network_col = st.columns(4)
+                        with trigger_col:
+                            st.markdown("#### Trigger Event")
+                            st.dataframe(snapshot["trigger_df"], use_container_width=True, hide_index=True)
+                        with state_col:
+                            st.markdown("#### Computed State")
+                            st.dataframe(snapshot["computed_df"], use_container_width=True, hide_index=True)
+                        with exec_col:
+                            st.markdown("#### Execution Payload")
+                            if snapshot["execution_df"].empty:
+                                st.info("No execution payload matched this event.")
+                            else:
+                                st.dataframe(snapshot["execution_df"], use_container_width=True, hide_index=True)
+                        with network_col:
+                            st.markdown("#### Network Payload")
+                            if snapshot["network_df"].empty:
+                                st.info("No network payload matched this event.")
+                            else:
+                                st.dataframe(snapshot["network_df"], use_container_width=True, hide_index=True)
+
+                        if not snapshot["export_df"].empty:
+                            snapshot_csv = snapshot["export_df"].to_csv(index=False).encode("utf-8")
                             st.download_button(
                                 "Download DataLayer Snapshot CSV",
-                                snapshot["comparison_df"].to_csv(index=False).encode("utf-8"),
+                                snapshot_csv,
                                 export_filename("datalayer_snapshot", "csv"),
                                 "text/csv",
                             )
