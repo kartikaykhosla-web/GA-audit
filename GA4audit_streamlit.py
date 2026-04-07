@@ -1780,6 +1780,66 @@ def get_sheet_settings():
     }
 
 
+def format_log_worksheet(worksheet):
+    requests = [
+        {
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": worksheet.id,
+                    "gridProperties": {"frozenRowCount": 1},
+                },
+                "fields": "gridProperties.frozenRowCount",
+            }
+        },
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": worksheet.id,
+                    "startRowIndex": 0,
+                    "endRowIndex": 1,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "textFormat": {"bold": True},
+                        "wrapStrategy": "WRAP",
+                    }
+                },
+                "fields": "userEnteredFormat.textFormat.bold,userEnteredFormat.wrapStrategy",
+            }
+        },
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": worksheet.id,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": len(LOG_HEADERS),
+                },
+                "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
+                "fields": "userEnteredFormat.wrapStrategy",
+            }
+        },
+    ]
+
+    column_widths = [170, 250, 420, 170, 520]
+    for index, width in enumerate(column_widths):
+        requests.append(
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": worksheet.id,
+                        "dimension": "COLUMNS",
+                        "startIndex": index,
+                        "endIndex": index + 1,
+                    },
+                    "properties": {"pixelSize": width},
+                    "fields": "pixelSize",
+                }
+            }
+        )
+
+    worksheet.spreadsheet.batch_update({"requests": requests})
+
+
 @st.cache_resource
 def get_log_worksheet(service_account_json: str, spreadsheet_id: str, worksheet_name: str):
     if not gspread or not Credentials:
@@ -1811,6 +1871,7 @@ def get_log_worksheet(service_account_json: str, spreadsheet_id: str, worksheet_
     first_row = worksheet.row_values(1)
     if not any(first_row):
         worksheet.append_row(LOG_HEADERS, value_input_option="USER_ENTERED")
+    format_log_worksheet(worksheet)
 
     return worksheet
 
@@ -1832,7 +1893,7 @@ def append_audit_log(email_id: str, result: dict, audit_summary: dict):
         email_id,
         result.get("page_url") or "",
         "Yes" if audit_summary.get("pageview_triggered") else "No",
-        " | ".join(execution_dimensions) if execution_dimensions else "None",
+        "\n".join(execution_dimensions) if execution_dimensions else "None",
     ]
 
     worksheet = get_log_worksheet(
