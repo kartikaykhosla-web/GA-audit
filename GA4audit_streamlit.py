@@ -1746,7 +1746,26 @@ def get_service_account_info():
         raw = st.secrets.get("gcp_service_account", {})
     except Exception:
         return {}
-    return dict(raw) if raw else {}
+    info = dict(raw) if raw else {}
+    cleaned = {}
+    for key, value in info.items():
+        if isinstance(value, str):
+            cleaned[key] = value.strip()
+        else:
+            cleaned[key] = value
+
+    private_key = cleaned.get("private_key")
+    if isinstance(private_key, str):
+        normalized_key = private_key
+        if len(normalized_key) >= 2 and normalized_key[0] == normalized_key[-1] and normalized_key[0] in {"'", '"'}:
+            normalized_key = normalized_key[1:-1]
+        normalized_key = normalized_key.replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n").strip()
+        begin_marker = "-----BEGIN PRIVATE KEY-----"
+        if begin_marker in normalized_key:
+            normalized_key = normalized_key[normalized_key.index(begin_marker):]
+        cleaned["private_key"] = normalized_key
+
+    return cleaned
 
 
 def get_sheet_settings():
@@ -1766,12 +1785,20 @@ def get_log_worksheet(service_account_json: str, spreadsheet_id: str, worksheet_
     if not gspread or not Credentials:
         raise RuntimeError("Google Sheets libraries are not installed.")
 
+    service_account_info = json.loads(service_account_json)
+    private_key = str(service_account_info.get("private_key") or "")
+    if "-----BEGIN PRIVATE KEY-----" not in private_key or "-----END PRIVATE KEY-----" not in private_key:
+        raise RuntimeError(
+            "Service account private_key in Streamlit secrets is malformed. "
+            "Paste the full private_key from the JSON, including the BEGIN/END lines."
+        )
+
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
     credentials = Credentials.from_service_account_info(
-        json.loads(service_account_json),
+        service_account_info,
         scopes=scopes,
     )
     client = gspread.authorize(credentials)
