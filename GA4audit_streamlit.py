@@ -208,10 +208,40 @@ def _normalize_event_key(name: str) -> str:
     return str(name or "").strip().lower().replace("_", "")
 
 
-def _first_matching_event(event_list, target_event_name: str):
+def _matching_score(event: dict, dl_event: dict):
+    params = event.get("params") or {}
+    if not isinstance(params, dict):
+        params = {}
+
+    event_keys = {_normalize_key(key) for key in params.keys() if _normalize_key(key)}
+    dl_keys = {
+        _normalize_key(key)
+        for key in (dl_event or {}).keys()
+        if key != "event" and not str(key).startswith("gtm") and _normalize_key(key)
+    }
+    overlap_count = len(event_keys & dl_keys)
+    return overlap_count, len(event_keys)
+
+
+def _best_matching_event(event_list, target_event_name: str, dl_event: dict):
     target = _normalize_event_key(target_event_name)
     if not target:
         return None
+
+    best_event = None
+    best_score = (-1, -1, -1)
+
+    for index, event in enumerate(merge_ga4_events(event_list)):
+        if _normalize_event_key(event.get("event_name")) != target:
+            continue
+        overlap_count, param_count = _matching_score(event, dl_event)
+        score = (overlap_count, param_count, index)
+        if score >= best_score:
+            best_event = event
+            best_score = score
+
+    if best_event:
+        return best_event
 
     for event in merge_ga4_events(event_list):
         if _normalize_event_key(event.get("event_name")) == target:
@@ -237,8 +267,8 @@ def map_dl_to_ga4(
     network_events = _safe_json_load(ga4_network_events_json, [])
 
     target_event_name = dl_event.get("event") or "page_view"
-    exec_event = _first_matching_event(exec_events, target_event_name)
-    network_event = _first_matching_event(network_events, target_event_name)
+    exec_event = _best_matching_event(exec_events, target_event_name, dl_event)
+    network_event = _best_matching_event(network_events, target_event_name, dl_event)
 
     exec_params = _collect_param_values([exec_event] if exec_event else [])
     network_params = _collect_param_values([network_event] if network_event else [])
