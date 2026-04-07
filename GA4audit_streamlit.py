@@ -1700,12 +1700,16 @@ st.title("GA4 / dataLayer Auditor")
 JAGRAN_EMAIL_DOMAIN = "@jagrannewmedia.com"
 DEFAULT_LOG_SHEET_ID = "1e_fp0fAOeEAHaRtFJUv-rt-i0sqUOhszYOrOk7Cv5QU"
 DEFAULT_LOG_WORKSHEET = "Audit Logs"
-LOG_HEADERS = [
+FIXED_LOG_HEADERS = [
     "date",
     "email_id",
     "url_checked",
     "pageview_trigger_found",
-    "execution_custom_dimensions",
+]
+LEGACY_EXECUTION_SUMMARY_HEADER = "execution_custom_dimensions"
+LOG_HEADERS = [
+    *FIXED_LOG_HEADERS,
+    LEGACY_EXECUTION_SUMMARY_HEADER,
 ]
 LOG_TIMEZONE = ZoneInfo("Asia/Kolkata")
 
@@ -1780,7 +1784,43 @@ def get_sheet_settings():
     }
 
 
-def format_log_worksheet(worksheet):
+def sheet_column_label(index: int) -> str:
+    label = ""
+    while index > 0:
+        index, remainder = divmod(index - 1, 26)
+        label = chr(65 + remainder) + label
+    return label
+
+
+def ensure_log_headers(worksheet, dimension_headers):
+    existing_headers = worksheet.row_values(1)
+    if not any(existing_headers):
+        target_headers = list(LOG_HEADERS)
+    else:
+        target_headers = list(existing_headers)
+        for header in LOG_HEADERS:
+            if header not in target_headers:
+                target_headers.append(header)
+
+    for header in sorted({str(value or "").strip() for value in dimension_headers if str(value or "").strip()}, key=str.lower):
+        if header not in target_headers:
+            target_headers.append(header)
+
+    if len(target_headers) > worksheet.col_count:
+        worksheet.add_cols(len(target_headers) - worksheet.col_count)
+
+    if target_headers != existing_headers:
+        last_cell = f"{sheet_column_label(len(target_headers))}1"
+        worksheet.update(
+            range_name=f"A1:{last_cell}",
+            values=[target_headers],
+            value_input_option="USER_ENTERED",
+        )
+
+    return target_headers
+
+
+def format_log_worksheet(worksheet, headers):
     requests = [
         {
             "updateSheetProperties": {
@@ -1812,7 +1852,7 @@ def format_log_worksheet(worksheet):
                 "range": {
                     "sheetId": worksheet.id,
                     "startColumnIndex": 0,
-                    "endColumnIndex": len(LOG_HEADERS),
+                    "endColumnIndex": len(headers),
                 },
                 "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
                 "fields": "userEnteredFormat.wrapStrategy",
@@ -1820,8 +1860,25 @@ def format_log_worksheet(worksheet):
         },
     ]
 
-    column_widths = [170, 250, 420, 170, 520]
-    for index, width in enumerate(column_widths):
+    for index, header in enumerate(headers):
+        if header == "date":
+            width = 170
+            hidden = False
+        elif header == "email_id":
+            width = 250
+            hidden = False
+        elif header == "url_checked":
+            width = 420
+            hidden = False
+        elif header == "pageview_trigger_found":
+            width = 170
+            hidden = False
+        elif header == LEGACY_EXECUTION_SUMMARY_HEADER:
+            width = 320
+            hidden = True
+        else:
+            width = 220
+            hidden = False
         requests.append(
             {
                 "updateDimensionProperties": {
@@ -1831,13 +1888,24 @@ def format_log_worksheet(worksheet):
                         "startIndex": index,
                         "endIndex": index + 1,
                     },
-                    "properties": {"pixelSize": width},
-                    "fields": "pixelSize",
+                    "properties": {"pixelSize": width, "hiddenByUser": hidden},
+                    "fields": "pixelSize,hiddenByUser",
                 }
             }
         )
 
     worksheet.spreadsheet.batch_update({"requests": requests})
+
+
+def build_execution_dimension_map(audit_summary: dict):
+    execution_dimensions = {}
+    for row in audit_summary.get("mapping_rows", []):
+        value = row.get("exec_value")
+        dimension = str(row.get("dimension") or "").strip()
+        if not dimension or value in ("", None):
+            continue
+        execution_dimensions[dimension] = str(value)
+    return execution_dimensions
 
 
 @st.cache_resource
@@ -1868,10 +1936,8 @@ def get_log_worksheet(service_account_json: str, spreadsheet_id: str, worksheet_
     except gspread.WorksheetNotFound:
         worksheet = spreadsheet.add_worksheet(title=worksheet_name, rows=1000, cols=len(LOG_HEADERS))
 
-    first_row = worksheet.row_values(1)
-    if not any(first_row):
-        worksheet.append_row(LOG_HEADERS, value_input_option="USER_ENTERED")
-    format_log_worksheet(worksheet)
+    headers = ensure_log_headers(worksheet, [])
+    format_log_worksheet(worksheet, headers)
 
     return worksheet
 
@@ -1882,18 +1948,10 @@ def append_audit_log(email_id: str, result: dict, audit_summary: dict):
         return False, "Google Sheets logging is not configured yet."
 
     settings = get_sheet_settings()
-    execution_dimensions = []
-    for row in audit_summary.get("mapping_rows", []):
-        if row.get("exec_value") in ("", None):
-            continue
-        execution_dimensions.append(f"{row.get('dimension')}={row.get('exec_value')}")
-
-    row = [
-        datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
-        email_id,
-        result.get("page_url") or "",
-        "Yes" if audit_summary.get("pageview_triggered") else "No",
-        "\n".join(execution_dimensions) if execution_dimensions else "None",
+    execution_dimension_map = build_execution_dimension_map(audit_summary)
+    execution_dimensions = [
+        f"{dimension}={value}"
+        for dimension, value in execution_dimension_map.items()
     ]
 
     worksheet = get_log_worksheet(
@@ -1901,7 +1959,20 @@ def append_audit_log(email_id: str, result: dict, audit_summary: dict):
         settings["spreadsheet_id"],
         settings["worksheet_name"],
     )
-    worksheet.append_row(row, value_input_option="USER_ENTERED")
+    headers = ensure_log_headers(worksheet, execution_dimension_map.keys())
+    format_log_worksheet(worksheet, headers)
+
+    row_map = {
+        "date": datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
+        "email_id": email_id,
+        "url_checked": result.get("page_url") or "",
+        "pageview_trigger_found": "Yes" if audit_summary.get("pageview_triggered") else "No",
+        LEGACY_EXECUTION_SUMMARY_HEADER: "\n".join(execution_dimensions) if execution_dimensions else "None",
+    }
+    row_map.update(execution_dimension_map)
+
+    ordered_row = [row_map.get(header, "") for header in headers]
+    worksheet.append_row(ordered_row, value_input_option="USER_ENTERED")
     return True, ""
 
 
