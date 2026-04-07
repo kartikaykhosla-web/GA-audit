@@ -2449,16 +2449,37 @@ def build_datalayer_snapshot_export(result: dict):
     execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
     network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
 
-    if not isinstance(selected_event, dict) or not selected_event:
-        return {}
+    if not isinstance(selected_event, dict):
+        selected_event = {}
 
-    selected_index = find_matching_datalayer_index(data_layer, selected_event)
-    if selected_index is None:
-        selected_index = max(len(data_layer) - 1, 0) if isinstance(data_layer, list) and data_layer else 0
+    if not selected_event and isinstance(data_layer, list):
+        for item in reversed(data_layer):
+            if not isinstance(item, dict):
+                continue
+            if normalize_event_name(item.get("event")) == "pageview":
+                selected_event = item
+                break
 
-    computed_state = build_computed_state(data_layer, selected_index)
-    matched_execution = best_matching_event(selected_event, execution_events)
-    matched_network = best_matching_event(selected_event, network_events)
+    selected_index = None
+    if selected_event:
+        selected_index = find_matching_datalayer_index(data_layer, selected_event)
+        if selected_index is None:
+            selected_index = max(len(data_layer) - 1, 0) if isinstance(data_layer, list) and data_layer else 0
+
+    computed_state = build_computed_state(data_layer, selected_index) if selected_index is not None else {}
+
+    if selected_event:
+        matched_execution = best_matching_event(selected_event, execution_events)
+        matched_network = best_matching_event(selected_event, network_events)
+    else:
+        matched_execution = (
+            find_event_by_name(execution_events, "page_view")
+            or find_event_by_name(execution_events, "pageview")
+        )
+        matched_network = (
+            find_event_by_name(network_events, "page_view")
+            or find_event_by_name(network_events, "pageview")
+        )
 
     execution_payload = snapshot_ga4_payload(matched_execution)
     network_payload = snapshot_ga4_payload(matched_network)
@@ -2495,6 +2516,10 @@ def build_datalayer_snapshot_export(result: dict):
         "execution_df": execution_df,
         "network_df": network_df,
         "export_df": export_df,
+        "has_trigger_data": not trigger_df.empty,
+        "has_computed_data": not computed_df.empty,
+        "has_execution_data": not execution_df.empty,
+        "has_network_data": not network_df.empty,
     }
 
 
@@ -3247,26 +3272,41 @@ This capture is split into three layers:
                     stat_col3.metric("Events Fired", str(len(audit_summary["events_fired"])))
 
                     snapshot = build_datalayer_snapshot_export(result)
-                    if snapshot:
-                        st.markdown("### DataLayer Snapshot")
-                        st.caption(
-                            "Primary audit view. This is the closest in-app match to the GTM dataLayer extension, using exact raw values from the captured run."
-                        )
-                        st.caption(f"Selected dataLayer index: {snapshot['selected_index']}")
+                    st.markdown("### DataLayer Snapshot")
+                    st.caption(
+                        "Primary audit view. This is the closest in-app match to the GTM dataLayer extension, using exact raw values from the captured run."
+                    )
+                    selected_index_label = (
+                        str(snapshot["selected_index"])
+                        if snapshot.get("selected_index") is not None
+                        else "Unavailable in this run"
+                    )
+                    st.caption(f"Selected dataLayer index: {selected_index_label}")
 
-                        trigger_col, state_col, exec_col = st.columns(3)
-                        with trigger_col:
-                            st.markdown("#### Trigger Event")
+                    trigger_col, state_col, exec_col = st.columns(3)
+                    with trigger_col:
+                        st.markdown("#### Trigger Event")
+                        if snapshot["trigger_df"].empty:
+                            st.info("Trigger event was not accessible in this run.")
+                        else:
                             st.dataframe(snapshot["trigger_df"], use_container_width=True, hide_index=True)
-                        with state_col:
-                            st.markdown("#### Computed State")
+                    with state_col:
+                        st.markdown("#### Computed State")
+                        if snapshot["computed_df"].empty:
+                            st.info("Computed state could not be built for this run.")
+                        else:
                             st.dataframe(snapshot["computed_df"], use_container_width=True, hide_index=True)
-                        with exec_col:
-                            st.markdown("#### Execution Payload")
-                            if snapshot["execution_df"].empty:
-                                st.info("No execution payload matched this event.")
-                            else:
-                                st.dataframe(snapshot["execution_df"], use_container_width=True, hide_index=True)
+                    with exec_col:
+                        st.markdown("#### Execution Payload")
+                        execution_display_df = snapshot["execution_df"]
+                        if execution_display_df.empty and not snapshot["network_df"].empty:
+                            st.caption("Execution payload unavailable in this run. Showing final matched payload instead.")
+                            execution_display_df = snapshot["network_df"]
+
+                        if execution_display_df.empty:
+                            st.info("No execution payload matched this event.")
+                        else:
+                            st.dataframe(execution_display_df, use_container_width=True, hide_index=True)
 
                     st.markdown("### Events")
                     event_df = pd.DataFrame(audit_summary["event_rows"])
