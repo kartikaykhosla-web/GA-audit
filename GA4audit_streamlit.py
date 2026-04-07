@@ -204,6 +204,21 @@ def _collect_param_values(event_list):
     return params
 
 
+def _normalize_event_key(name: str) -> str:
+    return str(name or "").strip().lower().replace("_", "")
+
+
+def _first_matching_event(event_list, target_event_name: str):
+    target = _normalize_event_key(target_event_name)
+    if not target:
+        return None
+
+    for event in merge_ga4_events(event_list):
+        if _normalize_event_key(event.get("event_name")) == target:
+            return event
+    return None
+
+
 def _compact_values(values):
     if not values:
         return None
@@ -221,8 +236,12 @@ def map_dl_to_ga4(
     exec_events = _safe_json_load(ga4_exec_events_json, [])
     network_events = _safe_json_load(ga4_network_events_json, [])
 
-    exec_params = _collect_param_values(exec_events)
-    network_params = _collect_param_values(network_events)
+    target_event_name = dl_event.get("event") or "page_view"
+    exec_event = _first_matching_event(exec_events, target_event_name)
+    network_event = _first_matching_event(network_events, target_event_name)
+
+    exec_params = _collect_param_values([exec_event] if exec_event else [])
+    network_params = _collect_param_values([network_event] if network_event else [])
 
     rows = []
     matched_exec = set()
