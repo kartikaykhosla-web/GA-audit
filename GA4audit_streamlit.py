@@ -1856,7 +1856,6 @@ def render_sidebar_session(email_id: str):
         service_account_info = get_service_account_info()
         if service_account_info:
             st.success("Google Sheets logging configured")
-            st.caption(f"Share the sheet with: `{service_account_info.get('client_email', '')}`")
         else:
             st.warning("Google Sheets logging not configured")
             st.caption("Add `gcp_service_account` to Streamlit secrets to enable logging.")
