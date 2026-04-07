@@ -3250,7 +3250,7 @@ This capture is split into three layers:
                     if snapshot:
                         st.markdown("### DataLayer Snapshot")
                         st.caption(
-                            "Generated from the captured run with exact raw values."
+                            "Primary audit view. This is the closest in-app match to the GTM dataLayer extension, using exact raw values from the captured run."
                         )
                         st.caption(f"Selected dataLayer index: {snapshot['selected_index']}")
 
@@ -3288,22 +3288,24 @@ This capture is split into three layers:
                     if event_df.empty:
                         st.info("No GA4 events were detected during the audit window.")
                     else:
-                        st.caption("Repeated event fires are grouped, so values like scroll thresholds stay visible in one row.")
+                        st.caption(
+                            "Quick event summary only. Use DataLayer Snapshot above for the detailed field-by-field audit."
+                        )
                         event_display_df = event_df[
-                            ["event_name", "status", "times_fired", "capture_layer", "key_values_seen"]
+                            ["event_name", "status", "times_fired", "capture_layer"]
                         ].rename(
                             columns={
                                 "event_name": "Event",
                                 "status": "Status",
                                 "times_fired": "Times Fired",
                                 "capture_layer": "Seen In",
-                                "key_values_seen": "What Was Sent",
                             }
                         )
                         st.dataframe(event_display_df, use_container_width=True, hide_index=True)
-                        st.markdown("### Detailed Event Values")
-                        detail_df = build_event_detail_table(audit_summary["event_rows"])
-                        st.dataframe(detail_df, use_container_width=True, hide_index=True)
+
+                        with st.expander("Detailed Event Values", expanded=False):
+                            detail_df = build_event_detail_table(audit_summary["event_rows"])
+                            st.dataframe(detail_df, use_container_width=True, hide_index=True)
 
                     st.markdown("### Custom Dimensions / Parameters")
                     mapping_df = pd.DataFrame(audit_summary["mapping_rows"])
