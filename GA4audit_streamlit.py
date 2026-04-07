@@ -3254,7 +3254,7 @@ This capture is split into three layers:
                         )
                         st.caption(f"Selected dataLayer index: {snapshot['selected_index']}")
 
-                        trigger_col, state_col, exec_col, network_col = st.columns(4)
+                        trigger_col, state_col, exec_col = st.columns(3)
                         with trigger_col:
                             st.markdown("#### Trigger Event")
                             st.dataframe(snapshot["trigger_df"], use_container_width=True, hide_index=True)
@@ -3267,21 +3267,6 @@ This capture is split into three layers:
                                 st.info("No execution payload matched this event.")
                             else:
                                 st.dataframe(snapshot["execution_df"], use_container_width=True, hide_index=True)
-                        with network_col:
-                            st.markdown("#### Network Payload")
-                            if snapshot["network_df"].empty:
-                                st.info("No network payload matched this event.")
-                            else:
-                                st.dataframe(snapshot["network_df"], use_container_width=True, hide_index=True)
-
-                        if not snapshot["export_df"].empty:
-                            snapshot_csv = snapshot["export_df"].to_csv(index=False).encode("utf-8")
-                            st.download_button(
-                                "Download DataLayer Snapshot CSV",
-                                snapshot_csv,
-                                export_filename("datalayer_snapshot", "csv"),
-                                "text/csv",
-                            )
 
                     st.markdown("### Events")
                     event_df = pd.DataFrame(audit_summary["event_rows"])
@@ -3302,63 +3287,6 @@ This capture is split into three layers:
                             }
                         )
                         st.dataframe(event_display_df, use_container_width=True, hide_index=True)
-
-                        with st.expander("Detailed Event Values", expanded=False):
-                            detail_df = build_event_detail_table(audit_summary["event_rows"])
-                            st.dataframe(detail_df, use_container_width=True, hide_index=True)
-
-                    st.markdown("### Custom Dimensions / Parameters")
-                    mapping_df = pd.DataFrame(audit_summary["mapping_rows"])
-                    if mapping_df.empty:
-                        st.info("No mapping table available.")
-                    else:
-                        if not audit_summary["captured_network"]:
-                            st.warning(
-                                "No decodable final GA4 network payload was captured in this run. "
-                                "Network values stay blank when the request is seen only at "
-                                "trigger/execution stage or the final network hit cannot be decoded."
-                            )
-                        mapping_display_df = mapping_df[
-                            ["dimension", "trigger_value", "execution_value", "network_value", "status"]
-                        ].rename(
-                            columns={
-                                "dimension": "Dimension",
-                                "trigger_value": "Trigger",
-                                "execution_value": "Execution",
-                                "network_value": "Network",
-                                "status": "Status",
-                            }
-                        )
-                        st.dataframe(mapping_display_df, use_container_width=True, hide_index=True)
-                        mapping_csv = mapping_df.to_csv(index=False).encode("utf-8")
-                        st.download_button(
-                            "Download mapping CSV",
-                            mapping_csv,
-                            export_filename("ga4_mapping", "csv"),
-                            "text/csv",
-                        )
-
-                    with st.expander("Observed values by layer", expanded=False):
-                        st.markdown("### Captured in Network")
-                        if audit_summary["captured_network"]:
-                            st.write(", ".join(audit_summary["captured_network"]))
-                        else:
-                            st.info("No mapped values reached the final GA4 network payload.")
-
-                        st.markdown("### Captured in Execution Only")
-                        if audit_summary["captured_execution"]:
-                            st.write(", ".join(audit_summary["captured_execution"]))
-                        else:
-                            st.info("No additional mapped values were found only at execution stage.")
-
-                        st.markdown("### Trigger Only (not fired downstream)")
-                        if audit_summary["trigger_only"]:
-                            st.write(", ".join(audit_summary["trigger_only"]))
-                        else:
-                            st.info("No mapped values were left behind in the trigger layer.")
-
-                    with st.expander("Final collect request / response", expanded=False):
-                        render_network_hits(result.get("ga4_network_hits_json", ""), title=None)
 
                     with st.expander("Advanced debug", expanded=False):
                         left_col, right_col = st.columns(2)
@@ -3408,17 +3336,6 @@ This capture is split into three layers:
                             result.get("consent_clicks_json", ""),
                             "No consent click was performed.",
                         )
-
-                with st.expander("Advanced downloads", expanded=False):
-                    share_payload = build_share_payload(results)
-                    share_json = json.dumps(share_payload, ensure_ascii=False, indent=2).encode("utf-8")
-                    st.download_button(
-                        "Download full debug JSON",
-                        share_json,
-                        export_filename("ga4_debug_export", "json"),
-                        "application/json",
-                    )
-
 
 with tab_compare:
     st.markdown("Compare tagging between two URLs, typically Prod vs Stage.")
