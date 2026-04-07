@@ -2353,12 +2353,16 @@ def ga4_event_rows(event):
     return pd.DataFrame(rows)
 
 
-def snapshot_rows_from_payload(payload):
+def snapshot_rows_from_payload(payload, ordered_keys=None):
     if not isinstance(payload, dict) or not payload:
         return pd.DataFrame(columns=["Field", "Value"])
 
+    keys = ordered_keys or list(payload.keys())
     rows = []
-    for key, value in payload.items():
+    for key in keys:
+        if key not in payload:
+            continue
+        value = payload.get(key)
         if not include_snapshot_field(key):
             continue
         formatted = format_exact_value(value)
@@ -2396,7 +2400,47 @@ def include_snapshot_field(key: str) -> bool:
         return True
     if key_text.startswith("gtm."):
         return False
+    if normalize_dimension_name(key_text) in SNAPSHOT_HIDDEN_NORMALIZED_KEYS:
+        return False
     return True
+
+
+def is_missing_snapshot_value(value) -> bool:
+    text = format_exact_value(value).strip().lower()
+    return text in {"", "na", "n/a", "none", "null", "not available"}
+
+
+def build_snapshot_ordered_keys(*payloads):
+    ordered_keys = []
+    for key in SNAPSHOT_PRIORITY_KEYS:
+        if any(isinstance(payload, dict) and key in payload for payload in payloads):
+            ordered_keys.append(key)
+
+    remaining_keys = []
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        for key in payload.keys():
+            if key not in ordered_keys and key not in remaining_keys:
+                remaining_keys.append(key)
+
+    for key in sorted(remaining_keys, key=str.lower):
+        ordered_keys.append(key)
+
+    filtered_keys = []
+    for key in ordered_keys:
+        if not include_snapshot_field(key):
+            continue
+        values = [
+            payload.get(key)
+            for payload in payloads
+            if isinstance(payload, dict) and key in payload
+        ]
+        if values and all(is_missing_snapshot_value(value) for value in values):
+            continue
+        filtered_keys.append(key)
+
+    return filtered_keys
 
 
 def build_datalayer_snapshot_export(result: dict):
@@ -2418,10 +2462,16 @@ def build_datalayer_snapshot_export(result: dict):
 
     execution_payload = snapshot_ga4_payload(matched_execution)
     network_payload = snapshot_ga4_payload(matched_network)
-    trigger_df = snapshot_rows_from_payload(selected_event)
-    computed_df = snapshot_rows_from_payload(computed_state)
-    execution_df = snapshot_rows_from_payload(execution_payload)
-    network_df = snapshot_rows_from_payload(network_payload)
+    ordered_keys = build_snapshot_ordered_keys(
+        selected_event,
+        computed_state,
+        execution_payload,
+        network_payload,
+    )
+    trigger_df = snapshot_rows_from_payload(selected_event, ordered_keys)
+    computed_df = snapshot_rows_from_payload(computed_state, ordered_keys)
+    execution_df = snapshot_rows_from_payload(execution_payload, ordered_keys)
+    network_df = snapshot_rows_from_payload(network_payload, ordered_keys)
 
     export_frames = []
     for section_name, frame in (
@@ -2541,6 +2591,38 @@ KEY_LABEL_OVERRIDES = {
     "page_title": "Page Title",
     "browser_language": "Browser Language",
 }
+
+SNAPSHOT_HIDDEN_NORMALIZED_KEYS = {
+    "gtmuniqueeventid",
+    "gtmcontainerid",
+    "browserlanguage",
+    "uid",
+    "usertype",
+    "clientid",
+    "clientidevent",
+    "clientiduser",
+    "sessionid",
+    "adsdataredaction",
+    "tvceventname",
+}
+
+SNAPSHOT_PRIORITY_KEYS = [
+    "event",
+    "event_name",
+    "language",
+    "category",
+    "sub_category",
+    "page_type",
+    "article_type",
+    "placement",
+    "page_location",
+    "page_title",
+    "scroll_percent",
+    "story_id",
+    "author",
+    "publish_date",
+    "update_date",
+]
 
 
 def merged_event_payload(event: dict):
