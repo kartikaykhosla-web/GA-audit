@@ -2275,17 +2275,65 @@ def build_computed_state(data_layer, selected_index: int):
     return state
 
 
+def _matching_score_for_snapshot(candidate_payload: dict, reference_payload: dict):
+    candidate_keys = {
+        normalize_dimension_name(key)
+        for key in (candidate_payload or {}).keys()
+        if str(key or "").strip()
+    }
+    reference_keys = {
+        normalize_dimension_name(key)
+        for key in (reference_payload or {}).keys()
+        if key != "event" and not str(key).startswith("gtm") and str(key or "").strip()
+    }
+    overlap_count = len(candidate_keys & reference_keys)
+    return overlap_count, len(candidate_keys)
+
+
+def find_matching_datalayer_index(data_layer, selected_event: dict):
+    if not isinstance(data_layer, list) or not isinstance(selected_event, dict):
+        return None
+
+    target_event = normalize_event_name(selected_event.get("event"))
+    best_index = None
+    best_score = (-1, -1, -1)
+
+    for index, item in enumerate(data_layer):
+        if not isinstance(item, dict):
+            continue
+        if target_event and normalize_event_name(item.get("event")) != target_event:
+            continue
+        overlap_count, key_count = _matching_score_for_snapshot(item, selected_event)
+        score = (overlap_count, key_count, index)
+        if score >= best_score:
+            best_index = index
+            best_score = score
+
+    return best_index
+
+
 def best_matching_event(selected_event: dict, events):
     if not isinstance(events, list) or not events:
         return None
 
     target = normalize_event_name(selected_event.get("event"))
-    if target:
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            if normalize_event_name(event.get("event_name")) == target:
-                return event
+    best_event = None
+    best_score = (-1, -1, -1)
+
+    for index, event in enumerate(events):
+        if not isinstance(event, dict):
+            continue
+        if target and normalize_event_name(event.get("event_name")) != target:
+            continue
+        payload = merged_event_payload(event)
+        overlap_count, key_count = _matching_score_for_snapshot(payload, selected_event)
+        score = (overlap_count, key_count, index)
+        if score >= best_score:
+            best_event = event
+            best_score = score
+
+    if best_event:
+        return best_event
 
     return events[-1] if events else None
 
@@ -2303,6 +2351,65 @@ def ga4_event_rows(event):
         rows.append({"key": f"user.{key}", "value": stringify_value(value)})
 
     return pd.DataFrame(rows)
+
+
+def snapshot_rows_from_payload(payload):
+    if not isinstance(payload, dict) or not payload:
+        return pd.DataFrame(columns=["Field", "Value"])
+
+    rows = []
+    for key, value in payload.items():
+        formatted = format_mapping_value(key, value)
+        rows.append({"Field": str(key), "Value": formatted})
+
+    return pd.DataFrame(rows)
+
+
+def build_datalayer_snapshot_export(result: dict):
+    data_layer = load_json_payload(result.get("all_datalayer_json", ""), [])
+    selected_event = load_json_payload(result.get("pageview_event_json", ""), {})
+    execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
+    network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
+
+    if not isinstance(selected_event, dict) or not selected_event:
+        return {}
+
+    selected_index = find_matching_datalayer_index(data_layer, selected_event)
+    if selected_index is None:
+        selected_index = max(len(data_layer) - 1, 0) if isinstance(data_layer, list) and data_layer else 0
+
+    computed_state = build_computed_state(data_layer, selected_index)
+    matched_execution = best_matching_event(selected_event, execution_events)
+    matched_network = best_matching_event(selected_event, network_events)
+
+    trigger_df = snapshot_rows_from_payload(selected_event)
+    computed_df = snapshot_rows_from_payload(computed_state)
+    execution_df = ga4_event_rows(matched_execution).rename(columns={"key": "Field", "value": "Value"})
+    network_df = ga4_event_rows(matched_network).rename(columns={"key": "Field", "value": "Value"})
+
+    export_frames = []
+    for section_name, frame in (
+        ("Trigger Event", trigger_df),
+        ("Computed State", computed_df),
+        ("Execution Payload", execution_df),
+        ("Network Payload", network_df),
+    ):
+        if frame.empty:
+            continue
+        export_frames.append(frame.assign(Section=section_name))
+
+    export_df = pd.concat(export_frames, ignore_index=True) if export_frames else pd.DataFrame(columns=["Section", "Field", "Value"])
+    if not export_df.empty:
+        export_df = export_df[["Section", "Field", "Value"]]
+
+    return {
+        "selected_index": selected_index,
+        "trigger_df": trigger_df,
+        "computed_df": computed_df,
+        "execution_df": execution_df,
+        "network_df": network_df,
+        "export_df": export_df,
+    }
 
 
 def find_event_by_name(events, target_name: str):
@@ -3012,6 +3119,44 @@ This capture is split into three layers:
                     )
                     stat_col2.metric("Pageview Source", audit_summary["pageview_source"])
                     stat_col3.metric("Events Fired", str(len(audit_summary["events_fired"])))
+
+                    snapshot = build_datalayer_snapshot_export(result)
+                    if snapshot:
+                        st.markdown("### DataLayer Snapshot")
+                        st.caption(
+                            "Generated from the captured run. This is the closest in-app view to the GTM "
+                            "dataLayer browser extension."
+                        )
+                        st.caption(f"Selected dataLayer index: {snapshot['selected_index']}")
+
+                        trigger_col, state_col, exec_col, network_col = st.columns(4)
+                        with trigger_col:
+                            st.markdown("#### Trigger Event")
+                            st.dataframe(snapshot["trigger_df"], use_container_width=True, hide_index=True)
+                        with state_col:
+                            st.markdown("#### Computed State")
+                            st.dataframe(snapshot["computed_df"], use_container_width=True, hide_index=True)
+                        with exec_col:
+                            st.markdown("#### Execution Payload")
+                            if snapshot["execution_df"].empty:
+                                st.info("No execution payload matched this event.")
+                            else:
+                                st.dataframe(snapshot["execution_df"], use_container_width=True, hide_index=True)
+                        with network_col:
+                            st.markdown("#### Network Payload")
+                            if snapshot["network_df"].empty:
+                                st.info("No network payload matched this event.")
+                            else:
+                                st.dataframe(snapshot["network_df"], use_container_width=True, hide_index=True)
+
+                        if not snapshot["export_df"].empty:
+                            snapshot_csv = snapshot["export_df"].to_csv(index=False).encode("utf-8")
+                            st.download_button(
+                                "Download DataLayer Snapshot CSV",
+                                snapshot_csv,
+                                export_filename("datalayer_snapshot", "csv"),
+                                "text/csv",
+                            )
 
                     st.markdown("### Events")
                     event_df = pd.DataFrame(audit_summary["event_rows"])
