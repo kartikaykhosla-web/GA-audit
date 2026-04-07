@@ -1745,6 +1745,18 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
 
 st.set_page_config(page_title="GA4 / dataLayer Auditor", layout="wide")
 st.title("GA4 / dataLayer Auditor")
+st.markdown(
+    """
+<style>
+div[data-testid="stDataFrame"] div[role="columnheader"],
+div[data-testid="stDataFrame"] div[role="gridcell"] {
+    font-size: 0.82rem !important;
+    line-height: 1.2 !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
 JAGRAN_EMAIL_DOMAIN = "@jagrannewmedia.com"
 DEFAULT_LOG_SHEET_ID = "1e_fp0fAOeEAHaRtFJUv-rt-i0sqUOhszYOrOk7Cv5QU"
@@ -2717,6 +2729,48 @@ def build_event_audit_rows(result: dict):
     return rows
 
 
+def build_event_detail_table(event_rows):
+    detail_rows = []
+
+    for event_row in event_rows or []:
+        event_name = event_row.get("event_name") or "(unnamed event)"
+        times_fired = event_row.get("times_fired") or 0
+        status = event_row.get("status") or ""
+        capture_layer = event_row.get("capture_layer") or ""
+
+        for field_type, details in (
+            ("User-facing", event_row.get("details") or []),
+            ("Technical", event_row.get("technical_details") or []),
+        ):
+            for detail in details:
+                detail_rows.append(
+                    {
+                        "Event": event_name,
+                        "Times Fired": times_fired,
+                        "Status": status,
+                        "Seen In": capture_layer,
+                        "Field Type": field_type,
+                        "Field": detail.get("Field") or "",
+                        "Value": detail.get("Value") or "",
+                    }
+                )
+
+        if not (event_row.get("details") or event_row.get("technical_details")):
+            detail_rows.append(
+                {
+                    "Event": event_name,
+                    "Times Fired": times_fired,
+                    "Status": status,
+                    "Seen In": capture_layer,
+                    "Field Type": "User-facing",
+                    "Field": "(no values)",
+                    "Value": "No values captured for this event.",
+                }
+            )
+
+    return pd.DataFrame(detail_rows)
+
+
 def is_user_facing_row(row: dict) -> bool:
     keys = [row.get("dl_key"), row.get("exec_key"), row.get("ga4_key")]
     for key in keys:
@@ -2977,29 +3031,9 @@ This capture is split into three layers:
                             }
                         )
                         st.dataframe(event_display_df, use_container_width=True, hide_index=True)
-                        with st.expander("Detailed event values", expanded=False):
-                            for event_row in audit_summary["event_rows"]:
-                                title = f"{event_row['event_name']} ({event_row['times_fired']} time"
-                                if event_row["times_fired"] != 1:
-                                    title += "s"
-                                title += ")"
-                                with st.expander(title, expanded=False):
-                                    if event_row["details"]:
-                                        st.dataframe(
-                                            pd.DataFrame(event_row["details"]),
-                                            use_container_width=True,
-                                            hide_index=True,
-                                        )
-                                    else:
-                                        st.info("No user-facing values were captured for this event.")
-
-                                    if event_row["technical_details"]:
-                                        with st.expander("Technical fields", expanded=False):
-                                            st.dataframe(
-                                                pd.DataFrame(event_row["technical_details"]),
-                                                use_container_width=True,
-                                                hide_index=True,
-                                            )
+                        st.markdown("### Detailed Event Values")
+                        detail_df = build_event_detail_table(audit_summary["event_rows"])
+                        st.dataframe(detail_df, use_container_width=True, hide_index=True)
 
                     st.markdown("### Custom Dimensions / Parameters")
                     mapping_df = pd.DataFrame(audit_summary["mapping_rows"])
