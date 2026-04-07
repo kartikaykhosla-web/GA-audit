@@ -8,11 +8,18 @@ import subprocess
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple, Optional, Set
 from urllib.parse import urlparse, parse_qs, urlunparse
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+except Exception:
+    gspread = None
+    Credentials = None
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -1687,16 +1694,149 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
 
 # Streamlit app
 
-import json
-from datetime import datetime, timezone
-
-import pandas as pd
-import streamlit as st
-
-
-
 st.set_page_config(page_title="GA4 / dataLayer Auditor", layout="wide")
 st.title("GA4 / dataLayer Auditor")
+
+JAGRAN_EMAIL_DOMAIN = "@jagrannewmedia.com"
+DEFAULT_LOG_SHEET_ID = "1e_fp0fAOeEAHaRtFJUv-rt-i0sqUOhszYOrOk7Cv5QU"
+DEFAULT_LOG_WORKSHEET = "Audit Logs"
+LOG_HEADERS = [
+    "date",
+    "email_id",
+    "url_checked",
+    "pageview_trigger_found",
+    "execution_custom_dimensions",
+]
+LOG_TIMEZONE = ZoneInfo("Asia/Kolkata")
+
+
+def build_login_email(username: str):
+    value = str(username or "").strip().lower()
+    if not value:
+        return "", "Please enter your username."
+    if "@" in value:
+        return "", "Enter only your username, not the full email."
+    if not re.fullmatch(r"[a-z0-9._-]+", value):
+        return "", "Username can only contain letters, numbers, dot, underscore, or hyphen."
+    return f"{value}{JAGRAN_EMAIL_DOMAIN}", ""
+
+
+def require_login():
+    logged_in_email = st.session_state.get("logged_in_email")
+    if logged_in_email:
+        return logged_in_email
+
+    st.subheader("Login")
+    st.info(f"Use your Jagran username. The app will identify you as `username{JAGRAN_EMAIL_DOMAIN}`.")
+    with st.form("login_form", clear_on_submit=False):
+        username = st.text_input("Username")
+        submitted = st.form_submit_button("Continue")
+    if submitted:
+        email, error = build_login_email(username)
+        if error:
+            st.error(error)
+        else:
+            st.session_state["logged_in_email"] = email
+            st.rerun()
+    st.stop()
+
+
+def get_service_account_info():
+    try:
+        raw = st.secrets.get("gcp_service_account", {})
+    except Exception:
+        return {}
+    return dict(raw) if raw else {}
+
+
+def get_sheet_settings():
+    try:
+        raw = st.secrets.get("sheets", {})
+    except Exception:
+        raw = {}
+    settings = dict(raw) if raw else {}
+    return {
+        "spreadsheet_id": settings.get("spreadsheet_id") or DEFAULT_LOG_SHEET_ID,
+        "worksheet_name": settings.get("worksheet_name") or DEFAULT_LOG_WORKSHEET,
+    }
+
+
+@st.cache_resource
+def get_log_worksheet(service_account_json: str, spreadsheet_id: str, worksheet_name: str):
+    if not gspread or not Credentials:
+        raise RuntimeError("Google Sheets libraries are not installed.")
+
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    credentials = Credentials.from_service_account_info(
+        json.loads(service_account_json),
+        scopes=scopes,
+    )
+    client = gspread.authorize(credentials)
+    spreadsheet = client.open_by_key(spreadsheet_id)
+    try:
+        worksheet = spreadsheet.worksheet(worksheet_name)
+    except gspread.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(title=worksheet_name, rows=1000, cols=len(LOG_HEADERS))
+
+    first_row = worksheet.row_values(1)
+    if not any(first_row):
+        worksheet.append_row(LOG_HEADERS, value_input_option="USER_ENTERED")
+
+    return worksheet
+
+
+def append_audit_log(email_id: str, result: dict, audit_summary: dict):
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        return False, "Google Sheets logging is not configured yet."
+
+    settings = get_sheet_settings()
+    execution_dimensions = []
+    for row in audit_summary.get("mapping_rows", []):
+        if row.get("exec_value") in ("", None):
+            continue
+        execution_dimensions.append(f"{row.get('dimension')}={row.get('exec_value')}")
+
+    row = [
+        datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
+        email_id,
+        result.get("page_url") or "",
+        "Yes" if audit_summary.get("pageview_triggered") else "No",
+        " | ".join(execution_dimensions) if execution_dimensions else "None",
+    ]
+
+    worksheet = get_log_worksheet(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["worksheet_name"],
+    )
+    worksheet.append_row(row, value_input_option="USER_ENTERED")
+    return True, ""
+
+
+def render_sidebar_session(email_id: str):
+    with st.sidebar:
+        st.markdown("### Session")
+        st.write(email_id)
+        if st.button("Log out"):
+            st.session_state.pop("logged_in_email", None)
+            st.rerun()
+
+        st.markdown("### Log Sheet")
+        service_account_info = get_service_account_info()
+        if service_account_info:
+            st.success("Google Sheets logging configured")
+            st.caption(f"Share the sheet with: `{service_account_info.get('client_email', '')}`")
+        else:
+            st.warning("Google Sheets logging not configured")
+            st.caption("Add `gcp_service_account` to Streamlit secrets to enable logging.")
+
+
+logged_in_email = require_login()
+render_sidebar_session(logged_in_email)
 
 tab_main, tab_compare = st.tabs(["Audit URLs", "Compare Prod vs Stage"])
 
@@ -2581,6 +2721,22 @@ This capture is split into three layers:
                 if len(results) == 1:
                     result = results[0]
                     audit_summary = build_audit_focus_summary(result)
+
+                    log_written = False
+                    log_error = ""
+                    try:
+                        log_written, log_error = append_audit_log(
+                            logged_in_email,
+                            result,
+                            audit_summary,
+                        )
+                    except Exception as exc:
+                        log_error = str(exc)
+
+                    if log_written:
+                        st.success("Audit logged to Google Sheet.")
+                    elif log_error:
+                        st.warning(f"Audit finished, but log entry could not be written. {log_error}")
 
                     if result.get("preload_hook_error"):
                         st.warning(
