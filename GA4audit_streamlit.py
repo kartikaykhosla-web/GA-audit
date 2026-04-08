@@ -2075,11 +2075,14 @@ VALIDATION_FAIL_LABEL = "Mismatch"
 VALIDATION_OPTIONAL_LABEL = "Optional"
 
 
-@st.cache_resource
 def get_cookie_manager():
     if not stx:
         return None
-    return stx.CookieManager()
+    cookie_manager = st.session_state.get("_ga_audit_cookie_manager")
+    if cookie_manager is None:
+        cookie_manager = stx.CookieManager()
+        st.session_state["_ga_audit_cookie_manager"] = cookie_manager
+    return cookie_manager
 
 
 def read_login_cookie():
