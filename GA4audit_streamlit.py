@@ -2867,6 +2867,92 @@ def append_template_rules(email_id: str, rule_payloads: List[dict]):
     return True, str(len(rows))
 
 
+def update_template_rule(email_id: str, rule_id: str, rule_payload: dict):
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        return False, "Google Sheets logging is not configured yet."
+
+    settings = get_template_sheet_settings()
+    _, rules_ws = get_template_worksheets(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["template_worksheet_name"],
+        settings["template_rules_worksheet_name"],
+    )
+
+    rule_id_text = str(rule_id or "").strip()
+    if not rule_id_text:
+        return False, "Rule ID is missing."
+
+    rule_ids = rules_ws.col_values(1)
+    row_index = None
+    for index, value in enumerate(rule_ids[1:], start=2):
+        if str(value or "").strip() == rule_id_text:
+            row_index = index
+            break
+
+    if row_index is None:
+        return False, "Rule not found."
+
+    existing_row = rules_ws.row_values(row_index)
+    existing_map = {
+        header: (existing_row[idx] if idx < len(existing_row) else "")
+        for idx, header in enumerate(TEMPLATE_RULE_HEADERS)
+    }
+
+    row_map = {
+        "rule_id": rule_id_text,
+        "template_id": str(rule_payload.get("template_id") or existing_map.get("template_id") or "").strip(),
+        "rule_scope": str(rule_payload.get("rule_scope") or existing_map.get("rule_scope") or "").strip(),
+        "field_name": str(rule_payload.get("field_name") or "").strip(),
+        "rule_type": str(rule_payload.get("rule_type") or "").strip(),
+        "expected_values": str(rule_payload.get("expected_values") or "").strip(),
+        "notes": str(rule_payload.get("notes") or "").strip(),
+        "created_by": existing_map.get("created_by") or email_id,
+        "created_at": existing_map.get("created_at") or datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    last_cell = f"{sheet_column_label(len(TEMPLATE_RULE_HEADERS))}{row_index}"
+    ordered_row = [row_map.get(header, "") for header in TEMPLATE_RULE_HEADERS]
+    rules_ws.update(
+        range_name=f"A{row_index}:{last_cell}",
+        values=[ordered_row],
+        value_input_option="USER_ENTERED",
+    )
+    return True, rule_id_text
+
+
+def delete_template_rule(rule_id: str):
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        return False, "Google Sheets logging is not configured yet."
+
+    settings = get_template_sheet_settings()
+    _, rules_ws = get_template_worksheets(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["template_worksheet_name"],
+        settings["template_rules_worksheet_name"],
+    )
+
+    rule_id_text = str(rule_id or "").strip()
+    if not rule_id_text:
+        return False, "Rule ID is missing."
+
+    rule_ids = rules_ws.col_values(1)
+    row_index = None
+    for index, value in enumerate(rule_ids[1:], start=2):
+        if str(value or "").strip() == rule_id_text:
+            row_index = index
+            break
+
+    if row_index is None:
+        return False, "Rule not found."
+
+    rules_ws.delete_rows(row_index)
+    return True, rule_id_text
+
+
 def _normalize_template_name_key(value: str) -> str:
     return str(value or "").strip().lower()
 
@@ -4978,14 +5064,24 @@ if tab_template_manager is not None:
             if not active_templates:
                 st.info("Create a template first, then add its execution-field and event rules here.")
             else:
+                rule_target_template_id = str(st.session_state.get("template_rule_target_id") or "").strip()
+                rule_target_index = next(
+                    (
+                        index
+                        for index, template in enumerate(active_templates)
+                        if str(template.get("template_id") or "").strip() == rule_target_template_id
+                    ),
+                    0,
+                )
                 template_choice_for_rule = st.selectbox(
                     "Template for this rule",
                     options=active_templates,
                     format_func=build_template_option_label,
-                    key="template_rule_template_selector",
+                    index=rule_target_index,
                 )
                 execution_field_options, execution_value_catalog = build_execution_rule_catalog(template_rules)
                 selected_template_id = str(template_choice_for_rule.get("template_id") or "").strip()
+                st.session_state["template_rule_target_id"] = selected_template_id
                 pending_execution_key = f"pending_execution_rules_{selected_template_id}"
                 if pending_execution_key not in st.session_state:
                     st.session_state[pending_execution_key] = []
@@ -5171,7 +5267,7 @@ if tab_template_manager is not None:
                 st.info("No templates saved yet.")
             else:
                 edit_template_id = st.session_state.get("template_edit_id", "")
-                header_cols = st.columns([2.2, 1.7, 1.6, 1.5, 3.0, 0.8, 0.8, 0.9])
+                header_cols = st.columns([2.2, 1.7, 1.6, 1.5, 3.0, 0.8, 0.8, 0.8, 0.9])
                 headers = [
                     "Template",
                     "Domain",
@@ -5180,14 +5276,15 @@ if tab_template_manager is not None:
                     "Reference URLs / Patterns",
                     "Active",
                     "Rules",
-                    "Action",
+                    "Edit",
+                    "Add rule",
                 ]
                 for col, label in zip(header_cols, headers):
                     col.markdown(f"**{label}**")
 
                 for template in template_records:
                     template_id = str(template.get("template_id") or "").strip()
-                    row_cols = st.columns([2.2, 1.7, 1.6, 1.5, 3.0, 0.8, 0.8, 0.9])
+                    row_cols = st.columns([2.2, 1.7, 1.6, 1.5, 3.0, 0.8, 0.8, 0.8, 0.9])
                     row_values = [
                         template.get("template_name") or "",
                         template.get("domain_name") or "",
@@ -5197,10 +5294,15 @@ if tab_template_manager is not None:
                         "Yes" if template.get("active") else "No",
                         str(len(template_rules_by_template.get(template_id, []))),
                     ]
-                    for col, value in zip(row_cols[:-1], row_values):
+                    for col, value in zip(row_cols[:-2], row_values):
                         col.write(value)
-                    if row_cols[-1].button("✏️ Edit", key=f"edit_template_row_{template_id}"):
+                    if row_cols[-2].button("✏️ Edit", key=f"edit_template_row_{template_id}"):
                         st.session_state["template_edit_id"] = template_id
+                        st.session_state["template_manager_view_template_id"] = template_id
+                        st.rerun()
+                    if row_cols[-1].button("➕ Rule", key=f"add_rule_row_{template_id}"):
+                        st.session_state["template_rule_target_id"] = template_id
+                        st.session_state["template_manager_view_template_id"] = template_id
                         st.rerun()
 
                 if edit_template_id:
@@ -5289,34 +5391,174 @@ if tab_template_manager is not None:
                         f"Showing rules for the template you are editing: {build_template_option_label(template_to_edit)}"
                     )
                 else:
+                    view_template_id = str(st.session_state.get("template_manager_view_template_id") or "").strip()
+                    view_template_index = next(
+                        (
+                            index
+                            for index, template in enumerate(template_records)
+                            if str(template.get("template_id") or "").strip() == view_template_id
+                        ),
+                        0,
+                    )
                     inspect_template = st.selectbox(
                         "View rules for template",
                         options=template_records,
                         format_func=build_template_option_label,
-                        key="template_manager_view_selector",
+                        index=view_template_index,
                     )
                 inspect_template_id = str(inspect_template.get("template_id") or "").strip()
-                selected_template_rules_table = pd.DataFrame(template_rules_by_template.get(inspect_template_id, []))
+                st.session_state["template_manager_view_template_id"] = inspect_template_id
+                selected_template_rules = template_rules_by_template.get(inspect_template_id, [])
+                active_rule_edit_id = str(st.session_state.get("template_rule_edit_id") or "").strip()
+                if active_rule_edit_id and not any(
+                    str(rule.get("rule_id") or "").strip() == active_rule_edit_id
+                    for rule in selected_template_rules
+                ):
+                    st.session_state.pop("template_rule_edit_id", None)
+                    active_rule_edit_id = ""
                 st.markdown("### Template Rules")
-                if selected_template_rules_table.empty:
+                if not selected_template_rules:
                     st.info("No rules for this template yet.")
                 else:
-                    selected_template_rules_table["expected_values_display"] = selected_template_rules_table["expected_values"].apply(
-                        format_expected_values_display
-                    )
-                    st.dataframe(
-                        selected_template_rules_table[
-                            ["rule_scope", "field_name", "rule_type", "expected_values_display", "notes", "created_at"]
-                        ].rename(
-                            columns={
-                                "rule_scope": "Scope",
-                                "field_name": "Field / Event",
-                                "rule_type": "Rule Type",
-                                "expected_values_display": "Expected Values",
-                                "notes": "Notes",
-                                "created_at": "Created At",
-                            }
-                        ),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
+                    rule_header_cols = st.columns([1.0, 1.8, 1.1, 1.8, 1.6, 1.0, 1.0])
+                    for col, label in zip(
+                        rule_header_cols,
+                        ["Scope", "Field / Event", "Rule Type", "Expected Values", "Notes", "Edit", "Delete"],
+                    ):
+                        col.markdown(f"**{label}**")
+
+                    for rule in selected_template_rules:
+                        rule_id = str(rule.get("rule_id") or "").strip()
+                        rule_scope_value = str(rule.get("rule_scope") or "").strip().lower()
+                        rule_scope_label = next(
+                            (
+                                label
+                                for label, value in RULE_SCOPE_OPTIONS.items()
+                                if value == rule_scope_value
+                            ),
+                            rule_scope_value or "Unknown",
+                        )
+                        rule_row_cols = st.columns([1.0, 1.8, 1.1, 1.8, 1.6, 1.0, 1.0])
+                        rule_row_values = [
+                            rule_scope_label,
+                            rule.get("field_name") or "",
+                            rule.get("rule_type") or "",
+                            format_expected_values_display(rule.get("expected_values") or "") or "—",
+                            rule.get("notes") or "—",
+                        ]
+                        for col, value in zip(rule_row_cols[:-2], rule_row_values):
+                            col.write(value)
+                        if rule_row_cols[-2].button("✏️ Edit", key=f"edit_rule_row_{rule_id}"):
+                            st.session_state["template_rule_edit_id"] = rule_id
+                            st.rerun()
+                        if rule_row_cols[-1].button("🗑 Delete", key=f"delete_rule_row_{rule_id}"):
+                            success, response = delete_template_rule(rule_id)
+                            if success:
+                                if st.session_state.get("template_rule_edit_id") == rule_id:
+                                    st.session_state.pop("template_rule_edit_id", None)
+                                st.success("Rule deleted.")
+                                st.rerun()
+                            else:
+                                st.error(response)
+
+                    if active_rule_edit_id:
+                        rule_to_edit = next(
+                            (
+                                rule
+                                for rule in selected_template_rules
+                                if str(rule.get("rule_id") or "").strip() == active_rule_edit_id
+                            ),
+                            None,
+                        )
+                        if rule_to_edit:
+                            st.markdown("#### Edit Rule")
+                            existing_scope_value = str(rule_to_edit.get("rule_scope") or "").strip().lower()
+                            existing_scope_label = next(
+                                (
+                                    label
+                                    for label, value in RULE_SCOPE_OPTIONS.items()
+                                    if value == existing_scope_value
+                                ),
+                                "Execution field",
+                            )
+                            existing_rule_type = str(rule_to_edit.get("rule_type") or "").strip()
+                            if existing_rule_type not in RULE_TYPE_OPTIONS:
+                                existing_rule_type = "exact"
+                            existing_expected_values = "\n".join(
+                                parse_expected_values(rule_to_edit.get("expected_values"))
+                            )
+                            with st.form(
+                                f"template_manager_edit_rule_{active_rule_edit_id}",
+                                clear_on_submit=False,
+                            ):
+                                edit_rule_scope_label = st.selectbox(
+                                    "Rule scope",
+                                    options=list(RULE_SCOPE_OPTIONS.keys()),
+                                    index=list(RULE_SCOPE_OPTIONS.keys()).index(existing_scope_label),
+                                )
+                                edit_rule_scope = RULE_SCOPE_OPTIONS[edit_rule_scope_label]
+                                field_label = (
+                                    "Execution field name"
+                                    if edit_rule_scope == "execution"
+                                    else "Event label / field"
+                                )
+                                edit_rule_field_name = st.text_input(
+                                    field_label,
+                                    value=str(rule_to_edit.get("field_name") or ""),
+                                )
+                                edit_rule_type = st.selectbox(
+                                    "Rule type",
+                                    options=RULE_TYPE_OPTIONS,
+                                    index=RULE_TYPE_OPTIONS.index(existing_rule_type),
+                                )
+                                edit_rule_expected_values = ""
+                                if edit_rule_type in {"required", "optional"}:
+                                    st.caption("This rule type does not need explicit expected values.")
+                                else:
+                                    edit_rule_expected_values = st.text_area(
+                                        "Expected values",
+                                        value=existing_expected_values,
+                                        help="Enter one value per line. Pipe-separated values also work.",
+                                        height=120,
+                                    )
+                                edit_rule_notes = st.text_input(
+                                    "Notes (optional)",
+                                    value=str(rule_to_edit.get("notes") or ""),
+                                )
+                                save_rule_col, cancel_rule_col = st.columns([1, 1])
+                                save_rule_changes = save_rule_col.form_submit_button("Save rule changes")
+                                cancel_rule_changes = cancel_rule_col.form_submit_button("Cancel")
+
+                            if cancel_rule_changes:
+                                st.session_state.pop("template_rule_edit_id", None)
+                                st.rerun()
+
+                            if save_rule_changes:
+                                normalized_expected_values = (
+                                    ""
+                                    if edit_rule_type in {"required", "optional"}
+                                    else normalize_expected_values_input(edit_rule_expected_values)
+                                )
+                                if not str(edit_rule_field_name or "").strip():
+                                    st.error("Field / event name is required.")
+                                elif edit_rule_type not in {"required", "optional"} and not normalized_expected_values:
+                                    st.error("Expected values are required for this rule type.")
+                                else:
+                                    success, response = update_template_rule(
+                                        logged_in_email,
+                                        active_rule_edit_id,
+                                        {
+                                            "template_id": inspect_template_id,
+                                            "rule_scope": edit_rule_scope,
+                                            "field_name": edit_rule_field_name,
+                                            "rule_type": edit_rule_type,
+                                            "expected_values": normalized_expected_values,
+                                            "notes": edit_rule_notes,
+                                        },
+                                    )
+                                    if success:
+                                        st.session_state.pop("template_rule_edit_id", None)
+                                        st.success("Rule updated.")
+                                        st.rerun()
+                                    else:
+                                        st.error(response)
