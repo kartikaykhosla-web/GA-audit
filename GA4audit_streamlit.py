@@ -3311,6 +3311,45 @@ def format_multiline_entries_display(raw_value: str) -> str:
     return " | ".join(entries)
 
 
+def unique_preserve_order(values: List[str]) -> List[str]:
+    seen = set()
+    ordered = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        ordered.append(text)
+    return ordered
+
+
+def merge_expected_value_inputs(saved_values: List[str], typed_values: str) -> str:
+    merged = unique_preserve_order([*(saved_values or []), *parse_expected_values(typed_values)])
+    return "|".join(merged)
+
+
+def build_execution_rule_catalog(template_rules: List[dict]):
+    field_names = []
+    value_catalog = {}
+
+    for rule in template_rules or []:
+        if str(rule.get("rule_scope") or "").strip().lower() != "execution":
+            continue
+
+        field_name = str(rule.get("field_name") or "").strip()
+        if not field_name:
+            continue
+        if field_name not in field_names:
+            field_names.append(field_name)
+
+        entry = value_catalog.setdefault(field_name, [])
+        for value in parse_expected_values(rule.get("expected_values")):
+            if value not in entry:
+                entry.append(value)
+
+    return sorted(field_names, key=str.lower), value_catalog
+
+
 def parse_bulk_execution_rule_lines(raw_value: str, rule_type: str):
     entries = []
     errors = []
@@ -4639,102 +4678,168 @@ if tab_template_manager is not None:
                     format_func=build_template_option_label,
                     key="template_rule_template_selector",
                 )
+                execution_field_options, execution_value_catalog = build_execution_rule_catalog(template_rules)
+                selected_template_id = str(template_choice_for_rule.get("template_id") or "").strip()
+                pending_execution_key = f"pending_execution_rules_{selected_template_id}"
+                if pending_execution_key not in st.session_state:
+                    st.session_state[pending_execution_key] = []
+
+                st.caption(
+                    "Dynamic values: use `required` when the field must exist but can change, `regex` for pattern-based values like word count or article age, and `contains` when only part of the value matters."
+                )
+
                 with st.form("template_manager_add_rule", clear_on_submit=True):
-                    rule_col1, rule_col2 = st.columns(2)
-                    with rule_col1:
-                        scope_label = st.selectbox("Rule scope", options=list(RULE_SCOPE_OPTIONS.keys()))
-                    with rule_col2:
-                        rule_type = st.selectbox("Rule type", options=RULE_TYPE_OPTIONS)
+                    scope_label = st.selectbox("Rule scope", options=list(RULE_SCOPE_OPTIONS.keys()))
+                    scope_value = RULE_SCOPE_OPTIONS[scope_label]
 
-                    if RULE_SCOPE_OPTIONS[scope_label] == "execution":
-                        field_label = "Execution field rules"
-                        field_help = (
-                            "Add one execution rule per line using `field_name = expected value`. "
-                            "Examples: `page_type = article detail` or `category = world|india`."
-                        )
-                        expected_label = "Execution field rules"
-                        expected_help = (
-                            "Enter one rule per line. Pipe-separated expected values still work inside a line."
-                        )
-                        expected_placeholder = (
-                            "page_type = article detail\n"
-                            "category = world|india\n"
-                            "scroll_percent = 0%|25%|50%|75%|100%"
-                        )
-                    else:
-                        field_label = "Rule label / event group"
-                        field_help = "Use a short label for this event rule, like `Core article events`."
-                        expected_label = "Expected event names"
-                        expected_help = "Enter one event name per line. Pipe-separated values also work."
-                        expected_placeholder = "page_view\npage_scroll"
+                    if scope_value == "execution":
+                        field_col, rule_col, value_col = st.columns([1.3, 1.0, 1.7])
+                        with field_col:
+                            execution_field_choice = st.selectbox(
+                                "Execution field",
+                                options=["Add new field...", *execution_field_options] if execution_field_options else ["Add new field..."],
+                                key=f"execution_field_choice_{selected_template_id}",
+                            )
+                            new_execution_field = ""
+                            if execution_field_choice == "Add new field...":
+                                new_execution_field = st.text_input(
+                                    "New execution field",
+                                    placeholder="page_type",
+                                    key=f"new_execution_field_{selected_template_id}",
+                                )
 
-                    if RULE_SCOPE_OPTIONS[scope_label] == "execution":
-                        field_name = ""
-                        execution_rule_lines = st.text_area(
-                            expected_label,
-                            help=expected_help,
-                            placeholder=expected_placeholder,
-                            height=180,
-                        )
-                        parsed_execution_rules, parsed_execution_rule_errors = parse_bulk_execution_rule_lines(
-                            execution_rule_lines,
-                            rule_type,
-                        )
-                        if parsed_execution_rules:
-                            st.caption(f"{len(parsed_execution_rules)} execution rule(s) ready to save.")
-                        if parsed_execution_rule_errors:
-                            st.caption("Preview issues: " + " ".join(parsed_execution_rule_errors[:3]))
-                    else:
-                        field_name = st.text_input(field_label, help=field_help)
-                        expected_values_input = st.text_area(
-                            expected_label,
-                            help=expected_help,
-                            placeholder=expected_placeholder,
-                            height=110,
-                        )
-                        parsed_preview_values = parse_expected_values(expected_values_input)
-                        if parsed_preview_values:
-                            st.caption(f"Will be stored as: {' | '.join(parsed_preview_values)}")
-                    notes = st.text_input("Notes (optional)")
-                    add_rule_submitted = st.form_submit_button("Add rule")
+                        with rule_col:
+                            rule_type = st.selectbox(
+                                "Rule",
+                                options=RULE_TYPE_OPTIONS,
+                                key=f"execution_rule_type_{selected_template_id}",
+                            )
 
-                if add_rule_submitted:
-                    if RULE_SCOPE_OPTIONS[scope_label] == "execution":
-                        parsed_execution_rules, parsed_execution_rule_errors = parse_bulk_execution_rule_lines(
-                            execution_rule_lines,
-                            rule_type,
+                        selected_execution_field = (
+                            str(new_execution_field or "").strip()
+                            if execution_field_choice == "Add new field..."
+                            else execution_field_choice
                         )
-                        if not parsed_execution_rules:
-                            if parsed_execution_rule_errors:
-                                st.error(" ".join(parsed_execution_rule_errors[:5]))
+                        known_value_options = execution_value_catalog.get(selected_execution_field, [])
+
+                        with value_col:
+                            saved_value_selection = []
+                            typed_expected_values = ""
+                            if rule_type in {"required", "optional"}:
+                                st.caption("This rule type does not need explicit expected values.")
                             else:
-                                st.error("Add at least one execution field rule.")
-                        elif parsed_execution_rule_errors:
-                            st.error(" ".join(parsed_execution_rule_errors[:5]))
+                                if known_value_options:
+                                    saved_value_selection = st.multiselect(
+                                        "Saved values",
+                                        options=known_value_options,
+                                        key=f"execution_saved_values_{selected_template_id}_{selected_execution_field}",
+                                    )
+                                typed_expected_values = st.text_area(
+                                    "Expected values",
+                                    help="Enter one value per line. Pipe-separated values also work.",
+                                    placeholder="article detail\ngallery",
+                                    height=120,
+                                    key=f"execution_expected_values_{selected_template_id}",
+                                )
+                                merged_preview = merge_expected_value_inputs(saved_value_selection, typed_expected_values)
+                                if merged_preview:
+                                    st.caption(f"Will be stored as: {merged_preview}")
+
+                        notes = st.text_input("Notes (optional)", key=f"execution_rule_notes_{selected_template_id}")
+                        add_execution_rule_submitted = st.form_submit_button("Add execution rule")
+
+                    else:
+                        field_col, rule_col, value_col = st.columns([1.3, 1.0, 1.7])
+                        with field_col:
+                            field_name = st.text_input(
+                                "Event label / field",
+                                help="Use a short label like `Core article events` or repeat the main event name.",
+                            )
+                        with rule_col:
+                            rule_type = st.selectbox("Rule", options=RULE_TYPE_OPTIONS, key=f"event_rule_type_{selected_template_id}")
+                        with value_col:
+                            expected_values_input = ""
+                            if rule_type in {"required", "optional"}:
+                                st.caption("This rule type does not need explicit expected values.")
+                            else:
+                                expected_values_input = st.text_area(
+                                    "Expected event names",
+                                    help="Enter one event name per line. Pipe-separated values also work.",
+                                    placeholder="page_view\npage_scroll",
+                                    height=120,
+                                )
+                                parsed_preview_values = parse_expected_values(expected_values_input)
+                                if parsed_preview_values:
+                                    st.caption(f"Will be stored as: {' | '.join(parsed_preview_values)}")
+                        notes = st.text_input("Notes (optional)")
+                        add_event_rule_submitted = st.form_submit_button("Add event rule")
+
+                if scope_value == "execution":
+                    if add_execution_rule_submitted:
+                        expected_values = merge_expected_value_inputs(saved_value_selection, typed_expected_values)
+                        if not selected_execution_field:
+                            st.error("Choose an execution field or add a new one.")
+                        elif rule_type not in {"required", "optional"} and not expected_values:
+                            st.error("Expected values are required for this rule type.")
                         else:
+                            pending_rules = list(st.session_state.get(pending_execution_key, []))
+                            pending_rules.append(
+                                {
+                                    "field_name": selected_execution_field,
+                                    "rule_type": rule_type,
+                                    "expected_values": expected_values,
+                                    "notes": notes,
+                                }
+                            )
+                            st.session_state[pending_execution_key] = pending_rules
+                            st.success(f"Added `{selected_execution_field}` to the pending execution batch.")
+
+                    pending_rules = st.session_state.get(pending_execution_key, [])
+                    if pending_rules:
+                        st.markdown("#### Pending Execution Rules")
+                        pending_display_df = pd.DataFrame(pending_rules).rename(
+                            columns={
+                                "field_name": "Execution Field",
+                                "rule_type": "Rule",
+                                "expected_values": "Expected Values",
+                                "notes": "Notes",
+                            }
+                        )
+                        if not pending_display_df.empty and "Expected Values" in pending_display_df.columns:
+                            pending_display_df["Expected Values"] = pending_display_df["Expected Values"].apply(
+                                format_expected_values_display
+                            )
+                        st.dataframe(pending_display_df, use_container_width=True, hide_index=True)
+                        pending_action_col1, pending_action_col2 = st.columns([1, 1])
+                        if pending_action_col1.button("Save execution rule batch", key=f"save_execution_batch_{selected_template_id}"):
                             success, response = append_template_rules(
                                 logged_in_email,
                                 [
                                     {
-                                        "template_id": template_choice_for_rule.get("template_id"),
-                                        "rule_scope": RULE_SCOPE_OPTIONS[scope_label],
+                                        "template_id": selected_template_id,
+                                        "rule_scope": "execution",
                                         "field_name": entry["field_name"],
-                                        "rule_type": rule_type,
+                                        "rule_type": entry["rule_type"],
                                         "expected_values": entry["expected_values"],
-                                        "notes": notes,
+                                        "notes": entry["notes"],
                                     }
-                                    for entry in parsed_execution_rules
+                                    for entry in pending_rules
                                 ],
                             )
                             if success:
-                                st.success(f"{response} rule(s) added.")
+                                st.session_state[pending_execution_key] = []
+                                st.success(f"{response} execution rule(s) added.")
                                 st.rerun()
                             else:
                                 st.error(response)
-                    else:
+                        if pending_action_col2.button("Clear execution batch", key=f"clear_execution_batch_{selected_template_id}"):
+                            st.session_state[pending_execution_key] = []
+                            st.rerun()
+                else:
+                    if add_event_rule_submitted:
                         expected_values = normalize_expected_values_input(expected_values_input)
                         if not str(field_name or "").strip():
-                            st.error(f"{field_label} is required.")
+                            st.error("Event label / field is required.")
                         elif rule_type not in {"required", "optional"} and not str(expected_values or "").strip():
                             st.error("Expected values are required for this rule type.")
                         else:
@@ -4742,7 +4847,7 @@ if tab_template_manager is not None:
                                 logged_in_email,
                                 {
                                     "template_id": template_choice_for_rule.get("template_id"),
-                                    "rule_scope": RULE_SCOPE_OPTIONS[scope_label],
+                                    "rule_scope": "event",
                                     "field_name": field_name,
                                     "rule_type": rule_type,
                                     "expected_values": expected_values,
