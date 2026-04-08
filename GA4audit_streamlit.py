@@ -3,11 +3,12 @@ import re
 import json
 import time
 import glob
+import base64
 import shutil
 import subprocess
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple, Optional, Set
-from urllib.parse import urlparse, parse_qs, urlunparse
+from urllib.parse import urlparse, parse_qs, urlunparse, unquote_plus
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -582,6 +583,27 @@ GA4_CONTEXT_FIELD_MAP = {
     "sid": "session_id",
 }
 
+COMSCORE_PARAM_KEYS = ("c1", "c2", "c7", "c8")
+COMSCORE_HOST_PATTERN = re.compile(r"(?:^|[.])scorecardresearch\.com$", re.I)
+COMSCORE_JS_PATTERN = re.compile(r"scorecardresearch\.com/(?:c2/\d+/)?beacon\.js", re.I)
+COMSCORE_JS_C1_RE = re.compile(
+    r"""(?:
+        [\s'"=]c1[\s'"]*[:=][\s'"]*([0-9]{1,6})
+        |
+        ["']?c1["']?\s*[:=]\s*["']?([0-9]{1,6})["']?
+    )""",
+    re.I | re.X,
+)
+COMSCORE_JS_C2_RE = re.compile(
+    r"""(?:
+        [\s'"=]c2[\s'"]*[:=][\s'"]*([0-9]{4,12})
+        |
+        ["']?c2["']?\s*[:=]\s*["']?([0-9]{4,12})["']?
+    )""",
+    re.I | re.X,
+)
+COMSCORE_GENERIC_PARAM_RE = re.compile(r"(?:[?&]|\b)(c1|c2|c7|c8)=([^&'\"\\s]+)", re.I)
+
 GA4_PRELOAD_SCRIPT = r"""
 (function () {
     try {
@@ -1004,6 +1026,178 @@ def normalize_transport_hits(preload_state: Dict[str, Any]) -> Tuple[List[Dict[s
     return hits, events
 
 
+def _is_comscore_hit(url: str) -> bool:
+    parsed = urlparse(str(url or ""))
+    host = parsed.netloc.lower().split(":", 1)[0]
+    return bool(COMSCORE_HOST_PATTERN.search(host))
+
+
+def _merge_multivalue_dicts(base: Dict[str, List[str]], extra: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    merged = {key: list(values) for key, values in (base or {}).items()}
+    for key, values in (extra or {}).items():
+        bucket = merged.setdefault(key, [])
+        for value in values or []:
+            value_text = str(value)
+            if value_text not in bucket:
+                bucket.append(value_text)
+    return merged
+
+
+def _base64_decode_attempt(value: str) -> Optional[str]:
+    text = str(value or "").strip()
+    if len(text) < 8:
+        return None
+    try:
+        raw = base64.b64decode(text, validate=False)
+        decoded = raw.decode("utf-8", errors="ignore")
+        return decoded or None
+    except Exception:
+        return None
+
+
+def _filter_comscore_params(values: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    filtered: Dict[str, List[str]] = {}
+    for key, raw_values in (values or {}).items():
+        key_text = str(key or "").strip().lower()
+        if key_text not in COMSCORE_PARAM_KEYS:
+            continue
+        kept = [str(item) for item in raw_values if str(item) != ""]
+        if kept:
+            filtered[key_text] = kept
+    return filtered
+
+
+def _extract_comscore_params_from_text(value: str) -> Dict[str, List[str]]:
+    text = str(value or "")
+    if not text:
+        return {}
+
+    try:
+        parsed = parse_qs(unquote_plus(text), keep_blank_values=True)
+        filtered = _filter_comscore_params(parsed)
+        if filtered:
+            return filtered
+    except Exception:
+        pass
+
+    matches: Dict[str, List[str]] = {}
+    for match in COMSCORE_GENERIC_PARAM_RE.finditer(text):
+        key = match.group(1).lower()
+        val = unquote_plus(match.group(2))
+        matches.setdefault(key, [])
+        if val not in matches[key]:
+            matches[key].append(val)
+    if matches:
+        return matches
+
+    decoded = _base64_decode_attempt(text)
+    if decoded and decoded != text:
+        return _extract_comscore_params_from_text(decoded)
+
+    return {}
+
+
+def _extract_comscore_params_from_js(value: str) -> Dict[str, List[str]]:
+    text = str(value or "")
+    if not text:
+        return {}
+
+    params = _extract_comscore_params_from_text(text)
+
+    c1_match = COMSCORE_JS_C1_RE.search(text)
+    if c1_match:
+        c1_value = next((group for group in c1_match.groups() if group), "")
+        if c1_value:
+            params = _merge_multivalue_dicts(params, {"c1": [c1_value]})
+
+    c2_match = COMSCORE_JS_C2_RE.search(text)
+    if c2_match:
+        c2_value = next((group for group in c2_match.groups() if group), "")
+        if c2_value:
+            params = _merge_multivalue_dicts(params, {"c2": [c2_value]})
+
+    return params
+
+
+def _build_comscore_capture_row(hit: Dict[str, Any]) -> Dict[str, Any]:
+    url = str(hit.get("url") or hit.get("request_url") or "")
+    combined: Dict[str, List[str]] = {}
+
+    try:
+        query_params = _filter_comscore_params(parse_qs(urlparse(url).query, keep_blank_values=True))
+        combined = _merge_multivalue_dicts(combined, query_params)
+    except Exception:
+        pass
+
+    combined = _merge_multivalue_dicts(
+        combined,
+        _extract_comscore_params_from_text(hit.get("request_body") or ""),
+    )
+
+    for headers_field in ("request_headers", "response_headers", "headers"):
+        headers = hit.get(headers_field) or {}
+        if not isinstance(headers, dict):
+            continue
+        for header_value in headers.values():
+            combined = _merge_multivalue_dicts(
+                combined,
+                _extract_comscore_params_from_text(header_value),
+            )
+
+    response_headers = hit.get("response_headers") or hit.get("headers") or {}
+    if isinstance(response_headers, dict):
+        location_value = _case_insensitive_get(response_headers, "Location")
+        combined = _merge_multivalue_dicts(
+            combined,
+            _extract_comscore_params_from_text(location_value or ""),
+        )
+
+    if COMSCORE_JS_PATTERN.search(url):
+        combined = _merge_multivalue_dicts(
+            combined,
+            _extract_comscore_params_from_js(hit.get("response_body") or ""),
+        )
+
+    hit_type = "Beacon JS" if COMSCORE_JS_PATTERN.search(url) else "Beacon Request"
+
+    return {
+        "hit_type": hit_type,
+        "source": hit.get("source") or "",
+        "status": hit.get("status") or hit.get("response_status") or "",
+        "request_url": url,
+        "c1": format_exact_value(combined.get("c1") or []),
+        "c2": format_exact_value(combined.get("c2") or []),
+        "c7": format_exact_value(combined.get("c7") or []),
+        "c8": format_exact_value(combined.get("c8") or []),
+    }
+
+
+def build_comscore_capture_rows(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    seen_keys: Set[Tuple[str, str, str, str, str, str, str, str]] = set()
+
+    for hit in hits or []:
+        if not isinstance(hit, dict):
+            continue
+        row = _build_comscore_capture_row(hit)
+        key = (
+            row["hit_type"],
+            str(row["status"]),
+            row["request_url"],
+            row["c1"],
+            row["c2"],
+            row["c7"],
+            row["c8"],
+            str(row["source"]),
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        rows.append(row)
+
+    return rows
+
+
 def _is_ga4_collect_hit(url: str) -> bool:
     parsed = urlparse(str(url or ""))
     host = parsed.netloc.lower()
@@ -1070,7 +1264,10 @@ def _try_get_response_body_from_cdp(driver, request_id: str) -> str:
     return _truncate_text(str(body_info.get("body") or ""))
 
 
-def extract_collect_hits_from_performance_logs(driver, page_domain: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def extract_collect_hits_from_performance_logs(
+    driver,
+    page_domain: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
         raw_entries = driver.get_log("performance")
     except Exception:
@@ -1095,7 +1292,11 @@ def extract_collect_hits_from_performance_logs(driver, page_domain: str) -> Tupl
         if method == "Network.requestWillBeSent":
             request = params.get("request", {})
             url = str(request.get("url") or item.get("url") or "")
-            if not (_is_ga4_collect_hit(url) or _is_ccm_pageview_hit(url, page_domain)):
+            if not (
+                _is_ga4_collect_hit(url)
+                or _is_ccm_pageview_hit(url, page_domain)
+                or _is_comscore_hit(url)
+            ):
                 continue
             item["url"] = url
             item["method"] = request.get("method", item.get("method", "GET"))
@@ -1109,7 +1310,11 @@ def extract_collect_hits_from_performance_logs(driver, page_domain: str) -> Tupl
         elif method == "Network.responseReceived":
             response = params.get("response", {})
             url = str(response.get("url") or item.get("url") or "")
-            if not (_is_ga4_collect_hit(url) or _is_ccm_pageview_hit(url, page_domain)):
+            if not (
+                _is_ga4_collect_hit(url)
+                or _is_ccm_pageview_hit(url, page_domain)
+                or _is_comscore_hit(url)
+            ):
                 continue
             item["url"] = url
             item["status"] = response.get("status", item.get("status"))
@@ -1129,12 +1334,17 @@ def extract_collect_hits_from_performance_logs(driver, page_domain: str) -> Tupl
 
     ga4_collects: List[Dict[str, Any]] = []
     ccm_pageviews: List[Dict[str, Any]] = []
+    comscore_hits: List[Dict[str, Any]] = []
 
     for request_id, item in requests_by_id.items():
         url = str(item.get("url") or "")
         if not url:
             continue
-        if not (_is_ga4_collect_hit(url) or _is_ccm_pageview_hit(url, page_domain)):
+        if not (
+            _is_ga4_collect_hit(url)
+            or _is_ccm_pageview_hit(url, page_domain)
+            or _is_comscore_hit(url)
+        ):
             continue
 
         response_headers = _safe_headers(item.get("response_headers", {}))
@@ -1156,12 +1366,14 @@ def extract_collect_hits_from_performance_logs(driver, page_domain: str) -> Tupl
             "decoded_events": decode_ga4_collect_request(url, request_body),
         }
 
-        if _is_ccm_pageview_hit(url, page_domain):
+        if _is_comscore_hit(url):
+            comscore_hits.append(hit)
+        elif _is_ccm_pageview_hit(url, page_domain):
             ccm_pageviews.append(hit)
         else:
             ga4_collects.append(hit)
 
-    return ga4_collects, ccm_pageviews
+    return ga4_collects, ccm_pageviews, comscore_hits
 
 
 def _merge_hit_record(base_hit: Dict[str, Any], new_hit: Dict[str, Any]) -> Dict[str, Any]:
@@ -1215,6 +1427,7 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
     gtag_scripts: List[Dict[str, Any]] = []
     ga4_collects: List[Dict[str, Any]] = []
     ccm_pageviews: List[Dict[str, Any]] = []
+    comscore_hits: List[Dict[str, Any]] = []
 
     for request in driver.requests:
         url = getattr(request, "url", "")
@@ -1237,20 +1450,25 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
             ga4_collects.append(hit)
         elif _is_ccm_pageview_hit(url, page_domain):
             ccm_pageviews.append(hit)
+        elif _is_comscore_hit(url):
+            comscore_hits.append(hit)
 
-    perf_ga4_collects, perf_ccm_pageviews = extract_collect_hits_from_performance_logs(driver, page_domain)
+    perf_ga4_collects, perf_ccm_pageviews, perf_comscore_hits = extract_collect_hits_from_performance_logs(driver, page_domain)
     ga4_collects = merge_network_hits(ga4_collects, perf_ga4_collects)
     ccm_pageviews = merge_network_hits(ccm_pageviews, perf_ccm_pageviews)
+    comscore_hits = merge_network_hits(comscore_hits, perf_comscore_hits)
 
     return {
         "gtm_present": bool(gtm_scripts),
         "gtag_present": bool(gtag_scripts),
         "ga4_collect_present": bool(ga4_collects),
         "ccm_pageview_present": bool(ccm_pageviews),
+        "comscore_present": bool(comscore_hits),
         "gtm_scripts": gtm_scripts,
         "gtag_scripts": gtag_scripts,
         "ga4_collects": ga4_collects,
         "ccm_pageviews": ccm_pageviews,
+        "comscore_hits": comscore_hits,
     }
 
 
@@ -1531,10 +1749,12 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
         "gtag_present": False,
         "ga4_collect_present": False,
         "ccm_pageview_present": False,
+        "comscore_present": False,
         "gtm_scripts_sample": "",
         "gtag_scripts_sample": "",
         "ga4_collects_sample": "",
         "ccm_pageviews_sample": "",
+        "comscore_hits_sample": "",
         "pv_event_name": "",
         "pv_page_location": "",
         "pv_page_referrer": "",
@@ -1557,6 +1777,7 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
         "ga4_network_hits_json": "",
         "ga4_network_events_json": "",
         "ga4_decoded_events_json": "",
+        "comscore_hits_json": "",
         "mapping_table": "",
         "audit_duration_seconds": 0.0,
     }
@@ -1681,11 +1902,13 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
     result["gtag_present"] = net_info["gtag_present"]
     result["ga4_collect_present"] = net_info["ga4_collect_present"]
     result["ccm_pageview_present"] = net_info["ccm_pageview_present"]
+    result["comscore_present"] = net_info["comscore_present"]
 
     result["gtm_scripts_sample"] = _format_hits_sample(net_info["gtm_scripts"])
     result["gtag_scripts_sample"] = _format_hits_sample(net_info["gtag_scripts"])
     result["ga4_collects_sample"] = _format_hits_sample(net_info["ga4_collects"])
     result["ccm_pageviews_sample"] = _format_hits_sample(net_info["ccm_pageviews"])
+    result["comscore_hits_sample"] = _format_hits_sample(net_info["comscore_hits"])
 
     preload_state = extract_preload_state(driver)
     gtag_calls = preload_state.get("gtagCalls", []) or []
@@ -1709,6 +1932,9 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
     result["ga4_network_hits_json"] = safe_json(network_hits)
     result["ga4_network_events_json"] = safe_json(decoded_events)
     result["ga4_decoded_events_json"] = safe_json(decoded_events)
+    result["comscore_hits_json"] = safe_json(
+        build_comscore_capture_rows(net_info["comscore_hits"])
+    )
 
     # Flatten page_view
     flat_pv = extract_flat_pageview_fields(pageview_event)
@@ -2155,6 +2381,7 @@ def parse_result_json_fields(result: dict):
         "ga4_network_events_json",
         "ga4_network_hits_json",
         "ga4_decoded_events_json",
+        "comscore_hits_json",
         "consent_clicks_json",
         "mapping_table",
     ]
@@ -2185,6 +2412,8 @@ def build_share_payload(results):
             "trigger_only": audit_summary["trigger_only"],
             "ga4_execution_present": result.get("ga4_execution_present"),
             "ga4_collect_present": result.get("ga4_collect_present"),
+            "comscore_present": result.get("comscore_present"),
+            "comscore_values": audit_summary["comscore_preview"],
             "issues": result.get("issues"),
         }
         summary_rows.append(summary)
@@ -3139,9 +3368,31 @@ def preview_list(values, limit: int = 5):
     return ", ".join(values[:limit]) + f" (+{len(values) - limit} more)"
 
 
+def build_comscore_preview(rows: List[Dict[str, Any]]) -> str:
+    if not rows:
+        return "Not found"
+
+    highlights = []
+    for row in rows:
+        parts = []
+        for key in COMSCORE_PARAM_KEYS:
+            value = str(row.get(key) or "").strip()
+            if value:
+                parts.append(f"{key}={value}")
+        if parts:
+            highlights.append(", ".join(parts))
+
+    if not highlights:
+        return "Tag found"
+    return " | ".join(highlights[:2])
+
+
 def build_audit_focus_summary(result: dict):
     execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
     network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
+    comscore_rows = load_json_payload(result.get("comscore_hits_json", ""), [])
+    if not isinstance(comscore_rows, list):
+        comscore_rows = []
 
     execution_pageview = find_event_by_name(execution_events, "page_view")
     network_pageview = find_event_by_name(network_events, "page_view")
@@ -3169,6 +3420,9 @@ def build_audit_focus_summary(result: dict):
         "captured_network": captured_network,
         "captured_execution": captured_execution,
         "trigger_only": trigger_only,
+        "comscore_present": bool(result.get("comscore_present")),
+        "comscore_rows": comscore_rows,
+        "comscore_preview": build_comscore_preview(comscore_rows),
     }
 
 
@@ -3235,6 +3489,8 @@ This capture is split into three layers:
                             "pageview_in_datalayer": result.get("pageview_event_found"),
                             "pageview_triggered": audit_summary["pageview_triggered"],
                             "pageview_source": audit_summary["pageview_source"],
+                            "comscore_present": audit_summary["comscore_present"],
+                            "comscore_values": audit_summary["comscore_preview"],
                             "events_fired": ", ".join(audit_summary["events_fired"]) or "None",
                             "captured_in_network": preview_list(audit_summary["captured_network"]),
                             "captured_in_execution": preview_list(audit_summary["captured_execution"]),
@@ -3248,6 +3504,7 @@ This capture is split into three layers:
                     "page_url",
                     "pageview_triggered",
                     "pageview_source",
+                    "comscore_present",
                     "events_fired",
                     "issues",
                 ]
@@ -3289,7 +3546,7 @@ This capture is split into three layers:
                             f"Details: {result['preload_hook_error']}"
                         )
 
-                    stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+                    stat_col1, stat_col2, stat_col3, stat_col4, stat_col5 = st.columns(5)
                     stat_col1.metric(
                         "Pageview Triggered",
                         "Yes" if audit_summary["pageview_triggered"] else "No",
@@ -3297,6 +3554,10 @@ This capture is split into three layers:
                     stat_col2.metric("Pageview Source", audit_summary["pageview_source"])
                     stat_col3.metric("Events Fired", str(len(audit_summary["events_fired"])))
                     stat_col4.metric("Container ID", audit_summary["container_id"])
+                    stat_col5.metric(
+                        "Comscore",
+                        "Yes" if audit_summary["comscore_present"] else "No",
+                    )
 
                     snapshot = build_datalayer_snapshot_export(result)
                     st.markdown("### DataLayer Snapshot")
@@ -3355,6 +3616,32 @@ This capture is split into three layers:
                         )
                         st.dataframe(event_display_df, use_container_width=True, hide_index=True)
 
+                    st.markdown("### Comscore")
+                    if not audit_summary["comscore_present"]:
+                        st.info("No Comscore tag hit was captured during this audit run.")
+                    else:
+                        st.caption(
+                            "Exact Comscore values captured from scorecardresearch requests and beacon.js during this run."
+                        )
+                        comscore_df = pd.DataFrame(audit_summary["comscore_rows"])
+                        if comscore_df.empty:
+                            st.info("Comscore requests were seen, but no c1/c2/c7/c8 values could be extracted.")
+                        else:
+                            comscore_display_df = comscore_df[
+                                ["hit_type", "status", "c1", "c2", "c7", "c8", "request_url"]
+                            ].rename(
+                                columns={
+                                    "hit_type": "Hit Type",
+                                    "status": "HTTP Status",
+                                    "c1": "c1",
+                                    "c2": "c2",
+                                    "c7": "c7",
+                                    "c8": "c8",
+                                    "request_url": "Request URL",
+                                }
+                            )
+                            st.dataframe(comscore_display_df, use_container_width=True, hide_index=True)
+
                     with st.expander("Advanced debug", expanded=False):
                         left_col, right_col = st.columns(2)
 
@@ -3397,6 +3684,11 @@ This capture is split into three layers:
                                 result.get("ga4_network_events_json", ""),
                                 "No network GA4 events decoded.",
                             )
+                            render_json_block(
+                                "Comscore captures",
+                                result.get("comscore_hits_json", ""),
+                                "No Comscore values captured.",
+                            )
 
                         render_json_block(
                             "Consent actions",
@@ -3433,6 +3725,7 @@ with tab_compare:
                             "page_template": prod.get("page_template"),
                             "ga4_execution_present": prod.get("ga4_execution_present"),
                             "ga4_collect_present": prod.get("ga4_collect_present"),
+                            "comscore_present": prod.get("comscore_present"),
                             "pv_page_location": prod.get("pv_page_location"),
                             "pv_page_title": prod.get("pv_page_title"),
                             "issues": prod.get("issues"),
@@ -3443,6 +3736,7 @@ with tab_compare:
                             "page_template": stage.get("page_template"),
                             "ga4_execution_present": stage.get("ga4_execution_present"),
                             "ga4_collect_present": stage.get("ga4_collect_present"),
+                            "comscore_present": stage.get("comscore_present"),
                             "pv_page_location": stage.get("pv_page_location"),
                             "pv_page_title": stage.get("pv_page_title"),
                             "issues": stage.get("issues"),
