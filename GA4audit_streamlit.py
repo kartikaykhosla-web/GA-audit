@@ -3244,6 +3244,18 @@ def format_expected_values_display(raw_value: str) -> str:
     return ", ".join(values)
 
 
+def normalize_multiline_entries(raw_value: str) -> str:
+    entries = [line.strip() for line in str(raw_value or "").splitlines() if line.strip()]
+    return "\n".join(entries)
+
+
+def format_multiline_entries_display(raw_value: str) -> str:
+    entries = [line.strip() for line in str(raw_value or "").splitlines() if line.strip()]
+    if not entries:
+        return ""
+    return " | ".join(entries)
+
+
 def parse_bulk_execution_rule_lines(raw_value: str, rule_type: str):
     entries = []
     errors = []
@@ -4522,16 +4534,26 @@ if tab_template_manager is not None:
                     measurement_id = st.text_input("GA4 measurement ID", placeholder="G-XXXXXXXXXX")
                 with meta_col2:
                     container_id = st.text_input("GTM container ID", placeholder="GTM-XXXXXXX")
-                    url_pattern = st.text_input("Reference URL / pattern", placeholder="https://www.example.com/world/*")
+                reference_urls = st.text_area(
+                    "Reference URLs / patterns",
+                    placeholder=(
+                        "https://www.example.com/world/*\n"
+                        "https://www.example.com/world/article-1\n"
+                        "https://www.example.com/world/article-2"
+                    ),
+                    help="Add one URL or pattern per line so the template has multiple examples.",
+                    height=120,
+                )
                 template_active = st.checkbox("Active", value=True)
                 add_template_submitted = st.form_submit_button("Add template")
 
             if add_template_submitted:
+                normalized_reference_urls = normalize_multiline_entries(reference_urls)
                 if not str(template_name or "").strip():
                     st.error("Template name is required.")
                 elif not any(
                     str(value or "").strip()
-                    for value in (domain_name, measurement_id, container_id, url_pattern)
+                    for value in (domain_name, measurement_id, container_id, normalized_reference_urls)
                 ):
                     st.error("Add at least one identifier: domain, measurement ID, container ID, or URL pattern.")
                 else:
@@ -4542,7 +4564,7 @@ if tab_template_manager is not None:
                             "domain_name": domain_name,
                             "measurement_id": measurement_id,
                             "container_id": container_id,
-                            "url_pattern": url_pattern,
+                            "url_pattern": normalized_reference_urls,
                             "active": template_active,
                         },
                     )
@@ -4691,7 +4713,7 @@ if tab_template_manager is not None:
                             "Domain": template.get("domain_name") or "",
                             "Measurement ID": template.get("measurement_id") or "",
                             "Container ID": template.get("container_id") or "",
-                            "URL Pattern": template.get("url_pattern") or "",
+                            "Reference URLs / Patterns": format_multiline_entries_display(template.get("url_pattern") or ""),
                             "Active": "Yes" if template.get("active") else "No",
                             "Rules": len(template_rules_by_template.get(template_id, [])),
                         }
