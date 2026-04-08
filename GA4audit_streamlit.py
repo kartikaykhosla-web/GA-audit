@@ -3192,7 +3192,19 @@ def extract_measurement_id(result: dict):
 
 
 def parse_expected_values(raw_value: str) -> List[str]:
-    return [part.strip() for part in str(raw_value or "").split("|") if part.strip()]
+    pieces = re.split(r"[|\n\r]+", str(raw_value or ""))
+    return [part.strip() for part in pieces if part.strip()]
+
+
+def normalize_expected_values_input(raw_value: str) -> str:
+    return "|".join(parse_expected_values(raw_value))
+
+
+def format_expected_values_display(raw_value: str) -> str:
+    values = parse_expected_values(raw_value)
+    if not values:
+        return ""
+    return ", ".join(values)
 
 
 def split_actual_tokens(raw_value: str) -> List[str]:
@@ -4422,11 +4434,14 @@ if tab_template_manager is not None:
 
             st.markdown("### Add Template")
             with st.form("template_manager_add_template", clear_on_submit=True):
-                template_name = st.text_input("Template name")
-                domain_name = st.text_input("Domain / site name", placeholder="www.example.com")
-                measurement_id = st.text_input("GA4 measurement ID", placeholder="G-XXXXXXXXXX")
-                container_id = st.text_input("GTM container ID", placeholder="GTM-XXXXXXX")
-                url_pattern = st.text_input("Reference URL / pattern", placeholder="https://www.example.com/world/*")
+                template_name = st.text_input("Template name", placeholder="Daily Jagran Article")
+                meta_col1, meta_col2 = st.columns(2)
+                with meta_col1:
+                    domain_name = st.text_input("Domain / site name", placeholder="www.example.com")
+                    measurement_id = st.text_input("GA4 measurement ID", placeholder="G-XXXXXXXXXX")
+                with meta_col2:
+                    container_id = st.text_input("GTM container ID", placeholder="GTM-XXXXXXX")
+                    url_pattern = st.text_input("Reference URL / pattern", placeholder="https://www.example.com/world/*")
                 template_active = st.checkbox("Active", value=True)
                 add_template_submitted = st.form_submit_button("Add template")
 
@@ -4467,22 +4482,46 @@ if tab_template_manager is not None:
                     key="template_rule_template_selector",
                 )
                 with st.form("template_manager_add_rule", clear_on_submit=True):
-                    scope_label = st.selectbox("Rule scope", options=list(RULE_SCOPE_OPTIONS.keys()))
+                    rule_col1, rule_col2 = st.columns(2)
+                    with rule_col1:
+                        scope_label = st.selectbox("Rule scope", options=list(RULE_SCOPE_OPTIONS.keys()))
+                    with rule_col2:
+                        rule_type = st.selectbox("Rule type", options=RULE_TYPE_OPTIONS)
+
                     if RULE_SCOPE_OPTIONS[scope_label] == "execution":
+                        field_label = "Execution field name"
                         field_help = "Use the exact execution payload field name, like `page_type` or `category`."
-                        expected_help = "Expected values, separated by pipe. Example: `article detail|gallery`."
+                        expected_label = "Expected values"
+                        expected_help = "Enter one expected value per line. Pipe-separated values also work."
+                        expected_placeholder = "article detail\ngallery"
                     else:
-                        field_help = "Use a label for this event rule, or repeat the event name."
-                        expected_help = "Expected event names, separated by pipe. Example: `page_view|page_scroll`."
-                    field_name = st.text_input("Field / event name", help=field_help)
-                    rule_type = st.selectbox("Rule type", options=RULE_TYPE_OPTIONS)
-                    expected_values = st.text_input("Expected values", help=expected_help)
+                        field_label = "Rule label / event group"
+                        field_help = "Use a short label for this event rule, like `Core article events`."
+                        expected_label = "Expected event names"
+                        expected_help = "Enter one event name per line. Pipe-separated values also work."
+                        expected_placeholder = "page_view\npage_scroll"
+
+                    field_name = st.text_input(field_label, help=field_help)
+                    if rule_type in {"required", "optional"}:
+                        st.caption("This rule type does not need explicit expected values.")
+                        expected_values_input = ""
+                    else:
+                        expected_values_input = st.text_area(
+                            expected_label,
+                            help=expected_help,
+                            placeholder=expected_placeholder,
+                            height=110,
+                        )
+                        parsed_preview_values = parse_expected_values(expected_values_input)
+                        if parsed_preview_values:
+                            st.caption(f"Will be stored as: {' | '.join(parsed_preview_values)}")
                     notes = st.text_input("Notes (optional)")
                     add_rule_submitted = st.form_submit_button("Add rule")
 
                 if add_rule_submitted:
+                    expected_values = normalize_expected_values_input(expected_values_input)
                     if not str(field_name or "").strip():
-                        st.error("Field / event name is required.")
+                        st.error(f"{field_label} is required.")
                     elif rule_type not in {"required", "optional"} and not str(expected_values or "").strip():
                         st.error("Expected values are required for this rule type.")
                     else:
@@ -4535,15 +4574,18 @@ if tab_template_manager is not None:
                 if selected_template_rules_table.empty:
                     st.info("No rules for this template yet.")
                 else:
+                    selected_template_rules_table["expected_values_display"] = selected_template_rules_table["expected_values"].apply(
+                        format_expected_values_display
+                    )
                     st.dataframe(
                         selected_template_rules_table[
-                            ["rule_scope", "field_name", "rule_type", "expected_values", "notes", "created_at"]
+                            ["rule_scope", "field_name", "rule_type", "expected_values_display", "notes", "created_at"]
                         ].rename(
                             columns={
                                 "rule_scope": "Scope",
                                 "field_name": "Field / Event",
                                 "rule_type": "Rule Type",
-                                "expected_values": "Expected Values",
+                                "expected_values_display": "Expected Values",
                                 "notes": "Notes",
                                 "created_at": "Created At",
                             }
