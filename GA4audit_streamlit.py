@@ -2560,6 +2560,61 @@ def append_template_record(email_id: str, template_payload: dict):
     return True, row_map["template_id"]
 
 
+def update_template_record(email_id: str, template_id: str, template_payload: dict):
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        return False, "Google Sheets logging is not configured yet."
+
+    settings = get_template_sheet_settings()
+    template_ws, _ = get_template_worksheets(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["template_worksheet_name"],
+        settings["template_rules_worksheet_name"],
+    )
+
+    template_id_text = str(template_id or "").strip()
+    if not template_id_text:
+        return False, "Template ID is missing."
+
+    template_ids = template_ws.col_values(1)
+    row_index = None
+    for index, value in enumerate(template_ids[1:], start=2):
+        if str(value or "").strip() == template_id_text:
+            row_index = index
+            break
+
+    if row_index is None:
+        return False, "Template not found."
+
+    existing_row = template_ws.row_values(row_index)
+    existing_map = {
+        header: (existing_row[idx] if idx < len(existing_row) else "")
+        for idx, header in enumerate(TEMPLATE_HEADERS)
+    }
+
+    row_map = {
+        "template_id": template_id_text,
+        "template_name": str(template_payload.get("template_name") or "").strip(),
+        "domain_name": str(template_payload.get("domain_name") or "").strip(),
+        "measurement_id": str(template_payload.get("measurement_id") or "").strip(),
+        "container_id": str(template_payload.get("container_id") or "").strip(),
+        "url_pattern": str(template_payload.get("url_pattern") or "").strip(),
+        "active": "TRUE" if template_payload.get("active", True) else "FALSE",
+        "created_by": existing_map.get("created_by") or email_id,
+        "created_at": existing_map.get("created_at") or datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    last_cell = f"{sheet_column_label(len(TEMPLATE_HEADERS))}{row_index}"
+    ordered_row = [row_map.get(header, "") for header in TEMPLATE_HEADERS]
+    template_ws.update(
+        range_name=f"A{row_index}:{last_cell}",
+        values=[ordered_row],
+        value_input_option="USER_ENTERED",
+    )
+    return True, template_id_text
+
+
 def append_template_rule(email_id: str, rule_payload: dict):
     service_account_info = get_service_account_info()
     if not service_account_info:
@@ -4535,14 +4590,14 @@ if tab_template_manager is not None:
                 with meta_col2:
                     container_id = st.text_input("GTM container ID", placeholder="GTM-XXXXXXX")
                 reference_urls = st.text_area(
-                    "Reference URLs / patterns",
+                    "Reference URLs / patterns (one per line)",
                     placeholder=(
                         "https://www.example.com/world/*\n"
                         "https://www.example.com/world/article-1\n"
                         "https://www.example.com/world/article-2"
                     ),
                     help="Add one URL or pattern per line so the template has multiple examples.",
-                    height=120,
+                    height=150,
                 )
                 template_active = st.checkbox("Active", value=True)
                 add_template_submitted = st.form_submit_button("Add template")
@@ -4573,6 +4628,82 @@ if tab_template_manager is not None:
                         st.rerun()
                     else:
                         st.error(response)
+
+            st.markdown("### Edit Template")
+            if not template_records:
+                st.info("Create a template first, then edit it here.")
+            else:
+                template_to_edit = st.selectbox(
+                    "Select template to edit",
+                    options=template_records,
+                    format_func=build_template_option_label,
+                    key="template_manager_edit_selector",
+                )
+                with st.form("template_manager_edit_template", clear_on_submit=False):
+                    edit_template_name = st.text_input(
+                        "Template name",
+                        value=str(template_to_edit.get("template_name") or ""),
+                    )
+                    edit_meta_col1, edit_meta_col2 = st.columns(2)
+                    with edit_meta_col1:
+                        edit_domain_name = st.text_input(
+                            "Domain / site name",
+                            value=str(template_to_edit.get("domain_name") or ""),
+                        )
+                        edit_measurement_id = st.text_input(
+                            "GA4 measurement ID",
+                            value=str(template_to_edit.get("measurement_id") or ""),
+                        )
+                    with edit_meta_col2:
+                        edit_container_id = st.text_input(
+                            "GTM container ID",
+                            value=str(template_to_edit.get("container_id") or ""),
+                        )
+                    edit_reference_urls = st.text_area(
+                        "Reference URLs / patterns (one per line)",
+                        value=str(template_to_edit.get("url_pattern") or ""),
+                        help="Add one URL or pattern per line so the template has multiple examples.",
+                        height=150,
+                    )
+                    edit_template_active = st.checkbox(
+                        "Active",
+                        value=bool(template_to_edit.get("active")),
+                        key=f"edit_template_active_{template_to_edit.get('template_id')}",
+                    )
+                    update_template_submitted = st.form_submit_button("Save template changes")
+
+                if update_template_submitted:
+                    normalized_reference_urls = normalize_multiline_entries(edit_reference_urls)
+                    if not str(edit_template_name or "").strip():
+                        st.error("Template name is required.")
+                    elif not any(
+                        str(value or "").strip()
+                        for value in (
+                            edit_domain_name,
+                            edit_measurement_id,
+                            edit_container_id,
+                            normalized_reference_urls,
+                        )
+                    ):
+                        st.error("Add at least one identifier: domain, measurement ID, container ID, or URL pattern.")
+                    else:
+                        success, response = update_template_record(
+                            logged_in_email,
+                            template_to_edit.get("template_id"),
+                            {
+                                "template_name": edit_template_name,
+                                "domain_name": edit_domain_name,
+                                "measurement_id": edit_measurement_id,
+                                "container_id": edit_container_id,
+                                "url_pattern": normalized_reference_urls,
+                                "active": edit_template_active,
+                            },
+                        )
+                        if success:
+                            st.success(f"Template updated: {edit_template_name}")
+                            st.rerun()
+                        else:
+                            st.error(response)
 
             st.markdown("### Add Template Rule")
             if not active_templates:
