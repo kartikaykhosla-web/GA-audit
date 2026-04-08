@@ -1310,7 +1310,7 @@ def extract_collect_hits_from_performance_logs(
     try:
         raw_entries = driver.get_log("performance")
     except Exception:
-        return [], []
+        return [], [], []
 
     requests_by_id: Dict[str, Dict[str, Any]] = {}
 
@@ -2073,6 +2073,191 @@ RULE_TYPE_OPTIONS = ["exact", "one_of", "contains", "regex", "required", "option
 VALIDATION_PASS_LABEL = "Matched"
 VALIDATION_FAIL_LABEL = "Mismatch"
 VALIDATION_OPTIONAL_LABEL = "Optional"
+JAGRAN_STARTER_TEMPLATES = [
+    {
+        "template_name": "Jagran Homepage",
+        "domain_name": "www.jagran.com",
+        "measurement_id": "G-3RLQSM7QQQ",
+        "container_id": "GTM-5CTQK3",
+        "url_pattern": "https://www.jagran.com/",
+        "rules": [
+            {"rule_scope": "event", "field_name": "page_view", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "event", "field_name": "test_event", "rule_type": "exact", "expected_values": "test_event"},
+            {"rule_scope": "event", "field_name": "tvc_video_interaction", "rule_type": "exact", "expected_values": "tvc_video_interaction"},
+            {"rule_scope": "execution", "field_name": "Language", "rule_type": "exact", "expected_values": "hindi"},
+            {"rule_scope": "execution", "field_name": "page_type", "rule_type": "exact", "expected_values": "homepage"},
+            {"rule_scope": "execution", "field_name": "tvc_event_name", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "execution", "field_name": "User_Id", "rule_type": "exact", "expected_values": "na"},
+            {"rule_scope": "execution", "field_name": "User_Status", "rule_type": "exact", "expected_values": "guest"},
+            {"rule_scope": "execution", "field_name": "tvc_User_Id", "rule_type": "exact", "expected_values": "na"},
+            {"rule_scope": "execution", "field_name": "tvc_user_id_staging", "rule_type": "exact", "expected_values": "na"},
+        ],
+    },
+    {
+        "template_name": "Jagran Latest News Listing",
+        "domain_name": "www.jagran.com",
+        "measurement_id": "G-3RLQSM7QQQ",
+        "container_id": "GTM-5CTQK3",
+        "url_pattern": "https://www.jagran.com/latest-news.html",
+        "rules": [
+            {"rule_scope": "event", "field_name": "page_view", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "event", "field_name": "test_event", "rule_type": "exact", "expected_values": "test_event"},
+            {"rule_scope": "event", "field_name": "initVdo", "rule_type": "exact", "expected_values": "initVdo"},
+            {"rule_scope": "event", "field_name": "banner_blocked_size", "rule_type": "exact", "expected_values": "banner_blocked_size"},
+            {"rule_scope": "event", "field_name": "t_max", "rule_type": "exact", "expected_values": "t_max"},
+            {"rule_scope": "event", "field_name": "vdo_pageview", "rule_type": "exact", "expected_values": "vdo_pageview"},
+            {"rule_scope": "event", "field_name": "website_pageview", "rule_type": "exact", "expected_values": "website_pageview"},
+            {"rule_scope": "event", "field_name": "began_btf", "rule_type": "exact", "expected_values": "began_btf"},
+            {"rule_scope": "event", "field_name": "came_in_view", "rule_type": "exact", "expected_values": "came_in_view"},
+            {"rule_scope": "event", "field_name": "adrequest_google_mcm", "rule_type": "exact", "expected_values": "adrequest_google_mcm"},
+            {"rule_scope": "event", "field_name": "adrequest_google_mcm_apac", "rule_type": "exact", "expected_values": "adrequest_google_mcm_apac"},
+            {"rule_scope": "event", "field_name": "timing_complete", "rule_type": "exact", "expected_values": "timing_complete"},
+            {"rule_scope": "event", "field_name": "autoplay_1th_interaction", "rule_type": "exact", "expected_values": "autoplay_1th_interaction"},
+            {"rule_scope": "execution", "field_name": "Language", "rule_type": "exact", "expected_values": "hindi"},
+            {"rule_scope": "execution", "field_name": "category", "rule_type": "exact", "expected_values": "latest news"},
+            {"rule_scope": "execution", "field_name": "page_type", "rule_type": "exact", "expected_values": "latest news listing page"},
+            {"rule_scope": "execution", "field_name": "tvc_event_name", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "execution", "field_name": "User_Id", "rule_type": "exact", "expected_values": "na"},
+            {"rule_scope": "execution", "field_name": "User_Status", "rule_type": "exact", "expected_values": "guest"},
+            {"rule_scope": "execution", "field_name": "tvc_User_Id", "rule_type": "exact", "expected_values": "na"},
+            {"rule_scope": "execution", "field_name": "tvc_user_id_staging", "rule_type": "exact", "expected_values": "na"},
+        ],
+    },
+    {
+        "template_name": "Jagran Elections Landing",
+        "domain_name": "www.jagran.com",
+        "measurement_id": "G-3RLQSM7QQQ",
+        "container_id": "GTM-5CTQK3",
+        "url_pattern": "https://www.jagran.com/elections.html",
+        "rules": [
+            {"rule_scope": "event", "field_name": "page_view", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "event", "field_name": "test_event", "rule_type": "exact", "expected_values": "test_event"},
+            {"rule_scope": "event", "field_name": "initVdo", "rule_type": "exact", "expected_values": "initVdo"},
+            {"rule_scope": "event", "field_name": "banner_blocked_size", "rule_type": "exact", "expected_values": "banner_blocked_size"},
+            {"rule_scope": "event", "field_name": "t_max", "rule_type": "exact", "expected_values": "t_max"},
+            {"rule_scope": "event", "field_name": "vdo_pageview", "rule_type": "exact", "expected_values": "vdo_pageview"},
+            {"rule_scope": "event", "field_name": "website_pageview", "rule_type": "exact", "expected_values": "website_pageview"},
+            {"rule_scope": "event", "field_name": "began_atf", "rule_type": "exact", "expected_values": "began_atf"},
+            {"rule_scope": "event", "field_name": "adrequest_google_mcm", "rule_type": "exact", "expected_values": "adrequest_google_mcm"},
+            {"rule_scope": "event", "field_name": "adrequest_google_mcm_apac", "rule_type": "exact", "expected_values": "adrequest_google_mcm_apac"},
+            {"rule_scope": "event", "field_name": "timing_complete", "rule_type": "exact", "expected_values": "timing_complete"},
+            {"rule_scope": "execution", "field_name": "Language", "rule_type": "exact", "expected_values": "hindi"},
+            {"rule_scope": "execution", "field_name": "category", "rule_type": "exact", "expected_values": "election"},
+            {"rule_scope": "execution", "field_name": "page_type", "rule_type": "exact", "expected_values": "election landing page"},
+            {"rule_scope": "execution", "field_name": "tvc_event_name", "rule_type": "exact", "expected_values": "page_view"},
+        ],
+    },
+    {
+        "template_name": "Jagran Cricket Landing",
+        "domain_name": "www.jagran.com",
+        "measurement_id": "G-3RLQSM7QQQ",
+        "container_id": "GTM-5CTQK3",
+        "url_pattern": "https://www.jagran.com/cricket-hindi.html",
+        "rules": [
+            {"rule_scope": "event", "field_name": "page_view", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "event", "field_name": "test_event", "rule_type": "exact", "expected_values": "test_event"},
+            {"rule_scope": "event", "field_name": "initVdo", "rule_type": "exact", "expected_values": "initVdo"},
+            {"rule_scope": "event", "field_name": "banner_blocked_size", "rule_type": "exact", "expected_values": "banner_blocked_size"},
+            {"rule_scope": "event", "field_name": "t_max", "rule_type": "exact", "expected_values": "t_max"},
+            {"rule_scope": "event", "field_name": "vdo_pageview", "rule_type": "exact", "expected_values": "vdo_pageview"},
+            {"rule_scope": "event", "field_name": "website_pageview", "rule_type": "exact", "expected_values": "website_pageview"},
+            {"rule_scope": "event", "field_name": "began_atf", "rule_type": "exact", "expected_values": "began_atf"},
+            {"rule_scope": "event", "field_name": "adrequest_google_mcm", "rule_type": "exact", "expected_values": "adrequest_google_mcm"},
+            {"rule_scope": "event", "field_name": "adrequest_google_mcm_apac", "rule_type": "exact", "expected_values": "adrequest_google_mcm_apac"},
+            {"rule_scope": "event", "field_name": "timing_complete", "rule_type": "exact", "expected_values": "timing_complete"},
+            {"rule_scope": "execution", "field_name": "Language", "rule_type": "exact", "expected_values": "hindi"},
+            {"rule_scope": "execution", "field_name": "category", "rule_type": "exact", "expected_values": "cricket"},
+            {"rule_scope": "execution", "field_name": "page_type", "rule_type": "exact", "expected_values": "cricket landing page"},
+            {"rule_scope": "execution", "field_name": "tvc_event_name", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "execution", "field_name": "User_Id", "rule_type": "exact", "expected_values": "na"},
+            {"rule_scope": "execution", "field_name": "User_Status", "rule_type": "exact", "expected_values": "guest"},
+            {"rule_scope": "execution", "field_name": "tvc_User_Id", "rule_type": "exact", "expected_values": "na"},
+            {"rule_scope": "execution", "field_name": "tvc_user_id_staging", "rule_type": "exact", "expected_values": "na"},
+        ],
+    },
+    {
+        "template_name": "Jagran Breaking News Listing",
+        "domain_name": "www.jagran.com",
+        "measurement_id": "G-3RLQSM7QQQ",
+        "container_id": "GTM-5CTQK3",
+        "url_pattern": "https://www.jagran.com/breaking-news.html",
+        "rules": [
+            {"rule_scope": "event", "field_name": "page_view", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "event", "field_name": "test_event", "rule_type": "exact", "expected_values": "test_event"},
+            {"rule_scope": "event", "field_name": "initVdo", "rule_type": "exact", "expected_values": "initVdo"},
+            {"rule_scope": "event", "field_name": "banner_blocked_size", "rule_type": "exact", "expected_values": "banner_blocked_size"},
+            {"rule_scope": "event", "field_name": "came_in_view", "rule_type": "exact", "expected_values": "came_in_view"},
+            {"rule_scope": "event", "field_name": "t_max", "rule_type": "exact", "expected_values": "t_max"},
+            {"rule_scope": "event", "field_name": "vdo_pageview", "rule_type": "exact", "expected_values": "vdo_pageview"},
+            {"rule_scope": "event", "field_name": "website_pageview", "rule_type": "exact", "expected_values": "website_pageview"},
+            {"rule_scope": "event", "field_name": "began_atf", "rule_type": "exact", "expected_values": "began_atf"},
+            {"rule_scope": "event", "field_name": "adrequest_google_mcm", "rule_type": "exact", "expected_values": "adrequest_google_mcm"},
+            {"rule_scope": "event", "field_name": "adrequest_google_mcm_apac", "rule_type": "exact", "expected_values": "adrequest_google_mcm_apac"},
+            {"rule_scope": "event", "field_name": "timing_complete", "rule_type": "exact", "expected_values": "timing_complete"},
+            {"rule_scope": "event", "field_name": "autoplay_1th_interaction", "rule_type": "exact", "expected_values": "autoplay_1th_interaction"},
+            {"rule_scope": "event", "field_name": "requests_btwn_3_to_4", "rule_type": "exact", "expected_values": "requests_btwn_3_to_4"},
+            {"rule_scope": "execution", "field_name": "Language", "rule_type": "exact", "expected_values": "hindi"},
+            {"rule_scope": "execution", "field_name": "category", "rule_type": "exact", "expected_values": "breaking news"},
+            {"rule_scope": "execution", "field_name": "page_type", "rule_type": "exact", "expected_values": "breaking news listing page"},
+            {"rule_scope": "execution", "field_name": "tvc_event_name", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "execution", "field_name": "User_Id", "rule_type": "exact", "expected_values": "na"},
+            {"rule_scope": "execution", "field_name": "User_Status", "rule_type": "exact", "expected_values": "guest"},
+            {"rule_scope": "execution", "field_name": "tvc_User_Id", "rule_type": "exact", "expected_values": "na"},
+            {"rule_scope": "execution", "field_name": "tvc_user_id_staging", "rule_type": "exact", "expected_values": "na"},
+        ],
+    },
+    {
+        "template_name": "Jagran Article Detail",
+        "domain_name": "www.jagran.com",
+        "measurement_id": "G-3RLQSM7QQQ",
+        "container_id": "GTM-5CTQK3",
+        "url_pattern": "\n".join([
+            "https://www.jagran.com/uttar-pradesh/moradabad-city-moradabad-crime-woman-kills-sister-over-live-in-relationship-with-husband-40199730.html",
+            "https://www.jagran.com/world/america-us-warns-iran-if-ceasefire-break-means-war-resumes-america-top-general-statement-40199707.html",
+            "https://www.jagran.com/lifestyle/health-the-new-cholesterol-rules-what-the-latest-accaha-guidelines-mean-for-your-heart-health-in-2026-40199634.html",
+        ]),
+        "rules": [
+            {"rule_scope": "event", "field_name": "page_view", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "event", "field_name": "page_scroll", "rule_type": "exact", "expected_values": "page_scroll"},
+            {"rule_scope": "event", "field_name": "test_event", "rule_type": "exact", "expected_values": "test_event"},
+            {"rule_scope": "execution", "field_name": "Language", "rule_type": "exact", "expected_values": "hindi"},
+            {"rule_scope": "execution", "field_name": "article_type", "rule_type": "exact", "expected_values": "jagran hindi jnm"},
+            {"rule_scope": "execution", "field_name": "dynamic_video_embed_type", "rule_type": "exact", "expected_values": "view this video also"},
+            {"rule_scope": "execution", "field_name": "online_offline", "rule_type": "exact", "expected_values": "online"},
+            {"rule_scope": "execution", "field_name": "page_type", "rule_type": "exact", "expected_values": "article detail"},
+            {"rule_scope": "execution", "field_name": "tvc_event_name", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "execution", "field_name": "author", "rule_type": "required", "expected_values": ""},
+            {"rule_scope": "execution", "field_name": "posted_by", "rule_type": "required", "expected_values": ""},
+            {"rule_scope": "execution", "field_name": "category", "rule_type": "required", "expected_values": ""},
+            {"rule_scope": "execution", "field_name": "tags", "rule_type": "required", "expected_values": ""},
+            {"rule_scope": "execution", "field_name": "publish_date", "rule_type": "regex", "expected_values": "^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}:\\\\d{2}(?:[+-]\\\\d{2}:\\\\d{2}|Z)$"},
+            {"rule_scope": "execution", "field_name": "update_date", "rule_type": "regex", "expected_values": "^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}:\\\\d{2}(?:[+-]\\\\d{2}:\\\\d{2}|Z)$"},
+            {"rule_scope": "execution", "field_name": "story_id", "rule_type": "regex", "expected_values": "^\\\\d+$"},
+            {"rule_scope": "execution", "field_name": "word_count", "rule_type": "regex", "expected_values": "^\\\\d+$"},
+            {"rule_scope": "execution", "field_name": "planned_trending", "rule_type": "one_of", "expected_values": "regular news|planned"},
+            {"rule_scope": "execution", "field_name": "smart_view_enabled", "rule_type": "one_of", "expected_values": "yes|no"},
+            {"rule_scope": "execution", "field_name": "sub_category", "rule_type": "optional", "expected_values": ""},
+        ],
+    },
+    {
+        "template_name": "Jagran Video Landing",
+        "domain_name": "www.jagran.com",
+        "measurement_id": "G-3RLQSM7QQQ",
+        "container_id": "GTM-5CTQK3",
+        "url_pattern": "https://www.jagran.com/videos.html",
+        "rules": [
+            {"rule_scope": "event", "field_name": "page_view", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "event", "field_name": "test_event", "rule_type": "exact", "expected_values": "test_event"},
+            {"rule_scope": "execution", "field_name": "Language", "rule_type": "exact", "expected_values": "hindi"},
+            {"rule_scope": "execution", "field_name": "page_type", "rule_type": "exact", "expected_values": "video landing page"},
+            {"rule_scope": "execution", "field_name": "tvc_event_name", "rule_type": "exact", "expected_values": "page_view"},
+            {"rule_scope": "execution", "field_name": "User_Id", "rule_type": "exact", "expected_values": "na"},
+            {"rule_scope": "execution", "field_name": "User_Status", "rule_type": "exact", "expected_values": "guest"},
+            {"rule_scope": "execution", "field_name": "tvc_User_Id", "rule_type": "exact", "expected_values": "na"},
+            {"rule_scope": "execution", "field_name": "tvc_user_id_staging", "rule_type": "exact", "expected_values": "na"},
+        ],
+    },
+]
 
 
 def get_cookie_manager():
@@ -2680,6 +2865,113 @@ def append_template_rules(email_id: str, rule_payloads: List[dict]):
 
     rules_ws.append_rows(rows, value_input_option="USER_ENTERED")
     return True, str(len(rows))
+
+
+def _normalize_template_name_key(value: str) -> str:
+    return str(value or "").strip().lower()
+
+
+def _normalize_rule_signature(rule_scope: str, field_name: str, rule_type: str, expected_values: str) -> Tuple[str, str, str, str]:
+    return (
+        str(rule_scope or "").strip().lower(),
+        str(field_name or "").strip().lower(),
+        str(rule_type or "").strip().lower(),
+        str(expected_values or "").strip(),
+    )
+
+
+def import_jagran_starter_templates(email_id: str, template_records: List[dict], template_rules: List[dict]):
+    existing_templates_by_name = {
+        _normalize_template_name_key(template.get("template_name")): template
+        for template in (template_records or [])
+        if str(template.get("template_name") or "").strip()
+    }
+    rules_by_template: Dict[str, Set[Tuple[str, str, str, str]]] = {}
+    for rule in template_rules or []:
+        template_id = str(rule.get("template_id") or "").strip()
+        if not template_id:
+            continue
+        rules_by_template.setdefault(template_id, set()).add(
+            _normalize_rule_signature(
+                rule.get("rule_scope"),
+                rule.get("field_name"),
+                rule.get("rule_type"),
+                rule.get("expected_values"),
+            )
+        )
+
+    created_templates = 0
+    updated_templates = 0
+    added_rules = 0
+
+    for seed in JAGRAN_STARTER_TEMPLATES:
+        template_name_key = _normalize_template_name_key(seed.get("template_name"))
+        existing_template = existing_templates_by_name.get(template_name_key)
+
+        template_payload = {
+            "template_name": seed.get("template_name"),
+            "domain_name": seed.get("domain_name"),
+            "measurement_id": seed.get("measurement_id"),
+            "container_id": seed.get("container_id"),
+            "url_pattern": seed.get("url_pattern"),
+            "active": True,
+        }
+
+        if existing_template:
+            success, response = update_template_record(
+                email_id,
+                existing_template.get("template_id"),
+                template_payload,
+            )
+            if not success:
+                return False, response
+            template_id = str(existing_template.get("template_id") or "").strip()
+            updated_templates += 1
+        else:
+            success, response = append_template_record(email_id, template_payload)
+            if not success:
+                return False, response
+            template_id = str(response or "").strip()
+            created_templates += 1
+            existing_templates_by_name[template_name_key] = {
+                **template_payload,
+                "template_id": template_id,
+                "active": True,
+            }
+
+        existing_signatures = rules_by_template.setdefault(template_id, set())
+        payloads_to_add = []
+        for rule in seed.get("rules", []):
+            signature = _normalize_rule_signature(
+                rule.get("rule_scope"),
+                rule.get("field_name"),
+                rule.get("rule_type"),
+                rule.get("expected_values"),
+            )
+            if signature in existing_signatures:
+                continue
+            payloads_to_add.append(
+                {
+                    "template_id": template_id,
+                    "rule_scope": rule.get("rule_scope"),
+                    "field_name": rule.get("field_name"),
+                    "rule_type": rule.get("rule_type"),
+                    "expected_values": rule.get("expected_values"),
+                    "notes": rule.get("notes") or "",
+                }
+            )
+            existing_signatures.add(signature)
+
+        if payloads_to_add:
+            success, response = append_template_rules(email_id, payloads_to_add)
+            if not success:
+                return False, response
+            added_rules += len(payloads_to_add)
+
+    return True, (
+        f"Jagran starter templates synced. "
+        f"Created {created_templates}, updated {updated_templates}, added {added_rules} rule(s)."
+    )
 
 
 def render_sidebar_session(email_id: str):
@@ -4614,6 +4906,20 @@ if tab_template_manager is not None:
             st.caption(
                 "Templates are stored in the same Google Sheet backing this app. Only your account can add or edit them."
             )
+
+            st.markdown("### Starter Templates")
+            st.caption("Seed the Jagran starter templates we mapped from sample URLs. Existing templates with the same name will be updated, and only missing rules will be added.")
+            if st.button("Import Jagran starter templates", key="import_jagran_starter_templates"):
+                success, response = import_jagran_starter_templates(
+                    logged_in_email,
+                    template_records,
+                    template_rules,
+                )
+                if success:
+                    st.success(response)
+                    st.rerun()
+                else:
+                    st.error(response)
 
             template_rules_by_template = {}
             for rule in template_rules:
