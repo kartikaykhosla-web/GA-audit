@@ -2854,6 +2854,31 @@ def extract_container_id(result: dict):
     return "Not found"
 
 
+def extract_measurement_id(result: dict):
+    execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
+    network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
+
+    candidate_events = [
+        find_event_by_name(network_events, "page_view"),
+        find_event_by_name(execution_events, "page_view"),
+    ]
+
+    if isinstance(network_events, list):
+        candidate_events.extend(network_events)
+    if isinstance(execution_events, list):
+        candidate_events.extend(execution_events)
+
+    for event in candidate_events:
+        if not isinstance(event, dict):
+            continue
+        payload = merged_event_payload(event)
+        measurement_id = payload.get("measurement_id")
+        if measurement_id not in (None, ""):
+            return format_exact_value(measurement_id)
+
+    return "Not found"
+
+
 STATUS_SORT_ORDER = {
     "Captured in network": 0,
     "Captured in execution": 1,
@@ -3448,6 +3473,7 @@ def build_audit_focus_summary(result: dict):
         "pageview_triggered": pageview_triggered,
         "pageview_source": pageview_source,
         "container_id": extract_container_id(result),
+        "measurement_id": extract_measurement_id(result),
         "events_fired": extract_event_names(result),
         "event_rows": build_event_audit_rows(result),
         "mapping_rows": mapping_rows,
@@ -3580,7 +3606,7 @@ This capture is split into three layers:
                             f"Details: {result['preload_hook_error']}"
                         )
 
-                    stat_col1, stat_col2, stat_col3, stat_col4, stat_col5 = st.columns(5)
+                    stat_col1, stat_col2, stat_col3, stat_col4, stat_col5, stat_col6 = st.columns(6)
                     stat_col1.metric(
                         "Pageview Triggered",
                         "Yes" if audit_summary["pageview_triggered"] else "No",
@@ -3588,7 +3614,8 @@ This capture is split into three layers:
                     stat_col2.metric("Pageview Source", audit_summary["pageview_source"])
                     stat_col3.metric("Events Fired", str(len(audit_summary["events_fired"])))
                     stat_col4.metric("Container ID", audit_summary["container_id"])
-                    stat_col5.metric(
+                    stat_col5.metric("Measurement ID", audit_summary["measurement_id"])
+                    stat_col6.metric(
                         "Comscore",
                         "Yes" if audit_summary["comscore_present"] else "No",
                     )
