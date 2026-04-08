@@ -6,6 +6,7 @@ import glob
 import base64
 import shutil
 import subprocess
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Tuple, Optional, Set
 from urllib.parse import urlparse, parse_qs, urlunparse, unquote_plus
@@ -2023,8 +2024,11 @@ div[data-testid="stDataFrame"] div[role="gridcell"] {
 )
 
 JAGRAN_EMAIL_DOMAIN = "@jagrannewmedia.com"
+TEMPLATE_ADMIN_EMAIL = f"kartikay.khosla{JAGRAN_EMAIL_DOMAIN}"
 DEFAULT_LOG_SHEET_ID = "1e_fp0fAOeEAHaRtFJUv-rt-i0sqUOhszYOrOk7Cv5QU"
 DEFAULT_LOG_WORKSHEET = "Audit Logs"
+DEFAULT_TEMPLATE_WORKSHEET = "Audit Templates"
+DEFAULT_TEMPLATE_RULES_WORKSHEET = "Audit Template Rules"
 FIXED_LOG_HEADERS = [
     "date",
     "email_id",
@@ -2039,6 +2043,36 @@ LOG_HEADERS = [
 LOG_TIMEZONE = ZoneInfo("Asia/Kolkata")
 LOGIN_COOKIE_NAME = "ga_audit_login_email"
 LOGIN_COOKIE_DAYS = 30
+TEMPLATE_HEADERS = [
+    "template_id",
+    "template_name",
+    "domain_name",
+    "measurement_id",
+    "container_id",
+    "url_pattern",
+    "active",
+    "created_by",
+    "created_at",
+]
+TEMPLATE_RULE_HEADERS = [
+    "rule_id",
+    "template_id",
+    "rule_scope",
+    "field_name",
+    "rule_type",
+    "expected_values",
+    "notes",
+    "created_by",
+    "created_at",
+]
+RULE_SCOPE_OPTIONS = {
+    "Execution field": "execution",
+    "Event": "event",
+}
+RULE_TYPE_OPTIONS = ["exact", "one_of", "contains", "regex", "required", "optional"]
+VALIDATION_PASS_LABEL = "Matched"
+VALIDATION_FAIL_LABEL = "Mismatch"
+VALIDATION_OPTIONAL_LABEL = "Optional"
 
 
 @st.cache_resource
@@ -2161,12 +2195,47 @@ def get_sheet_settings():
     }
 
 
+def get_template_sheet_settings():
+    try:
+        raw = st.secrets.get("sheets", {})
+    except Exception:
+        raw = {}
+    settings = dict(raw) if raw else {}
+    return {
+        "spreadsheet_id": settings.get("spreadsheet_id") or DEFAULT_LOG_SHEET_ID,
+        "template_worksheet_name": settings.get("template_worksheet_name") or DEFAULT_TEMPLATE_WORKSHEET,
+        "template_rules_worksheet_name": settings.get("template_rules_worksheet_name") or DEFAULT_TEMPLATE_RULES_WORKSHEET,
+    }
+
+
+def is_template_admin(email_id: str) -> bool:
+    return str(email_id or "").strip().lower() == TEMPLATE_ADMIN_EMAIL
+
+
 def sheet_column_label(index: int) -> str:
     label = ""
     while index > 0:
         index, remainder = divmod(index - 1, 26)
         label = chr(65 + remainder) + label
     return label
+
+
+def ensure_fixed_headers(worksheet, headers):
+    existing_headers = worksheet.row_values(1)
+    target_headers = list(headers)
+
+    if len(target_headers) > worksheet.col_count:
+        worksheet.add_cols(len(target_headers) - worksheet.col_count)
+
+    if existing_headers[: len(target_headers)] != target_headers:
+        last_cell = f"{sheet_column_label(len(target_headers))}1"
+        worksheet.update(
+            range_name=f"A1:{last_cell}",
+            values=[target_headers],
+            value_input_option="USER_ENTERED",
+        )
+
+    return target_headers
 
 
 def ensure_log_headers(worksheet, dimension_headers):
@@ -2286,7 +2355,7 @@ def build_execution_dimension_map(audit_summary: dict):
 
 
 @st.cache_resource
-def get_log_worksheet(service_account_json: str, spreadsheet_id: str, worksheet_name: str):
+def get_spreadsheet(service_account_json: str, spreadsheet_id: str):
     if not gspread or not Credentials:
         raise RuntimeError("Google Sheets libraries are not installed.")
 
@@ -2307,7 +2376,12 @@ def get_log_worksheet(service_account_json: str, spreadsheet_id: str, worksheet_
         scopes=scopes,
     )
     client = gspread.authorize(credentials)
-    spreadsheet = client.open_by_key(spreadsheet_id)
+    return client.open_by_key(spreadsheet_id)
+
+
+@st.cache_resource
+def get_log_worksheet(service_account_json: str, spreadsheet_id: str, worksheet_name: str):
+    spreadsheet = get_spreadsheet(service_account_json, spreadsheet_id)
     try:
         worksheet = spreadsheet.worksheet(worksheet_name)
     except gspread.WorksheetNotFound:
@@ -2317,6 +2391,38 @@ def get_log_worksheet(service_account_json: str, spreadsheet_id: str, worksheet_
     format_log_worksheet(worksheet, headers)
 
     return worksheet
+
+
+@st.cache_resource
+def get_template_worksheets(
+    service_account_json: str,
+    spreadsheet_id: str,
+    template_worksheet_name: str,
+    template_rules_worksheet_name: str,
+):
+    spreadsheet = get_spreadsheet(service_account_json, spreadsheet_id)
+
+    try:
+        template_ws = spreadsheet.worksheet(template_worksheet_name)
+    except gspread.WorksheetNotFound:
+        template_ws = spreadsheet.add_worksheet(
+            title=template_worksheet_name,
+            rows=1000,
+            cols=len(TEMPLATE_HEADERS),
+        )
+
+    try:
+        rules_ws = spreadsheet.worksheet(template_rules_worksheet_name)
+    except gspread.WorksheetNotFound:
+        rules_ws = spreadsheet.add_worksheet(
+            title=template_rules_worksheet_name,
+            rows=2000,
+            cols=len(TEMPLATE_RULE_HEADERS),
+        )
+
+    ensure_fixed_headers(template_ws, TEMPLATE_HEADERS)
+    ensure_fixed_headers(rules_ws, TEMPLATE_RULE_HEADERS)
+    return template_ws, rules_ws
 
 
 def append_audit_log(email_id: str, result: dict, audit_summary: dict):
@@ -2353,6 +2459,134 @@ def append_audit_log(email_id: str, result: dict, audit_summary: dict):
     return True, ""
 
 
+def _normalize_template_flag(value) -> bool:
+    return str(value or "").strip().lower() not in {"", "false", "0", "no", "inactive"}
+
+
+def _clean_sheet_record(record: dict, headers: List[str]) -> dict:
+    cleaned = {header: "" for header in headers}
+    for key, value in (record or {}).items():
+        cleaned[str(key)] = "" if value is None else str(value).strip()
+    return cleaned
+
+
+def load_templates_and_rules():
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        return [], [], "Google Sheets logging is not configured yet."
+
+    settings = get_template_sheet_settings()
+    template_ws, rules_ws = get_template_worksheets(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["template_worksheet_name"],
+        settings["template_rules_worksheet_name"],
+    )
+
+    templates = [
+        _clean_sheet_record(record, TEMPLATE_HEADERS)
+        for record in template_ws.get_all_records(default_blank="")
+    ]
+    rules = [
+        _clean_sheet_record(record, TEMPLATE_RULE_HEADERS)
+        for record in rules_ws.get_all_records(default_blank="")
+    ]
+
+    for template in templates:
+        template["active"] = _normalize_template_flag(template.get("active"))
+
+    active_template_ids = {
+        str(template.get("template_id") or "").strip()
+        for template in templates
+        if template.get("active")
+    }
+    rules = [
+        rule
+        for rule in rules
+        if str(rule.get("template_id") or "").strip() in active_template_ids
+    ]
+    return templates, rules, ""
+
+
+def build_template_option_label(template: dict) -> str:
+    parts = [str(template.get("template_name") or "").strip() or "Unnamed template"]
+    domain_name = str(template.get("domain_name") or "").strip()
+    measurement_id = str(template.get("measurement_id") or "").strip()
+    container_id = str(template.get("container_id") or "").strip()
+
+    meta = []
+    if domain_name:
+        meta.append(domain_name)
+    if measurement_id:
+        meta.append(measurement_id)
+    if container_id:
+        meta.append(container_id)
+
+    if meta:
+        parts.append(f"({' | '.join(meta)})")
+    return " ".join(parts)
+
+
+def append_template_record(email_id: str, template_payload: dict):
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        return False, "Google Sheets logging is not configured yet."
+
+    settings = get_template_sheet_settings()
+    template_ws, _ = get_template_worksheets(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["template_worksheet_name"],
+        settings["template_rules_worksheet_name"],
+    )
+
+    row_map = {
+        "template_id": f"tpl_{uuid.uuid4().hex[:8]}",
+        "template_name": str(template_payload.get("template_name") or "").strip(),
+        "domain_name": str(template_payload.get("domain_name") or "").strip(),
+        "measurement_id": str(template_payload.get("measurement_id") or "").strip(),
+        "container_id": str(template_payload.get("container_id") or "").strip(),
+        "url_pattern": str(template_payload.get("url_pattern") or "").strip(),
+        "active": "TRUE" if template_payload.get("active", True) else "FALSE",
+        "created_by": email_id,
+        "created_at": datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    ordered_row = [row_map.get(header, "") for header in TEMPLATE_HEADERS]
+    template_ws.append_row(ordered_row, value_input_option="USER_ENTERED")
+    return True, row_map["template_id"]
+
+
+def append_template_rule(email_id: str, rule_payload: dict):
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        return False, "Google Sheets logging is not configured yet."
+
+    settings = get_template_sheet_settings()
+    _, rules_ws = get_template_worksheets(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["template_worksheet_name"],
+        settings["template_rules_worksheet_name"],
+    )
+
+    row_map = {
+        "rule_id": f"rule_{uuid.uuid4().hex[:8]}",
+        "template_id": str(rule_payload.get("template_id") or "").strip(),
+        "rule_scope": str(rule_payload.get("rule_scope") or "").strip(),
+        "field_name": str(rule_payload.get("field_name") or "").strip(),
+        "rule_type": str(rule_payload.get("rule_type") or "").strip(),
+        "expected_values": str(rule_payload.get("expected_values") or "").strip(),
+        "notes": str(rule_payload.get("notes") or "").strip(),
+        "created_by": email_id,
+        "created_at": datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    ordered_row = [row_map.get(header, "") for header in TEMPLATE_RULE_HEADERS]
+    rules_ws.append_row(ordered_row, value_input_option="USER_ENTERED")
+    return True, row_map["rule_id"]
+
+
 def render_sidebar_session(email_id: str):
     with st.sidebar:
         st.markdown("### Session")
@@ -2374,7 +2608,21 @@ def render_sidebar_session(email_id: str):
 logged_in_email = require_login()
 render_sidebar_session(logged_in_email)
 
-tab_main, tab_compare = st.tabs(["Audit URLs", "Compare Prod vs Stage"])
+template_records, template_rules, template_load_error = load_templates_and_rules()
+active_templates = [
+    template
+    for template in template_records
+    if template.get("active")
+]
+
+tab_labels = ["Audit URLs", "Compare Prod vs Stage"]
+if is_template_admin(logged_in_email):
+    tab_labels.append("Template Manager")
+
+tabs = st.tabs(tab_labels)
+tab_main = tabs[0]
+tab_compare = tabs[1]
+tab_template_manager = tabs[2] if len(tabs) > 2 else None
 
 
 def load_json_payload(raw_value, fallback):
@@ -2831,6 +3079,10 @@ def build_datalayer_snapshot_export(result: dict):
 
     return {
         "selected_index": selected_index,
+        "selected_event": selected_event,
+        "computed_state": computed_state,
+        "execution_payload": execution_payload,
+        "network_payload": network_payload,
         "trigger_df": trigger_df,
         "computed_df": computed_df,
         "execution_df": execution_df,
@@ -2934,6 +3186,232 @@ def extract_measurement_id(result: dict):
             return format_exact_value(measurement_id)
 
     return "Not found"
+
+
+def parse_expected_values(raw_value: str) -> List[str]:
+    return [part.strip() for part in str(raw_value or "").split("|") if part.strip()]
+
+
+def split_actual_tokens(raw_value: str) -> List[str]:
+    text = str(raw_value or "").strip()
+    if not text:
+        return []
+    pieces = [piece.strip() for piece in re.split(r"[,\n]", text) if piece.strip()]
+    if text not in pieces:
+        pieces.insert(0, text)
+    return pieces
+
+
+def find_payload_value(payload: dict, field_name: str):
+    if not isinstance(payload, dict):
+        return "", ""
+
+    target = str(field_name or "").strip()
+    if target in payload:
+        return target, format_exact_value(payload.get(target))
+
+    target_norm = normalize_dimension_name(target)
+    for key, value in payload.items():
+        if normalize_dimension_name(key) == target_norm:
+            return str(key), format_exact_value(value)
+
+    return "", ""
+
+
+def evaluate_value_rule(rule_type: str, expected_values_text: str, actual_value: str):
+    rule = str(rule_type or "").strip().lower()
+    actual_text = str(actual_value or "").strip()
+    expected_values = parse_expected_values(expected_values_text)
+    actual_tokens = [token.lower() for token in split_actual_tokens(actual_text)]
+    actual_text_lower = actual_text.lower()
+
+    if rule == "optional":
+        if not actual_text:
+            return True, VALIDATION_OPTIONAL_LABEL
+        if not expected_values:
+            return True, VALIDATION_OPTIONAL_LABEL
+        return evaluate_value_rule("one_of", expected_values_text, actual_text)
+
+    if rule == "required":
+        return bool(actual_text), VALIDATION_PASS_LABEL if actual_text else VALIDATION_FAIL_LABEL
+
+    if not actual_text:
+        return False, VALIDATION_FAIL_LABEL
+
+    if rule == "regex":
+        matched = any(re.search(pattern, actual_text) for pattern in expected_values if pattern)
+        return matched, VALIDATION_PASS_LABEL if matched else VALIDATION_FAIL_LABEL
+
+    if rule == "contains":
+        matched = any(expected.lower() in actual_text_lower for expected in expected_values)
+        return matched, VALIDATION_PASS_LABEL if matched else VALIDATION_FAIL_LABEL
+
+    if rule in {"exact", "one_of"}:
+        expected_lowers = [value.lower() for value in expected_values]
+        matched = actual_text_lower in expected_lowers or any(
+            token in expected_lowers for token in actual_tokens
+        )
+        return matched, VALIDATION_PASS_LABEL if matched else VALIDATION_FAIL_LABEL
+
+    return False, VALIDATION_FAIL_LABEL
+
+
+def build_execution_validation_rows(snapshot: dict, template_rules: List[dict]):
+    execution_payload = snapshot.get("execution_payload") or {}
+    execution_df = snapshot.get("execution_df", pd.DataFrame(columns=["Field", "Value"]))
+
+    field_rules = [
+        rule
+        for rule in template_rules or []
+        if str(rule.get("rule_scope") or "").strip().lower() == "execution"
+    ]
+
+    if not field_rules:
+        return execution_df.copy(), []
+
+    value_rows = []
+    used_fields = set()
+    validation_rows = []
+
+    for rule in field_rules:
+        field_name = str(rule.get("field_name") or "").strip()
+        if not field_name:
+            continue
+
+        actual_key, actual_value = find_payload_value(execution_payload, field_name)
+        used_fields.add(actual_key or field_name)
+        matched, validation_label = evaluate_value_rule(
+            rule.get("rule_type"),
+            rule.get("expected_values"),
+            actual_value,
+        )
+        display_value = actual_value or "Not observed"
+        expected_text = str(rule.get("expected_values") or "").strip()
+        if rule.get("rule_type") == "required" and not expected_text:
+            expected_text = "Required"
+        elif rule.get("rule_type") == "optional" and not expected_text:
+            expected_text = "Optional"
+
+        value_rows.append(
+            {
+                "Field": actual_key or field_name,
+                "Value": display_value,
+                "Expected": expected_text,
+                "Validation": validation_label,
+            }
+        )
+        validation_rows.append(
+            {
+                "field_name": field_name,
+                "actual_key": actual_key or field_name,
+                "actual_value": display_value,
+                "expected": expected_text,
+                "matched": matched,
+                "validation": validation_label,
+                "rule_type": rule.get("rule_type"),
+            }
+        )
+
+    for _, row in execution_df.iterrows():
+        field = str(row.get("Field") or "").strip()
+        if field in used_fields:
+            continue
+        value_rows.append(
+            {
+                "Field": field,
+                "Value": row.get("Value") or "",
+                "Expected": "",
+                "Validation": "",
+            }
+        )
+
+    display_df = pd.DataFrame(value_rows)
+    if not display_df.empty:
+        display_df = display_df.drop_duplicates(subset=["Field", "Value", "Expected", "Validation"], keep="first")
+
+    return display_df, validation_rows
+
+
+def build_event_validation_rows(event_rows: List[dict], template_rules: List[dict]):
+    event_rules = [
+        rule
+        for rule in template_rules or []
+        if str(rule.get("rule_scope") or "").strip().lower() == "event"
+    ]
+    if not event_rules:
+        return pd.DataFrame(event_rows)
+
+    observed_by_name = {
+        normalize_event_name(row.get("event_name")): row
+        for row in (event_rows or [])
+        if str(row.get("event_name") or "").strip()
+    }
+    display_rows = []
+    handled_event_names = set()
+
+    for row in event_rows or []:
+        row_copy = dict(row)
+        row_copy["expected"] = ""
+        row_copy["validation"] = ""
+        display_rows.append(row_copy)
+
+    for rule in event_rules:
+        configured_values = parse_expected_values(rule.get("expected_values"))
+        if not configured_values:
+            configured_values = [str(rule.get("field_name") or "").strip()]
+
+        matched_names = []
+        for configured in configured_values:
+            configured_norm = normalize_event_name(configured)
+            if configured_norm in observed_by_name:
+                matched_names.append(configured_norm)
+
+        matched = bool(matched_names)
+        validation_label = VALIDATION_PASS_LABEL if matched else (
+            VALIDATION_OPTIONAL_LABEL if str(rule.get("rule_type") or "").strip().lower() == "optional" else VALIDATION_FAIL_LABEL
+        )
+
+        if matched_names:
+            for event_name in matched_names:
+                handled_event_names.add(event_name)
+                for row in display_rows:
+                    if normalize_event_name(row.get("event_name")) != event_name:
+                        continue
+                    row["expected"] = " | ".join(configured_values)
+                    row["validation"] = validation_label
+        else:
+            display_rows.append(
+                {
+                    "event_name": " | ".join(configured_values),
+                    "status": "Expected but not fired",
+                    "times_fired": 0,
+                    "capture_layer": "Not observed",
+                    "key_values_seen": "",
+                    "details": [],
+                    "technical_details": [],
+                    "expected": " | ".join(configured_values),
+                    "validation": validation_label,
+                }
+            )
+
+    return pd.DataFrame(display_rows)
+
+
+def style_validation_table(dataframe: pd.DataFrame, validation_column: str):
+    if dataframe.empty or validation_column not in dataframe.columns:
+        return dataframe
+
+    def row_style(row):
+        value = str(row.get(validation_column) or "").strip()
+        if value == VALIDATION_PASS_LABEL:
+            return ["background-color: rgba(22, 163, 74, 0.18)"] * len(row)
+        if value == VALIDATION_FAIL_LABEL:
+            return ["background-color: rgba(220, 38, 38, 0.18)"] * len(row)
+        if value == VALIDATION_OPTIONAL_LABEL:
+            return ["background-color: rgba(202, 138, 4, 0.18)"] * len(row)
+        return [""] * len(row)
+
+    return dataframe.style.apply(row_style, axis=1)
 
 
 STATUS_SORT_ORDER = {
@@ -3555,9 +4033,19 @@ This capture is split into three layers:
 """
     )
 
+    if template_load_error:
+        st.info(template_load_error)
+
     url_text = st.text_input(
         "URL",
         placeholder="https://www.example.com/article-1 or www.example.com/article-1",
+    )
+
+    template_options = [None, *active_templates]
+    selected_template = st.selectbox(
+        "Template",
+        options=template_options,
+        format_func=lambda template: "No template selected" if template is None else build_template_option_label(template),
     )
 
     wait_seconds = st.slider(
@@ -3640,6 +4128,14 @@ This capture is split into three layers:
                 if len(results) == 1:
                     result = results[0]
                     audit_summary = build_audit_focus_summary(result)
+                    selected_template_rules = []
+                    if selected_template:
+                        selected_template_rules = [
+                            rule
+                            for rule in template_rules
+                            if str(rule.get("template_id") or "").strip()
+                            == str(selected_template.get("template_id") or "").strip()
+                        ]
 
                     log_written = False
                     log_error = ""
@@ -3678,6 +4174,13 @@ This capture is split into three layers:
                     )
 
                     snapshot = build_datalayer_snapshot_export(result)
+                    if selected_template:
+                        st.caption(
+                            f"Template validation active: **{selected_template.get('template_name') or 'Unnamed template'}**"
+                        )
+                        if not selected_template_rules:
+                            st.info("This template has no rules yet. Add execution-field or event rules in Template Manager.")
+
                     st.markdown("### DataLayer Snapshot")
                     st.caption(
                         "Primary audit view. This is the closest in-app match to the GTM dataLayer extension, using exact raw values from the captured run."
@@ -3704,35 +4207,68 @@ This capture is split into three layers:
                             st.dataframe(snapshot["computed_df"], use_container_width=True, hide_index=True)
                     with exec_col:
                         st.markdown("#### Execution Payload")
-                        execution_display_df = snapshot["execution_df"]
-                        if execution_display_df.empty and not snapshot["network_df"].empty:
-                            st.caption("Execution payload unavailable in this run. Showing final matched payload instead.")
-                            execution_display_df = snapshot["network_df"]
+                        if selected_template_rules:
+                            execution_display_df, _ = build_execution_validation_rows(
+                                snapshot,
+                                selected_template_rules,
+                            )
+                            if snapshot["execution_df"].empty:
+                                st.caption(
+                                    "Execution payload was not isolated in this run. Template checks below stay tied to execution-layer availability."
+                                )
+                        else:
+                            execution_display_df = snapshot["execution_df"]
+                            if execution_display_df.empty and not snapshot["network_df"].empty:
+                                st.caption("Execution payload unavailable in this run. Showing final matched payload instead.")
+                                execution_display_df = snapshot["network_df"]
 
                         if execution_display_df.empty:
                             st.info("No execution payload matched this event.")
                         else:
-                            st.dataframe(execution_display_df, use_container_width=True, hide_index=True)
+                            if selected_template_rules and "Validation" in execution_display_df.columns:
+                                st.dataframe(
+                                    style_validation_table(execution_display_df, "Validation"),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+                            else:
+                                st.dataframe(execution_display_df, use_container_width=True, hide_index=True)
 
                     st.markdown("### Events")
-                    event_df = pd.DataFrame(audit_summary["event_rows"])
+                    event_df = (
+                        build_event_validation_rows(audit_summary["event_rows"], selected_template_rules)
+                        if selected_template_rules
+                        else pd.DataFrame(audit_summary["event_rows"])
+                    )
                     if event_df.empty:
                         st.info("No GA4 events were detected during the audit window.")
                     else:
                         st.caption(
                             "Quick event summary only. Use DataLayer Snapshot above for the detailed field-by-field audit."
                         )
-                        event_display_df = event_df[
-                            ["event_name", "status", "times_fired", "capture_layer"]
-                        ].rename(
+                        event_display_columns = ["event_name", "status", "times_fired", "capture_layer"]
+                        if "expected" in event_df.columns:
+                            event_display_columns.append("expected")
+                        if "validation" in event_df.columns:
+                            event_display_columns.append("validation")
+                        event_display_df = event_df[event_display_columns].rename(
                             columns={
                                 "event_name": "Event",
                                 "status": "Status",
                                 "times_fired": "Times Fired",
                                 "capture_layer": "Seen In",
+                                "expected": "Expected",
+                                "validation": "Validation",
                             }
                         )
-                        st.dataframe(event_display_df, use_container_width=True, hide_index=True)
+                        if "Validation" in event_display_df.columns:
+                            st.dataframe(
+                                style_validation_table(event_display_df, "Validation"),
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                        else:
+                            st.dataframe(event_display_df, use_container_width=True, hide_index=True)
 
                     st.markdown("### Comscore")
                     if not audit_summary["comscore_present"]:
@@ -3864,3 +4400,151 @@ with tab_compare:
                 ),
                 use_container_width=True,
             )
+
+
+if tab_template_manager is not None:
+    with tab_template_manager:
+        st.markdown("Manage audit templates and expected values for execution fields and events.")
+
+        if template_load_error:
+            st.error(template_load_error)
+        else:
+            st.caption(
+                "Templates are stored in the same Google Sheet backing this app. Only your account can add or edit them."
+            )
+
+            template_rules_by_template = {}
+            for rule in template_rules:
+                template_rules_by_template.setdefault(str(rule.get("template_id") or "").strip(), []).append(rule)
+
+            st.markdown("### Add Template")
+            with st.form("template_manager_add_template", clear_on_submit=True):
+                template_name = st.text_input("Template name")
+                domain_name = st.text_input("Domain / site name", placeholder="www.example.com")
+                measurement_id = st.text_input("GA4 measurement ID", placeholder="G-XXXXXXXXXX")
+                container_id = st.text_input("GTM container ID", placeholder="GTM-XXXXXXX")
+                url_pattern = st.text_input("Reference URL / pattern", placeholder="https://www.example.com/world/*")
+                template_active = st.checkbox("Active", value=True)
+                add_template_submitted = st.form_submit_button("Add template")
+
+            if add_template_submitted:
+                if not str(template_name or "").strip():
+                    st.error("Template name is required.")
+                elif not any(
+                    str(value or "").strip()
+                    for value in (domain_name, measurement_id, container_id, url_pattern)
+                ):
+                    st.error("Add at least one identifier: domain, measurement ID, container ID, or URL pattern.")
+                else:
+                    success, response = append_template_record(
+                        logged_in_email,
+                        {
+                            "template_name": template_name,
+                            "domain_name": domain_name,
+                            "measurement_id": measurement_id,
+                            "container_id": container_id,
+                            "url_pattern": url_pattern,
+                            "active": template_active,
+                        },
+                    )
+                    if success:
+                        st.success(f"Template added: {template_name}")
+                        st.rerun()
+                    else:
+                        st.error(response)
+
+            st.markdown("### Add Template Rule")
+            if not active_templates:
+                st.info("Create a template first, then add its execution-field and event rules here.")
+            else:
+                template_choice_for_rule = st.selectbox(
+                    "Template for this rule",
+                    options=active_templates,
+                    format_func=build_template_option_label,
+                    key="template_rule_template_selector",
+                )
+                with st.form("template_manager_add_rule", clear_on_submit=True):
+                    scope_label = st.selectbox("Rule scope", options=list(RULE_SCOPE_OPTIONS.keys()))
+                    if RULE_SCOPE_OPTIONS[scope_label] == "execution":
+                        field_help = "Use the exact execution payload field name, like `page_type` or `category`."
+                        expected_help = "Expected values, separated by pipe. Example: `article detail|gallery`."
+                    else:
+                        field_help = "Use a label for this event rule, or repeat the event name."
+                        expected_help = "Expected event names, separated by pipe. Example: `page_view|page_scroll`."
+                    field_name = st.text_input("Field / event name", help=field_help)
+                    rule_type = st.selectbox("Rule type", options=RULE_TYPE_OPTIONS)
+                    expected_values = st.text_input("Expected values", help=expected_help)
+                    notes = st.text_input("Notes (optional)")
+                    add_rule_submitted = st.form_submit_button("Add rule")
+
+                if add_rule_submitted:
+                    if not str(field_name or "").strip():
+                        st.error("Field / event name is required.")
+                    elif rule_type not in {"required", "optional"} and not str(expected_values or "").strip():
+                        st.error("Expected values are required for this rule type.")
+                    else:
+                        success, response = append_template_rule(
+                            logged_in_email,
+                            {
+                                "template_id": template_choice_for_rule.get("template_id"),
+                                "rule_scope": RULE_SCOPE_OPTIONS[scope_label],
+                                "field_name": field_name,
+                                "rule_type": rule_type,
+                                "expected_values": expected_values,
+                                "notes": notes,
+                            },
+                        )
+                        if success:
+                            st.success("Rule added.")
+                            st.rerun()
+                        else:
+                            st.error(response)
+
+            st.markdown("### Existing Templates")
+            if not template_records:
+                st.info("No templates saved yet.")
+            else:
+                template_table_rows = []
+                for template in template_records:
+                    template_id = str(template.get("template_id") or "").strip()
+                    template_table_rows.append(
+                        {
+                            "Template": template.get("template_name") or "",
+                            "Domain": template.get("domain_name") or "",
+                            "Measurement ID": template.get("measurement_id") or "",
+                            "Container ID": template.get("container_id") or "",
+                            "URL Pattern": template.get("url_pattern") or "",
+                            "Active": "Yes" if template.get("active") else "No",
+                            "Rules": len(template_rules_by_template.get(template_id, [])),
+                        }
+                    )
+                st.dataframe(pd.DataFrame(template_table_rows), use_container_width=True, hide_index=True)
+
+                inspect_template = st.selectbox(
+                    "View rules for template",
+                    options=template_records,
+                    format_func=build_template_option_label,
+                    key="template_manager_view_selector",
+                )
+                inspect_template_id = str(inspect_template.get("template_id") or "").strip()
+                selected_template_rules_table = pd.DataFrame(template_rules_by_template.get(inspect_template_id, []))
+                st.markdown("### Template Rules")
+                if selected_template_rules_table.empty:
+                    st.info("No rules for this template yet.")
+                else:
+                    st.dataframe(
+                        selected_template_rules_table[
+                            ["rule_scope", "field_name", "rule_type", "expected_values", "notes", "created_at"]
+                        ].rename(
+                            columns={
+                                "rule_scope": "Scope",
+                                "field_name": "Field / Event",
+                                "rule_type": "Rule Type",
+                                "expected_values": "Expected Values",
+                                "notes": "Notes",
+                                "created_at": "Created At",
+                            }
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
