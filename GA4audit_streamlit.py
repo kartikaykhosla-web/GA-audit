@@ -6,7 +6,7 @@ import glob
 import base64
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Tuple, Optional, Set
 from urllib.parse import urlparse, parse_qs, urlunparse, unquote_plus
 from zoneinfo import ZoneInfo
@@ -15,6 +15,10 @@ import pandas as pd
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
+try:
+    import extra_streamlit_components as stx
+except Exception:
+    stx = None
 try:
     import gspread
     from google.oauth2.service_account import Credentials
@@ -2033,6 +2037,52 @@ LOG_HEADERS = [
     LEGACY_EXECUTION_SUMMARY_HEADER,
 ]
 LOG_TIMEZONE = ZoneInfo("Asia/Kolkata")
+LOGIN_COOKIE_NAME = "ga_audit_login_email"
+LOGIN_COOKIE_DAYS = 30
+
+
+@st.cache_resource
+def get_cookie_manager():
+    if not stx:
+        return None
+    return stx.CookieManager()
+
+
+def read_login_cookie():
+    cookie_manager = get_cookie_manager()
+    if not cookie_manager:
+        return ""
+    try:
+        value = cookie_manager.get(LOGIN_COOKIE_NAME)
+    except Exception:
+        return ""
+    return str(value or "").strip().lower()
+
+
+def write_login_cookie(email: str):
+    cookie_manager = get_cookie_manager()
+    if not cookie_manager:
+        return
+    expires_at = datetime.now(timezone.utc) + timedelta(days=LOGIN_COOKIE_DAYS)
+    try:
+        cookie_manager.set(
+            LOGIN_COOKIE_NAME,
+            email,
+            expires_at=expires_at,
+            key=f"{LOGIN_COOKIE_NAME}_set",
+        )
+    except Exception:
+        pass
+
+
+def clear_login_cookie():
+    cookie_manager = get_cookie_manager()
+    if not cookie_manager:
+        return
+    try:
+        cookie_manager.delete(LOGIN_COOKIE_NAME, key=f"{LOGIN_COOKIE_NAME}_delete")
+    except Exception:
+        pass
 
 
 def build_login_email(username: str):
@@ -2051,6 +2101,11 @@ def require_login():
     if logged_in_email:
         return logged_in_email
 
+    cookie_email = read_login_cookie()
+    if cookie_email.endswith(JAGRAN_EMAIL_DOMAIN):
+        st.session_state["logged_in_email"] = cookie_email
+        return cookie_email
+
     st.subheader("Login")
     st.info(f"Use your Jagran username. The app will identify you as `username{JAGRAN_EMAIL_DOMAIN}`.")
     with st.form("login_form", clear_on_submit=False):
@@ -2062,6 +2117,7 @@ def require_login():
             st.error(error)
         else:
             st.session_state["logged_in_email"] = email
+            write_login_cookie(email)
             st.rerun()
     st.stop()
 
@@ -2303,6 +2359,7 @@ def render_sidebar_session(email_id: str):
         st.write(email_id)
         if st.button("Log out"):
             st.session_state.pop("logged_in_email", None)
+            clear_login_cookie()
             st.rerun()
 
         st.markdown("### Log Sheet")
