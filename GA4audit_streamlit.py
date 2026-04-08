@@ -1172,29 +1172,63 @@ def _build_comscore_capture_row(hit: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _has_comscore_values(row: Dict[str, Any]) -> bool:
+    return any(str(row.get(key) or "").strip() for key in COMSCORE_PARAM_KEYS)
+
+
 def build_comscore_capture_rows(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    seen_keys: Set[Tuple[str, str, str, str, str, str, str, str]] = set()
+    grouped_rows: Dict[Tuple[str, str, str, str, str], Dict[str, Any]] = {}
 
     for hit in hits or []:
         if not isinstance(hit, dict):
             continue
         row = _build_comscore_capture_row(hit)
+        if not _has_comscore_values(row):
+            continue
+
         key = (
             row["hit_type"],
-            str(row["status"]),
-            row["request_url"],
             row["c1"],
             row["c2"],
             row["c7"],
             row["c8"],
-            str(row["source"]),
         )
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
-        rows.append(row)
+        grouped = grouped_rows.setdefault(
+            key,
+            {
+                "hit_type": row["hit_type"],
+                "times_fired": 0,
+                "status_chain": [],
+                "c1": row["c1"],
+                "c2": row["c2"],
+                "c7": row["c7"],
+                "c8": row["c8"],
+                "request_url": row["request_url"],
+            },
+        )
+        grouped["times_fired"] += 1
+        status_text = str(row.get("status") or "").strip()
+        if status_text and status_text not in grouped["status_chain"]:
+            grouped["status_chain"].append(status_text)
+        if not grouped.get("request_url") and row.get("request_url"):
+            grouped["request_url"] = row["request_url"]
 
+    rows: List[Dict[str, Any]] = []
+    for grouped in grouped_rows.values():
+        rows.append(
+            {
+                "hit_type": grouped["hit_type"],
+                "times_fired": grouped["times_fired"],
+                "status_chain": " -> ".join(grouped["status_chain"]) if grouped["status_chain"] else "",
+                "c1": grouped["c1"],
+                "c2": grouped["c2"],
+                "c7": grouped["c7"],
+                "c8": grouped["c8"],
+                "request_url": grouped["request_url"],
+            }
+        )
+
+    rows.sort(key=lambda row: (-int(row.get("times_fired") or 0), row.get("request_url") or ""))
     return rows
 
 
@@ -3628,11 +3662,12 @@ This capture is split into three layers:
                             st.info("Comscore requests were seen, but no c1/c2/c7/c8 values could be extracted.")
                         else:
                             comscore_display_df = comscore_df[
-                                ["hit_type", "status", "c1", "c2", "c7", "c8", "request_url"]
+                                ["hit_type", "times_fired", "status_chain", "c1", "c2", "c7", "c8", "request_url"]
                             ].rename(
                                 columns={
                                     "hit_type": "Hit Type",
-                                    "status": "HTTP Status",
+                                    "times_fired": "Times Fired",
+                                    "status_chain": "Status Chain",
                                     "c1": "c1",
                                     "c2": "c2",
                                     "c7": "c7",
