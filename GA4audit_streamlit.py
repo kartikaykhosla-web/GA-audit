@@ -2590,6 +2590,43 @@ def append_template_rule(email_id: str, rule_payload: dict):
     return True, row_map["rule_id"]
 
 
+def append_template_rules(email_id: str, rule_payloads: List[dict]):
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        return False, "Google Sheets logging is not configured yet."
+
+    payloads = [payload for payload in (rule_payloads or []) if isinstance(payload, dict)]
+    if not payloads:
+        return False, "No rules to save."
+
+    settings = get_template_sheet_settings()
+    _, rules_ws = get_template_worksheets(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["template_worksheet_name"],
+        settings["template_rules_worksheet_name"],
+    )
+
+    rows = []
+    timestamp = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    for payload in payloads:
+        row_map = {
+            "rule_id": f"rule_{uuid.uuid4().hex[:8]}",
+            "template_id": str(payload.get("template_id") or "").strip(),
+            "rule_scope": str(payload.get("rule_scope") or "").strip(),
+            "field_name": str(payload.get("field_name") or "").strip(),
+            "rule_type": str(payload.get("rule_type") or "").strip(),
+            "expected_values": str(payload.get("expected_values") or "").strip(),
+            "notes": str(payload.get("notes") or "").strip(),
+            "created_by": email_id,
+            "created_at": timestamp,
+        }
+        rows.append([row_map.get(header, "") for header in TEMPLATE_RULE_HEADERS])
+
+    rules_ws.append_rows(rows, value_input_option="USER_ENTERED")
+    return True, str(len(rows))
+
+
 def render_sidebar_session(email_id: str):
     with st.sidebar:
         st.markdown("### Session")
@@ -3205,6 +3242,50 @@ def format_expected_values_display(raw_value: str) -> str:
     if not values:
         return ""
     return ", ".join(values)
+
+
+def parse_bulk_execution_rule_lines(raw_value: str, rule_type: str):
+    entries = []
+    errors = []
+
+    for index, raw_line in enumerate(str(raw_value or "").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        field_name = ""
+        expected_values = ""
+
+        if rule_type in {"required", "optional"}:
+            field_name = line
+        else:
+            if "=" in line:
+                field_name, expected_values = line.split("=", 1)
+            elif ":" in line:
+                field_name, expected_values = line.split(":", 1)
+            else:
+                errors.append(f"Line {index}: use `field_name = expected value` format.")
+                continue
+
+        field_name = str(field_name or "").strip()
+        expected_values = normalize_expected_values_input(expected_values)
+
+        if not field_name:
+            errors.append(f"Line {index}: field name is missing.")
+            continue
+
+        if rule_type not in {"required", "optional"} and not expected_values:
+            errors.append(f"Line {index}: expected value is missing.")
+            continue
+
+        entries.append(
+            {
+                "field_name": field_name,
+                "expected_values": expected_values,
+            }
+        )
+
+    return entries, errors
 
 
 def split_actual_tokens(raw_value: str) -> List[str]:
@@ -4489,11 +4570,20 @@ if tab_template_manager is not None:
                         rule_type = st.selectbox("Rule type", options=RULE_TYPE_OPTIONS)
 
                     if RULE_SCOPE_OPTIONS[scope_label] == "execution":
-                        field_label = "Execution field name"
-                        field_help = "Use the exact execution payload field name, like `page_type` or `category`."
-                        expected_label = "Expected values"
-                        expected_help = "Enter one expected value per line. Pipe-separated values also work."
-                        expected_placeholder = "article detail\ngallery"
+                        field_label = "Execution field rules"
+                        field_help = (
+                            "Add one execution rule per line using `field_name = expected value`. "
+                            "Examples: `page_type = article detail` or `category = world|india`."
+                        )
+                        expected_label = "Execution field rules"
+                        expected_help = (
+                            "Enter one rule per line. Pipe-separated expected values still work inside a line."
+                        )
+                        expected_placeholder = (
+                            "page_type = article detail\n"
+                            "category = world|india\n"
+                            "scroll_percent = 0%|25%|50%|75%|100%"
+                        )
                     else:
                         field_label = "Rule label / event group"
                         field_help = "Use a short label for this event rule, like `Core article events`."
@@ -4501,11 +4591,24 @@ if tab_template_manager is not None:
                         expected_help = "Enter one event name per line. Pipe-separated values also work."
                         expected_placeholder = "page_view\npage_scroll"
 
-                    field_name = st.text_input(field_label, help=field_help)
-                    if rule_type in {"required", "optional"}:
-                        st.caption("This rule type does not need explicit expected values.")
-                        expected_values_input = ""
+                    if RULE_SCOPE_OPTIONS[scope_label] == "execution":
+                        field_name = ""
+                        execution_rule_lines = st.text_area(
+                            expected_label,
+                            help=expected_help,
+                            placeholder=expected_placeholder,
+                            height=180,
+                        )
+                        parsed_execution_rules, parsed_execution_rule_errors = parse_bulk_execution_rule_lines(
+                            execution_rule_lines,
+                            rule_type,
+                        )
+                        if parsed_execution_rules:
+                            st.caption(f"{len(parsed_execution_rules)} execution rule(s) ready to save.")
+                        if parsed_execution_rule_errors:
+                            st.caption("Preview issues: " + " ".join(parsed_execution_rule_errors[:3]))
                     else:
+                        field_name = st.text_input(field_label, help=field_help)
                         expected_values_input = st.text_area(
                             expected_label,
                             help=expected_help,
@@ -4519,28 +4622,61 @@ if tab_template_manager is not None:
                     add_rule_submitted = st.form_submit_button("Add rule")
 
                 if add_rule_submitted:
-                    expected_values = normalize_expected_values_input(expected_values_input)
-                    if not str(field_name or "").strip():
-                        st.error(f"{field_label} is required.")
-                    elif rule_type not in {"required", "optional"} and not str(expected_values or "").strip():
-                        st.error("Expected values are required for this rule type.")
-                    else:
-                        success, response = append_template_rule(
-                            logged_in_email,
-                            {
-                                "template_id": template_choice_for_rule.get("template_id"),
-                                "rule_scope": RULE_SCOPE_OPTIONS[scope_label],
-                                "field_name": field_name,
-                                "rule_type": rule_type,
-                                "expected_values": expected_values,
-                                "notes": notes,
-                            },
+                    if RULE_SCOPE_OPTIONS[scope_label] == "execution":
+                        parsed_execution_rules, parsed_execution_rule_errors = parse_bulk_execution_rule_lines(
+                            execution_rule_lines,
+                            rule_type,
                         )
-                        if success:
-                            st.success("Rule added.")
-                            st.rerun()
+                        if not parsed_execution_rules:
+                            if parsed_execution_rule_errors:
+                                st.error(" ".join(parsed_execution_rule_errors[:5]))
+                            else:
+                                st.error("Add at least one execution field rule.")
+                        elif parsed_execution_rule_errors:
+                            st.error(" ".join(parsed_execution_rule_errors[:5]))
                         else:
-                            st.error(response)
+                            success, response = append_template_rules(
+                                logged_in_email,
+                                [
+                                    {
+                                        "template_id": template_choice_for_rule.get("template_id"),
+                                        "rule_scope": RULE_SCOPE_OPTIONS[scope_label],
+                                        "field_name": entry["field_name"],
+                                        "rule_type": rule_type,
+                                        "expected_values": entry["expected_values"],
+                                        "notes": notes,
+                                    }
+                                    for entry in parsed_execution_rules
+                                ],
+                            )
+                            if success:
+                                st.success(f"{response} rule(s) added.")
+                                st.rerun()
+                            else:
+                                st.error(response)
+                    else:
+                        expected_values = normalize_expected_values_input(expected_values_input)
+                        if not str(field_name or "").strip():
+                            st.error(f"{field_label} is required.")
+                        elif rule_type not in {"required", "optional"} and not str(expected_values or "").strip():
+                            st.error("Expected values are required for this rule type.")
+                        else:
+                            success, response = append_template_rule(
+                                logged_in_email,
+                                {
+                                    "template_id": template_choice_for_rule.get("template_id"),
+                                    "rule_scope": RULE_SCOPE_OPTIONS[scope_label],
+                                    "field_name": field_name,
+                                    "rule_type": rule_type,
+                                    "expected_values": expected_values,
+                                    "notes": notes,
+                                },
+                            )
+                            if success:
+                                st.success("Rule added.")
+                                st.rerun()
+                            else:
+                                st.error(response)
 
             st.markdown("### Existing Templates")
             if not template_records:
