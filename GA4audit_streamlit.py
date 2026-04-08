@@ -5283,12 +5283,18 @@ if tab_template_manager is not None:
                                 else:
                                     st.error(response)
 
-                inspect_template = st.selectbox(
-                    "View rules for template",
-                    options=template_records,
-                    format_func=build_template_option_label,
-                    key="template_manager_view_selector",
-                )
+                if edit_template_id and template_to_edit:
+                    inspect_template = template_to_edit
+                    st.caption(
+                        f"Showing rules for the template you are editing: {build_template_option_label(template_to_edit)}"
+                    )
+                else:
+                    inspect_template = st.selectbox(
+                        "View rules for template",
+                        options=template_records,
+                        format_func=build_template_option_label,
+                        key="template_manager_view_selector",
+                    )
                 inspect_template_id = str(inspect_template.get("template_id") or "").strip()
                 selected_template_rules_table = pd.DataFrame(template_rules_by_template.get(inspect_template_id, []))
                 st.markdown("### Template Rules")
