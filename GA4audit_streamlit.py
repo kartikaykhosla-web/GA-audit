@@ -608,6 +608,13 @@ COMSCORE_JS_C2_RE = re.compile(
     re.I | re.X,
 )
 COMSCORE_GENERIC_PARAM_RE = re.compile(r"(?:[?&]|\b)(c1|c2|c7|c8)=([^&'\"\\s]+)", re.I)
+CHARTBEAT_HOST_PATTERN = re.compile(r"(?:^|[.])chartbeat\.(?:net|com)$", re.I)
+CHARTBEAT_PING_PATH_PATTERN = re.compile(r"/ping(?:$|[/?])", re.I)
+CHARTBEAT_PARAM_KEYS = ("h", "p", "d", "g", "u", "x", "m", "t", "title")
+CHARTBEAT_GENERIC_PARAM_RE = re.compile(
+    r"(?:[?&]|\b)(h|p|d|g|u|x|m|t|title)=([^&'\"\\s]+)",
+    re.I,
+)
 
 GA4_PRELOAD_SCRIPT = r"""
 (function () {
@@ -1037,6 +1044,15 @@ def _is_comscore_hit(url: str) -> bool:
     return bool(COMSCORE_HOST_PATTERN.search(host))
 
 
+def _is_chartbeat_hit(url: str) -> bool:
+    parsed = urlparse(str(url or ""))
+    host = parsed.netloc.lower().split(":", 1)[0]
+    path = parsed.path or ""
+    if not CHARTBEAT_HOST_PATTERN.search(host):
+        return False
+    return bool(CHARTBEAT_PING_PATH_PATTERN.search(path))
+
+
 def _merge_multivalue_dicts(base: Dict[str, List[str]], extra: Dict[str, List[str]]) -> Dict[str, List[str]]:
     merged = {key: list(values) for key, values in (base or {}).items()}
     for key, values in (extra or {}).items():
@@ -1072,6 +1088,18 @@ def _filter_comscore_params(values: Dict[str, List[str]]) -> Dict[str, List[str]
     return filtered
 
 
+def _filter_chartbeat_params(values: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    filtered: Dict[str, List[str]] = {}
+    for key, raw_values in (values or {}).items():
+        key_text = str(key or "").strip().lower()
+        if key_text not in CHARTBEAT_PARAM_KEYS:
+            continue
+        kept = [str(item) for item in raw_values if str(item) != ""]
+        if kept:
+            filtered[key_text] = kept
+    return filtered
+
+
 def _extract_comscore_params_from_text(value: str) -> Dict[str, List[str]]:
     text = str(value or "")
     if not text:
@@ -1098,6 +1126,36 @@ def _extract_comscore_params_from_text(value: str) -> Dict[str, List[str]]:
     decoded = _base64_decode_attempt(text)
     if decoded and decoded != text:
         return _extract_comscore_params_from_text(decoded)
+
+    return {}
+
+
+def _extract_chartbeat_params_from_text(value: str) -> Dict[str, List[str]]:
+    text = str(value or "")
+    if not text:
+        return {}
+
+    try:
+        parsed = parse_qs(unquote_plus(text), keep_blank_values=True)
+        filtered = _filter_chartbeat_params(parsed)
+        if filtered:
+            return filtered
+    except Exception:
+        pass
+
+    matches: Dict[str, List[str]] = {}
+    for match in CHARTBEAT_GENERIC_PARAM_RE.finditer(text):
+        key = match.group(1).lower()
+        val = unquote_plus(match.group(2))
+        matches.setdefault(key, [])
+        if val not in matches[key]:
+            matches[key].append(val)
+    if matches:
+        return matches
+
+    decoded = _base64_decode_attempt(text)
+    if decoded and decoded != text:
+        return _extract_chartbeat_params_from_text(decoded)
 
     return {}
 
@@ -1181,6 +1239,71 @@ def _has_comscore_values(row: Dict[str, Any]) -> bool:
     return any(str(row.get(key) or "").strip() for key in COMSCORE_PARAM_KEYS)
 
 
+def _build_chartbeat_capture_row(hit: Dict[str, Any]) -> Dict[str, Any]:
+    url = str(hit.get("url") or hit.get("request_url") or "")
+    combined: Dict[str, List[str]] = {}
+
+    try:
+        query_params = _filter_chartbeat_params(parse_qs(urlparse(url).query, keep_blank_values=True))
+        combined = _merge_multivalue_dicts(combined, query_params)
+    except Exception:
+        pass
+
+    combined = _merge_multivalue_dicts(
+        combined,
+        _extract_chartbeat_params_from_text(hit.get("request_body") or ""),
+    )
+
+    for headers_field in ("request_headers", "response_headers", "headers"):
+        headers = hit.get(headers_field) or {}
+        if not isinstance(headers, dict):
+            continue
+        for header_value in headers.values():
+            combined = _merge_multivalue_dicts(
+                combined,
+                _extract_chartbeat_params_from_text(header_value),
+            )
+
+    response_headers = hit.get("response_headers") or hit.get("headers") or {}
+    if isinstance(response_headers, dict):
+        location_value = _case_insensitive_get(response_headers, "Location")
+        combined = _merge_multivalue_dicts(
+            combined,
+            _extract_chartbeat_params_from_text(location_value or ""),
+        )
+
+    summary_parts = []
+    for key in ("h", "p", "d", "g", "title", "t", "u", "x", "m"):
+        value_text = format_exact_value(combined.get(key) or [])
+        if value_text:
+            if key == "t" and combined.get("title"):
+                continue
+            summary_parts.append(f"{key}={value_text}")
+
+    return {
+        "hit_type": "Ping Request",
+        "source": hit.get("source") or "",
+        "status": hit.get("status") or hit.get("response_status") or "",
+        "request_url": url,
+        "h": format_exact_value(combined.get("h") or []),
+        "p": format_exact_value(combined.get("p") or []),
+        "d": format_exact_value(combined.get("d") or []),
+        "g": format_exact_value(combined.get("g") or []),
+        "title": format_exact_value(combined.get("title") or combined.get("t") or []),
+        "u": format_exact_value(combined.get("u") or []),
+        "x": format_exact_value(combined.get("x") or []),
+        "m": format_exact_value(combined.get("m") or []),
+        "params_summary": " | ".join(summary_parts),
+    }
+
+
+def _has_chartbeat_values(row: Dict[str, Any]) -> bool:
+    return any(
+        str(row.get(key) or "").strip()
+        for key in ("h", "p", "d", "g", "title", "u", "x", "m")
+    )
+
+
 def build_comscore_capture_rows(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     grouped_rows: Dict[Tuple[str, str, str, str, str], Dict[str, Any]] = {}
 
@@ -1229,6 +1352,75 @@ def build_comscore_capture_rows(hits: List[Dict[str, Any]]) -> List[Dict[str, An
                 "c2": grouped["c2"],
                 "c7": grouped["c7"],
                 "c8": grouped["c8"],
+                "request_url": grouped["request_url"],
+            }
+        )
+
+    rows.sort(key=lambda row: (-int(row.get("times_fired") or 0), row.get("request_url") or ""))
+    return rows
+
+
+def build_chartbeat_capture_rows(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped_rows: Dict[Tuple[str, str, str, str, str, str, str, str], Dict[str, Any]] = {}
+
+    for hit in hits or []:
+        if not isinstance(hit, dict):
+            continue
+        row = _build_chartbeat_capture_row(hit)
+        if not _has_chartbeat_values(row):
+            continue
+
+        key = (
+            row["h"],
+            row["p"],
+            row["d"],
+            row["g"],
+            row["title"],
+            row["u"],
+            row["x"],
+            row["m"],
+        )
+        grouped = grouped_rows.setdefault(
+            key,
+            {
+                "hit_type": row["hit_type"],
+                "times_fired": 0,
+                "status_chain": [],
+                "h": row["h"],
+                "p": row["p"],
+                "d": row["d"],
+                "g": row["g"],
+                "title": row["title"],
+                "u": row["u"],
+                "x": row["x"],
+                "m": row["m"],
+                "params_summary": row["params_summary"],
+                "request_url": row["request_url"],
+            },
+        )
+        grouped["times_fired"] += 1
+        status_text = str(row.get("status") or "").strip()
+        if status_text and status_text not in grouped["status_chain"]:
+            grouped["status_chain"].append(status_text)
+        if not grouped.get("request_url") and row.get("request_url"):
+            grouped["request_url"] = row["request_url"]
+
+    rows: List[Dict[str, Any]] = []
+    for grouped in grouped_rows.values():
+        rows.append(
+            {
+                "hit_type": grouped["hit_type"],
+                "times_fired": grouped["times_fired"],
+                "status_chain": " -> ".join(grouped["status_chain"]) if grouped["status_chain"] else "",
+                "h": grouped["h"],
+                "p": grouped["p"],
+                "d": grouped["d"],
+                "g": grouped["g"],
+                "title": grouped["title"],
+                "u": grouped["u"],
+                "x": grouped["x"],
+                "m": grouped["m"],
+                "params_summary": grouped["params_summary"],
                 "request_url": grouped["request_url"],
             }
         )
@@ -1306,11 +1498,11 @@ def _try_get_response_body_from_cdp(driver, request_id: str) -> str:
 def extract_collect_hits_from_performance_logs(
     driver,
     page_domain: str,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
         raw_entries = driver.get_log("performance")
     except Exception:
-        return [], [], []
+        return [], [], [], []
 
     requests_by_id: Dict[str, Dict[str, Any]] = {}
 
@@ -1335,6 +1527,7 @@ def extract_collect_hits_from_performance_logs(
                 _is_ga4_collect_hit(url)
                 or _is_ccm_pageview_hit(url, page_domain)
                 or _is_comscore_hit(url)
+                or _is_chartbeat_hit(url)
             ):
                 continue
             item["url"] = url
@@ -1353,6 +1546,7 @@ def extract_collect_hits_from_performance_logs(
                 _is_ga4_collect_hit(url)
                 or _is_ccm_pageview_hit(url, page_domain)
                 or _is_comscore_hit(url)
+                or _is_chartbeat_hit(url)
             ):
                 continue
             item["url"] = url
@@ -1374,6 +1568,7 @@ def extract_collect_hits_from_performance_logs(
     ga4_collects: List[Dict[str, Any]] = []
     ccm_pageviews: List[Dict[str, Any]] = []
     comscore_hits: List[Dict[str, Any]] = []
+    chartbeat_hits: List[Dict[str, Any]] = []
 
     for request_id, item in requests_by_id.items():
         url = str(item.get("url") or "")
@@ -1383,6 +1578,7 @@ def extract_collect_hits_from_performance_logs(
             _is_ga4_collect_hit(url)
             or _is_ccm_pageview_hit(url, page_domain)
             or _is_comscore_hit(url)
+            or _is_chartbeat_hit(url)
         ):
             continue
 
@@ -1407,12 +1603,14 @@ def extract_collect_hits_from_performance_logs(
 
         if _is_comscore_hit(url):
             comscore_hits.append(hit)
+        elif _is_chartbeat_hit(url):
+            chartbeat_hits.append(hit)
         elif _is_ccm_pageview_hit(url, page_domain):
             ccm_pageviews.append(hit)
         else:
             ga4_collects.append(hit)
 
-    return ga4_collects, ccm_pageviews, comscore_hits
+    return ga4_collects, ccm_pageviews, comscore_hits, chartbeat_hits
 
 
 def _merge_hit_record(base_hit: Dict[str, Any], new_hit: Dict[str, Any]) -> Dict[str, Any]:
@@ -1467,6 +1665,7 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
     ga4_collects: List[Dict[str, Any]] = []
     ccm_pageviews: List[Dict[str, Any]] = []
     comscore_hits: List[Dict[str, Any]] = []
+    chartbeat_hits: List[Dict[str, Any]] = []
 
     for request in driver.requests:
         url = getattr(request, "url", "")
@@ -1491,11 +1690,14 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
             ccm_pageviews.append(hit)
         elif _is_comscore_hit(url):
             comscore_hits.append(hit)
+        elif _is_chartbeat_hit(url):
+            chartbeat_hits.append(hit)
 
-    perf_ga4_collects, perf_ccm_pageviews, perf_comscore_hits = extract_collect_hits_from_performance_logs(driver, page_domain)
+    perf_ga4_collects, perf_ccm_pageviews, perf_comscore_hits, perf_chartbeat_hits = extract_collect_hits_from_performance_logs(driver, page_domain)
     ga4_collects = merge_network_hits(ga4_collects, perf_ga4_collects)
     ccm_pageviews = merge_network_hits(ccm_pageviews, perf_ccm_pageviews)
     comscore_hits = merge_network_hits(comscore_hits, perf_comscore_hits)
+    chartbeat_hits = merge_network_hits(chartbeat_hits, perf_chartbeat_hits)
 
     return {
         "gtm_present": bool(gtm_scripts),
@@ -1503,11 +1705,13 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
         "ga4_collect_present": bool(ga4_collects),
         "ccm_pageview_present": bool(ccm_pageviews),
         "comscore_present": bool(comscore_hits),
+        "chartbeat_present": bool(chartbeat_hits),
         "gtm_scripts": gtm_scripts,
         "gtag_scripts": gtag_scripts,
         "ga4_collects": ga4_collects,
         "ccm_pageviews": ccm_pageviews,
         "comscore_hits": comscore_hits,
+        "chartbeat_hits": chartbeat_hits,
     }
 
 
@@ -1789,11 +1993,13 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
         "ga4_collect_present": False,
         "ccm_pageview_present": False,
         "comscore_present": False,
+        "chartbeat_present": False,
         "gtm_scripts_sample": "",
         "gtag_scripts_sample": "",
         "ga4_collects_sample": "",
         "ccm_pageviews_sample": "",
         "comscore_hits_sample": "",
+        "chartbeat_hits_sample": "",
         "pv_event_name": "",
         "pv_page_location": "",
         "pv_page_referrer": "",
@@ -1817,6 +2023,7 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
         "ga4_network_events_json": "",
         "ga4_decoded_events_json": "",
         "comscore_hits_json": "",
+        "chartbeat_hits_json": "",
         "mapping_table": "",
         "audit_duration_seconds": 0.0,
     }
@@ -1942,12 +2149,14 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
     result["ga4_collect_present"] = net_info["ga4_collect_present"]
     result["ccm_pageview_present"] = net_info["ccm_pageview_present"]
     result["comscore_present"] = net_info["comscore_present"]
+    result["chartbeat_present"] = net_info["chartbeat_present"]
 
     result["gtm_scripts_sample"] = _format_hits_sample(net_info["gtm_scripts"])
     result["gtag_scripts_sample"] = _format_hits_sample(net_info["gtag_scripts"])
     result["ga4_collects_sample"] = _format_hits_sample(net_info["ga4_collects"])
     result["ccm_pageviews_sample"] = _format_hits_sample(net_info["ccm_pageviews"])
     result["comscore_hits_sample"] = _format_hits_sample(net_info["comscore_hits"])
+    result["chartbeat_hits_sample"] = _format_hits_sample(net_info["chartbeat_hits"])
 
     preload_state = extract_preload_state(driver)
     gtag_calls = preload_state.get("gtagCalls", []) or []
@@ -1973,6 +2182,9 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
     result["ga4_decoded_events_json"] = safe_json(decoded_events)
     result["comscore_hits_json"] = safe_json(
         build_comscore_capture_rows(net_info["comscore_hits"])
+    )
+    result["chartbeat_hits_json"] = safe_json(
+        build_chartbeat_capture_rows(net_info["chartbeat_hits"])
     )
 
     # Flatten page_view
@@ -3194,6 +3406,7 @@ def parse_result_json_fields(result: dict):
         "ga4_network_hits_json",
         "ga4_decoded_events_json",
         "comscore_hits_json",
+        "chartbeat_hits_json",
         "consent_clicks_json",
         "mapping_table",
     ]
@@ -3226,6 +3439,8 @@ def build_share_payload(results):
             "ga4_collect_present": result.get("ga4_collect_present"),
             "comscore_present": result.get("comscore_present"),
             "comscore_values": audit_summary["comscore_preview"],
+            "chartbeat_present": result.get("chartbeat_present"),
+            "chartbeat_values": audit_summary["chartbeat_preview"],
             "issues": result.get("issues"),
         }
         summary_rows.append(summary)
@@ -4561,12 +4776,34 @@ def build_comscore_preview(rows: List[Dict[str, Any]]) -> str:
     return " | ".join(highlights[:2])
 
 
+def build_chartbeat_preview(rows: List[Dict[str, Any]]) -> str:
+    if not rows:
+        return "Not found"
+
+    highlights = []
+    for row in rows:
+        parts = []
+        for key in ("h", "p", "d", "g", "title"):
+            value = str(row.get(key) or "").strip()
+            if value:
+                parts.append(f"{key}={value}")
+        if parts:
+            highlights.append(", ".join(parts))
+
+    if not highlights:
+        return "Tag found"
+    return " | ".join(highlights[:2])
+
+
 def build_audit_focus_summary(result: dict):
     execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
     network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
     comscore_rows = load_json_payload(result.get("comscore_hits_json", ""), [])
     if not isinstance(comscore_rows, list):
         comscore_rows = []
+    chartbeat_rows = load_json_payload(result.get("chartbeat_hits_json", ""), [])
+    if not isinstance(chartbeat_rows, list):
+        chartbeat_rows = []
 
     execution_pageview = find_event_by_name(execution_events, "page_view")
     network_pageview = find_event_by_name(network_events, "page_view")
@@ -4598,6 +4835,9 @@ def build_audit_focus_summary(result: dict):
         "comscore_present": bool(result.get("comscore_present")),
         "comscore_rows": comscore_rows,
         "comscore_preview": build_comscore_preview(comscore_rows),
+        "chartbeat_present": bool(result.get("chartbeat_present")),
+        "chartbeat_rows": chartbeat_rows,
+        "chartbeat_preview": build_chartbeat_preview(chartbeat_rows),
     }
 
 
@@ -4675,7 +4915,9 @@ This capture is split into three layers:
                             "pageview_triggered": audit_summary["pageview_triggered"],
                             "pageview_source": audit_summary["pageview_source"],
                             "comscore_present": audit_summary["comscore_present"],
+                            "chartbeat_present": audit_summary["chartbeat_present"],
                             "comscore_values": audit_summary["comscore_preview"],
+                            "chartbeat_values": audit_summary["chartbeat_preview"],
                             "events_fired": ", ".join(audit_summary["events_fired"]) or "None",
                             "captured_in_network": preview_list(audit_summary["captured_network"]),
                             "captured_in_execution": preview_list(audit_summary["captured_execution"]),
@@ -4690,6 +4932,7 @@ This capture is split into three layers:
                     "pageview_triggered",
                     "pageview_source",
                     "comscore_present",
+                    "chartbeat_present",
                     "events_fired",
                     "issues",
                 ]
@@ -4739,7 +4982,7 @@ This capture is split into three layers:
                             f"Details: {result['preload_hook_error']}"
                         )
 
-                    stat_col1, stat_col2, stat_col3, stat_col4, stat_col5, stat_col6 = st.columns(6)
+                    stat_col1, stat_col2, stat_col3, stat_col4, stat_col5, stat_col6, stat_col7 = st.columns(7)
                     stat_col1.metric(
                         "Pageview Triggered",
                         "Yes" if audit_summary["pageview_triggered"] else "No",
@@ -4751,6 +4994,10 @@ This capture is split into three layers:
                     stat_col6.metric(
                         "Comscore",
                         "Yes" if audit_summary["comscore_present"] else "No",
+                    )
+                    stat_col7.metric(
+                        "Chartbeat",
+                        "Yes" if audit_summary["chartbeat_present"] else "No",
                     )
 
                     snapshot = build_datalayer_snapshot_export(result)
@@ -4877,6 +5124,37 @@ This capture is split into three layers:
                             )
                             st.dataframe(comscore_display_df, use_container_width=True, hide_index=True)
 
+                    st.markdown("### Chartbeat")
+                    if not audit_summary["chartbeat_present"]:
+                        st.info("No Chartbeat `ping?h` hit was captured during this audit run.")
+                    else:
+                        st.caption(
+                            "Exact Chartbeat values captured from `ping` requests during this run."
+                        )
+                        chartbeat_df = pd.DataFrame(audit_summary["chartbeat_rows"])
+                        if chartbeat_df.empty:
+                            st.info("Chartbeat requests were seen, but no usable `ping` parameters could be extracted.")
+                        else:
+                            chartbeat_display_df = chartbeat_df[
+                                ["hit_type", "times_fired", "status_chain", "h", "p", "d", "g", "title", "u", "x", "m", "request_url"]
+                            ].rename(
+                                columns={
+                                    "hit_type": "Hit Type",
+                                    "times_fired": "Times Fired",
+                                    "status_chain": "Status Chain",
+                                    "h": "Host (h)",
+                                    "p": "Path (p)",
+                                    "d": "Domain (d)",
+                                    "g": "Section (g)",
+                                    "title": "Title",
+                                    "u": "u",
+                                    "x": "x",
+                                    "m": "m",
+                                    "request_url": "Request URL",
+                                }
+                            )
+                            st.dataframe(chartbeat_display_df, use_container_width=True, hide_index=True)
+
                     with st.expander("Advanced debug", expanded=False):
                         left_col, right_col = st.columns(2)
 
@@ -4924,6 +5202,11 @@ This capture is split into three layers:
                                 result.get("comscore_hits_json", ""),
                                 "No Comscore values captured.",
                             )
+                            render_json_block(
+                                "Chartbeat captures",
+                                result.get("chartbeat_hits_json", ""),
+                                "No Chartbeat values captured.",
+                            )
 
                         render_json_block(
                             "Consent actions",
@@ -4961,6 +5244,7 @@ with tab_compare:
                             "ga4_execution_present": prod.get("ga4_execution_present"),
                             "ga4_collect_present": prod.get("ga4_collect_present"),
                             "comscore_present": prod.get("comscore_present"),
+                            "chartbeat_present": prod.get("chartbeat_present"),
                             "pv_page_location": prod.get("pv_page_location"),
                             "pv_page_title": prod.get("pv_page_title"),
                             "issues": prod.get("issues"),
@@ -4972,6 +5256,7 @@ with tab_compare:
                             "ga4_execution_present": stage.get("ga4_execution_present"),
                             "ga4_collect_present": stage.get("ga4_collect_present"),
                             "comscore_present": stage.get("comscore_present"),
+                            "chartbeat_present": stage.get("chartbeat_present"),
                             "pv_page_location": stage.get("pv_page_location"),
                             "pv_page_title": stage.get("pv_page_title"),
                             "issues": stage.get("issues"),
