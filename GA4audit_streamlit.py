@@ -5126,34 +5126,43 @@ This capture is split into three layers:
 
                     st.markdown("### Chartbeat")
                     if not audit_summary["chartbeat_present"]:
-                        st.info("No Chartbeat `ping?h` hit was captured during this audit run.")
-                    else:
-                        st.caption(
-                            "Exact Chartbeat values captured from `ping` requests during this run."
-                        )
-                        chartbeat_df = pd.DataFrame(audit_summary["chartbeat_rows"])
-                        if chartbeat_df.empty:
-                            st.info("Chartbeat requests were seen, but no usable `ping` parameters could be extracted.")
-                        else:
-                            chartbeat_display_df = chartbeat_df[
-                                ["hit_type", "times_fired", "status_chain", "h", "p", "d", "g", "title", "u", "x", "m", "request_url"]
-                            ].rename(
-                                columns={
-                                    "hit_type": "Hit Type",
-                                    "times_fired": "Times Fired",
-                                    "status_chain": "Status Chain",
-                                    "h": "Host (h)",
-                                    "p": "Path (p)",
-                                    "d": "Domain (d)",
-                                    "g": "Section (g)",
-                                    "title": "Title",
-                                    "u": "u",
-                                    "x": "x",
-                                    "m": "m",
-                                    "request_url": "Request URL",
+                        chartbeat_validation_df = pd.DataFrame(
+                            [
+                                {
+                                    "Check": "Chartbeat ping",
+                                    "Validation": VALIDATION_FAIL_LABEL,
+                                    "Times Fired": 0,
                                 }
-                            )
-                            st.dataframe(chartbeat_display_df, use_container_width=True, hide_index=True)
+                            ]
+                        )
+                        st.dataframe(
+                            style_validation_table(chartbeat_validation_df, "Validation"),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        total_chartbeat_fires = sum(
+                            int(row.get("times_fired") or 0)
+                            for row in (audit_summary.get("chartbeat_rows") or [])
+                            if isinstance(row, dict)
+                        )
+                        if total_chartbeat_fires <= 0:
+                            total_chartbeat_fires = 1
+                        chartbeat_validation_df = pd.DataFrame(
+                            [
+                                {
+                                    "Check": "Chartbeat ping",
+                                    "Validation": VALIDATION_PASS_LABEL,
+                                    "Times Fired": total_chartbeat_fires,
+                                }
+                            ]
+                        )
+                        st.dataframe(
+                            style_validation_table(chartbeat_validation_df, "Validation"),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        st.caption("Detailed Chartbeat request values remain available under Advanced debug.")
 
                     with st.expander("Advanced debug", expanded=False):
                         left_col, right_col = st.columns(2)
