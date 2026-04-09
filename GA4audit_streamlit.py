@@ -4051,7 +4051,7 @@ def evaluate_value_rule(rule_type: str, expected_values_text: str, actual_value:
     return False, VALIDATION_FAIL_LABEL
 
 
-def build_execution_validation_rows(snapshot: dict, template_rules: List[dict]):
+def build_execution_validation_rows(snapshot: dict, template_rules: List[dict], include_missing_rules: bool = True):
     execution_payload = snapshot.get("execution_payload") or {}
     execution_df = snapshot.get("execution_df", pd.DataFrame(columns=["Field", "Value"]))
 
@@ -4063,6 +4063,65 @@ def build_execution_validation_rows(snapshot: dict, template_rules: List[dict]):
 
     if not field_rules:
         return execution_df.copy(), []
+
+    if not include_missing_rules:
+        value_rows = []
+        validation_rows = []
+        for _, row in execution_df.iterrows():
+            field = str(row.get("Field") or "").strip()
+            actual_value = str(row.get("Value") or "").strip()
+            matched_rule = next(
+                (
+                    rule
+                    for rule in field_rules
+                    if normalize_dimension_name(rule.get("field_name")) == normalize_dimension_name(field)
+                ),
+                None,
+            )
+            if matched_rule:
+                matched, validation_label = evaluate_value_rule(
+                    matched_rule.get("rule_type"),
+                    matched_rule.get("expected_values"),
+                    actual_value,
+                )
+                expected_text = str(matched_rule.get("expected_values") or "").strip()
+                if matched_rule.get("rule_type") == "required" and not expected_text:
+                    expected_text = "Required"
+                elif matched_rule.get("rule_type") == "optional" and not expected_text:
+                    expected_text = "Optional"
+                value_rows.append(
+                    {
+                        "Field": field,
+                        "Value": actual_value,
+                        "Expected": expected_text,
+                        "Validation": validation_label,
+                    }
+                )
+                validation_rows.append(
+                    {
+                        "field_name": matched_rule.get("field_name"),
+                        "actual_key": field,
+                        "actual_value": actual_value,
+                        "expected": expected_text,
+                        "matched": matched,
+                        "validation": validation_label,
+                        "rule_type": matched_rule.get("rule_type"),
+                    }
+                )
+            else:
+                value_rows.append(
+                    {
+                        "Field": field,
+                        "Value": actual_value,
+                        "Expected": "",
+                        "Validation": "",
+                    }
+                )
+
+        display_df = pd.DataFrame(value_rows)
+        if not display_df.empty:
+            display_df = display_df.drop_duplicates(subset=["Field", "Value", "Expected", "Validation"], keep="first")
+        return display_df, validation_rows
 
     value_rows = []
     used_fields = set()
@@ -4554,9 +4613,14 @@ def format_exact_value(value):
     return str(value)
 
 
-def build_event_audit_rows(result: dict):
+def build_event_audit_rows(result: dict, allowed_event_names: Optional[List[str]] = None):
     execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
     network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
+    allowed_norms = {
+        normalize_event_name(name)
+        for name in (allowed_event_names or [])
+        if str(name or "").strip()
+    }
 
     execution_groups = build_event_groups(execution_events)
     network_groups = build_event_groups(network_events)
@@ -4567,6 +4631,8 @@ def build_event_audit_rows(result: dict):
             continue
         event_name = str(event.get("event_name") or "").strip() or "(unnamed event)"
         event_key = normalize_event_name(event_name) or event_name
+        if allowed_norms and event_key not in allowed_norms:
+            continue
         if event_key not in ordered_event_keys:
             ordered_event_keys.append(event_key)
 
@@ -4631,6 +4697,31 @@ def build_event_audit_rows(result: dict):
 
     rows.sort(key=lambda row: (STATUS_SORT_ORDER.get(row["status"], 99), row["event_name"].lower()))
     return rows
+
+
+def get_snapshot_event_name(snapshot: dict) -> str:
+    if not isinstance(snapshot, dict):
+        return ""
+
+    selected_event = snapshot.get("selected_event") or {}
+    if isinstance(selected_event, dict):
+        event_name = str(selected_event.get("event") or "").strip()
+        if event_name:
+            return event_name
+
+    execution_payload = snapshot.get("execution_payload") or {}
+    if isinstance(execution_payload, dict):
+        event_name = str(execution_payload.get("event_name") or "").strip()
+        if event_name:
+            return event_name
+
+    network_payload = snapshot.get("network_payload") or {}
+    if isinstance(network_payload, dict):
+        event_name = str(network_payload.get("event_name") or "").strip()
+        if event_name:
+            return event_name
+
+    return ""
 
 
 def build_event_detail_table(event_rows):
@@ -4951,6 +5042,12 @@ This capture is split into three layers:
                 if len(results) == 1:
                     result = results[0]
                     audit_summary = build_audit_focus_summary(result)
+                    snapshot = build_datalayer_snapshot_export(result)
+                    snapshot_event_name = get_snapshot_event_name(snapshot)
+                    scoped_event_rows = build_event_audit_rows(
+                        result,
+                        [snapshot_event_name] if snapshot_event_name else None,
+                    )
                     selected_template_rules = []
                     if selected_template:
                         selected_template_rules = [
@@ -4958,6 +5055,19 @@ This capture is split into three layers:
                             for rule in template_rules
                             if str(rule.get("template_id") or "").strip()
                             == str(selected_template.get("template_id") or "").strip()
+                        ]
+                    scoped_event_template_rules = selected_template_rules
+                    if snapshot_event_name:
+                        snapshot_event_norm = normalize_event_name(snapshot_event_name)
+                        scoped_event_template_rules = [
+                            rule
+                            for rule in selected_template_rules
+                            if str(rule.get("rule_scope") or "").strip().lower() != "event"
+                            or normalize_event_name(rule.get("field_name")) == snapshot_event_norm
+                            or snapshot_event_norm in {
+                                normalize_event_name(value)
+                                for value in parse_expected_values(rule.get("expected_values"))
+                            }
                         ]
 
                     log_written = False
@@ -4988,7 +5098,7 @@ This capture is split into three layers:
                         "Yes" if audit_summary["pageview_triggered"] else "No",
                     )
                     stat_col2.metric("Pageview Source", audit_summary["pageview_source"])
-                    stat_col3.metric("Events Fired", str(len(audit_summary["events_fired"])))
+                    stat_col3.metric("Events Shown", str(len(scoped_event_rows)))
                     stat_col4.metric("Container ID", audit_summary["container_id"])
                     stat_col5.metric("Measurement ID", audit_summary["measurement_id"])
                     stat_col6.metric(
@@ -5000,7 +5110,6 @@ This capture is split into three layers:
                         "Yes" if audit_summary["chartbeat_present"] else "No",
                     )
 
-                    snapshot = build_datalayer_snapshot_export(result)
                     if selected_template:
                         st.caption(
                             f"Template validation active: **{selected_template.get('template_name') or 'Unnamed template'}**"
@@ -5038,6 +5147,7 @@ This capture is split into three layers:
                             execution_display_df, _ = build_execution_validation_rows(
                                 snapshot,
                                 selected_template_rules,
+                                include_missing_rules=False,
                             )
                             if snapshot["execution_df"].empty:
                                 st.caption(
@@ -5063,15 +5173,15 @@ This capture is split into three layers:
 
                     st.markdown("### Events")
                     event_df = (
-                        build_event_validation_rows(audit_summary["event_rows"], selected_template_rules)
-                        if selected_template_rules
-                        else pd.DataFrame(audit_summary["event_rows"])
+                        build_event_validation_rows(scoped_event_rows, scoped_event_template_rules)
+                        if scoped_event_template_rules
+                        else pd.DataFrame(scoped_event_rows)
                     )
                     if event_df.empty:
-                        st.info("No GA4 events were detected during the audit window.")
+                        st.info("No GA4 event matched the selected DataLayer snapshot in this run.")
                     else:
                         st.caption(
-                            "Quick event summary only. Use DataLayer Snapshot above for the detailed field-by-field audit."
+                            "Quick event summary only. This section is scoped to the same event used in the DataLayer Snapshot above."
                         )
                         event_display_columns = ["event_name", "status", "times_fired", "capture_layer"]
                         if "expected" in event_df.columns:
