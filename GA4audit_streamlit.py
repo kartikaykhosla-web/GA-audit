@@ -2287,11 +2287,11 @@ VALIDATION_FAIL_LABEL = "Mismatch"
 VALIDATION_OPTIONAL_LABEL = "Optional"
 JAGRAN_STARTER_TEMPLATES = [
     {
-        "template_name": "Jagran Homepage",
+        "template_name": "Home Page",
         "domain_name": "www.jagran.com",
         "measurement_id": "G-3RLQSM7QQQ",
         "container_id": "GTM-5CTQK3",
-        "url_pattern": "https://www.jagran.com/",
+        "url_pattern": "https://www.jagran.com",
         "rules": [
             {"rule_scope": "event", "field_name": "page_view", "rule_type": "exact", "expected_values": "page_view"},
             {"rule_scope": "event", "field_name": "test_event", "rule_type": "exact", "expected_values": "test_event"},
@@ -3178,6 +3178,13 @@ def _normalize_rule_signature(rule_scope: str, field_name: str, rule_type: str, 
     )
 
 
+def get_homepage_starter_template() -> dict:
+    for seed in JAGRAN_STARTER_TEMPLATES:
+        if _normalize_template_name_key(seed.get("template_name")) in {"home page", "jagran homepage"}:
+            return seed
+    return JAGRAN_STARTER_TEMPLATES[0]
+
+
 def import_jagran_starter_templates(email_id: str, template_records: List[dict], template_rules: List[dict]):
     existing_templates_by_name = {
         _normalize_template_name_key(template.get("template_name")): template
@@ -3202,7 +3209,7 @@ def import_jagran_starter_templates(email_id: str, template_records: List[dict],
     updated_templates = 0
     added_rules = 0
 
-    for seed in JAGRAN_STARTER_TEMPLATES:
+    for seed in [get_homepage_starter_template()]:
         template_name_key = _normalize_template_name_key(seed.get("template_name"))
         existing_template = existing_templates_by_name.get(template_name_key)
 
@@ -3267,9 +3274,68 @@ def import_jagran_starter_templates(email_id: str, template_records: List[dict],
             added_rules += len(payloads_to_add)
 
     return True, (
-        f"Jagran starter templates synced. "
+        f"Homepage template synced. "
         f"Created {created_templates}, updated {updated_templates}, added {added_rules} rule(s)."
     )
+
+
+def reset_templates_to_homepage_only(email_id: str):
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        return False, "Google Sheets logging is not configured yet."
+
+    settings = get_template_sheet_settings()
+    template_ws, rules_ws = get_template_worksheets(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["template_worksheet_name"],
+        settings["template_rules_worksheet_name"],
+    )
+
+    homepage_seed = get_homepage_starter_template()
+    homepage_template_id = "tpl_home_page"
+    timestamp = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+
+    template_ws.clear()
+    rules_ws.clear()
+    ensure_fixed_headers(template_ws, TEMPLATE_HEADERS)
+    ensure_fixed_headers(rules_ws, TEMPLATE_RULE_HEADERS)
+
+    template_row = {
+        "template_id": homepage_template_id,
+        "template_name": homepage_seed.get("template_name"),
+        "domain_name": homepage_seed.get("domain_name"),
+        "measurement_id": homepage_seed.get("measurement_id"),
+        "container_id": homepage_seed.get("container_id"),
+        "url_pattern": homepage_seed.get("url_pattern"),
+        "active": "TRUE",
+        "created_by": email_id,
+        "created_at": timestamp,
+    }
+    template_ws.append_row(
+        [template_row.get(header, "") for header in TEMPLATE_HEADERS],
+        value_input_option="USER_ENTERED",
+    )
+
+    rule_rows = []
+    for index, rule in enumerate(homepage_seed.get("rules", []), start=1):
+        row_map = {
+            "rule_id": f"rule_home_page_{index:02d}",
+            "template_id": homepage_template_id,
+            "rule_scope": str(rule.get("rule_scope") or "").strip(),
+            "field_name": str(rule.get("field_name") or "").strip(),
+            "rule_type": str(rule.get("rule_type") or "").strip(),
+            "expected_values": str(rule.get("expected_values") or "").strip(),
+            "notes": str(rule.get("notes") or "").strip(),
+            "created_by": email_id,
+            "created_at": timestamp,
+        }
+        rule_rows.append([row_map.get(header, "") for header in TEMPLATE_RULE_HEADERS])
+
+    if rule_rows:
+        rules_ws.append_rows(rule_rows, value_input_option="USER_ENTERED")
+
+    return True, "Template Manager reset. Only the Home Page template remains."
 
 
 def render_sidebar_session(email_id: str):
@@ -5284,17 +5350,35 @@ if tab_template_manager is not None:
             st.error(template_load_error)
         else:
             st.caption(
-                "Templates are stored in the same Google Sheet backing this app. Only your account can add or edit them."
+                "Templates are stored in the same Google Sheet backing this app."
             )
 
             st.markdown("### Starter Templates")
-            st.caption("Seed the Jagran starter templates we mapped from sample URLs. Existing templates with the same name will be updated, and only missing rules will be added.")
-            if st.button("Import Jagran starter templates", key="import_jagran_starter_templates"):
-                success, response = import_jagran_starter_templates(
-                    logged_in_email,
-                    template_records,
-                    template_rules,
+            st.caption("Use this when you want the Template Manager to contain only the homepage template.")
+            action_col1, action_col2 = st.columns([1.2, 2.8])
+            with action_col1:
+                if st.button("Import homepage template", key="import_jagran_starter_templates"):
+                    success, response = import_jagran_starter_templates(
+                        logged_in_email,
+                        template_records,
+                        template_rules,
+                    )
+                    if success:
+                        st.success(response)
+                        st.rerun()
+                    else:
+                        st.error(response)
+            with action_col2:
+                reset_confirmed = st.checkbox(
+                    "I understand this will remove all saved templates except Home Page.",
+                    key="reset_templates_to_homepage_confirmed",
                 )
+            if st.button(
+                "Remove all templates except Home Page",
+                key="reset_templates_to_homepage_only",
+                disabled=not reset_confirmed,
+            ):
+                success, response = reset_templates_to_homepage_only(logged_in_email)
                 if success:
                     st.success(response)
                     st.rerun()
