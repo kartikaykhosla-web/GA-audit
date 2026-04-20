@@ -5229,6 +5229,77 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
         ]
         add_table(elements, column_labels, rows, widths)
 
+    def add_datalayer_snapshot_grid(elements: List[Any], detail_payload: Dict[str, Any]):
+        trigger_records = detail_payload.get("trigger_rows") or []
+        computed_records = detail_payload.get("computed_rows") or []
+        execution_records = detail_payload.get("execution_rows") or []
+        max_rows = max(len(trigger_records), len(computed_records), len(execution_records), 1)
+
+        table_data = [
+            [
+                Paragraph("Trigger Event", body_style),
+                "",
+                Paragraph("Computed State", body_style),
+                "",
+                Paragraph("Execution Payload", body_style),
+                "",
+                "",
+                "",
+            ],
+            [
+                Paragraph("Field", small_style),
+                Paragraph("Value", small_style),
+                Paragraph("Field", small_style),
+                Paragraph("Value", small_style),
+                Paragraph("Field", small_style),
+                Paragraph("Value", small_style),
+                Paragraph("Expected", small_style),
+                Paragraph("Validation", small_style),
+            ],
+        ]
+
+        for row_index in range(max_rows):
+            trigger_row = trigger_records[row_index] if row_index < len(trigger_records) else {}
+            computed_row = computed_records[row_index] if row_index < len(computed_records) else {}
+            execution_row = execution_records[row_index] if row_index < len(execution_records) else {}
+            table_data.append(
+                [
+                    p(trigger_row.get("Field", ""), 120),
+                    p(trigger_row.get("Value", ""), 190),
+                    p(computed_row.get("Field", ""), 120),
+                    p(computed_row.get("Value", ""), 190),
+                    p(execution_row.get("Field", ""), 120),
+                    p(execution_row.get("Value", ""), 220),
+                    p(execution_row.get("Expected", ""), 180),
+                    p(execution_row.get("Validation", ""), 80),
+                ]
+            )
+
+        snapshot_table = Table(
+            table_data,
+            colWidths=[70, 105, 70, 105, 70, 135, 120, 105],
+            repeatRows=2,
+        )
+        snapshot_table.setStyle(
+            TableStyle(
+                [
+                    ("SPAN", (0, 0), (1, 0)),
+                    ("SPAN", (2, 0), (3, 0)),
+                    ("SPAN", (4, 0), (7, 0)),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#111827")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#e5e7eb")),
+                    ("TEXTCOLOR", (0, 1), (-1, 1), colors.HexColor("#111827")),
+                    ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#9ca3af")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("FONTNAME", (0, 0), (-1, 1), "Helvetica-Bold"),
+                    ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                    ("ROWBACKGROUNDS", (0, 2), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
+                ]
+            )
+        )
+        elements.append(snapshot_table)
+
     generated_at = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S %Z")
     issue_rows = [row for row in report_rows if row.get("audit_outcome") == "Issue"]
     passed_rows = [row for row in report_rows if row.get("audit_outcome") != "Issue"]
@@ -5334,30 +5405,7 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
 
         elements.append(Spacer(1, 8))
         elements.append(Paragraph("DataLayer Snapshot", heading_style))
-        add_records_table(
-            elements,
-            "Trigger Event",
-            detail_payload.get("trigger_rows") or [],
-            ["Field", "Value"],
-            ["Field", "Value"],
-            [170, 590],
-        )
-        add_records_table(
-            elements,
-            "Computed State",
-            detail_payload.get("computed_rows") or [],
-            ["Field", "Value"],
-            ["Field", "Value"],
-            [170, 590],
-        )
-        add_records_table(
-            elements,
-            "Execution Payload / Custom Dimensions",
-            detail_payload.get("execution_rows") or [],
-            ["Field", "Value", "Expected", "Validation"],
-            ["Field", "Value", "Expected", "Validation"],
-            [145, 245, 250, 90],
-        )
+        add_datalayer_snapshot_grid(elements, detail_payload)
 
         elements.append(Spacer(1, 8))
         elements.append(Paragraph("Events", heading_style))
