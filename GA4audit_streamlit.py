@@ -4440,6 +4440,13 @@ def parse_expected_values(raw_value: str) -> List[str]:
     return [part.strip() for part in pieces if part.strip()]
 
 
+def parse_regex_patterns(raw_value: str) -> List[str]:
+    text = str(raw_value or "").strip()
+    if not text:
+        return []
+    return [part.strip() for part in re.split(r"[\n\r]+", text) if part.strip()]
+
+
 def normalize_expected_values_input(raw_value: str) -> str:
     return "|".join(parse_expected_values(raw_value))
 
@@ -4593,7 +4600,14 @@ def evaluate_value_rule(rule_type: str, expected_values_text: str, actual_value:
         return False, VALIDATION_FAIL_LABEL
 
     if rule == "regex":
-        matched = any(re.search(pattern, actual_text) for pattern in expected_values if pattern)
+        matched = False
+        for pattern in parse_regex_patterns(expected_values_text):
+            try:
+                if re.search(pattern, actual_text):
+                    matched = True
+                    break
+            except re.error:
+                continue
         return matched, VALIDATION_PASS_LABEL if matched else VALIDATION_FAIL_LABEL
 
     if rule == "contains":
