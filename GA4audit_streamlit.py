@@ -3554,74 +3554,105 @@ def parse_ga_mapping_excel_templates(
     return imported_templates, notes
 
 
-def replace_templates_with_seed_templates(email_id: str, template_seeds: List[dict], source_label: str):
-    service_account_info = get_service_account_info()
-    if not service_account_info:
-        return False, "Google Sheets logging is not configured yet."
-
+def add_templates_from_seed_templates(
+    email_id: str,
+    template_seeds: List[dict],
+    template_records: List[dict],
+    template_rules: List[dict],
+    source_label: str,
+):
     seeds = [seed for seed in (template_seeds or []) if isinstance(seed, dict)]
     if not seeds:
         return False, "No templates were found to import."
 
-    settings = get_template_sheet_settings()
-    template_ws, rules_ws = get_template_worksheets(
-        json.dumps(service_account_info),
-        settings["spreadsheet_id"],
-        settings["template_worksheet_name"],
-        settings["template_rules_worksheet_name"],
-    )
+    existing_templates_by_name = {
+        _normalize_template_name_key(template.get("template_name")): template
+        for template in (template_records or [])
+        if str(template.get("template_name") or "").strip()
+    }
+    rules_by_template: Dict[str, Set[Tuple[str, str, str, str]]] = {}
+    for rule in template_rules or []:
+        template_id = str(rule.get("template_id") or "").strip()
+        if not template_id:
+            continue
+        rules_by_template.setdefault(template_id, set()).add(
+            _normalize_rule_signature(
+                rule.get("rule_scope"),
+                rule.get("field_name"),
+                rule.get("rule_type"),
+                rule.get("expected_values"),
+            )
+        )
 
-    template_ws.clear()
-    rules_ws.clear()
-    ensure_fixed_headers(template_ws, TEMPLATE_HEADERS)
-    ensure_fixed_headers(rules_ws, TEMPLATE_RULE_HEADERS)
-
-    timestamp = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
-    template_rows = []
-    rule_rows = []
-    used_template_ids = set()
+    created_templates = 0
+    updated_templates = 0
+    rules_to_add = []
 
     for seed in seeds:
-        base_id = f"tpl_{_slugify_identifier(seed.get('template_name'))}"
-        template_id = base_id
-        suffix = 2
-        while template_id in used_template_ids:
-            template_id = f"{base_id}_{suffix}"
-            suffix += 1
-        used_template_ids.add(template_id)
-
-        template_row = {
-            "template_id": template_id,
+        template_name_key = _normalize_template_name_key(seed.get("template_name"))
+        existing_template = existing_templates_by_name.get(template_name_key)
+        template_payload = {
             "template_name": str(seed.get("template_name") or "").strip(),
             "domain_name": str(seed.get("domain_name") or "").strip(),
             "measurement_id": str(seed.get("measurement_id") or "").strip(),
             "container_id": str(seed.get("container_id") or "").strip(),
             "url_pattern": str(seed.get("url_pattern") or "").strip(),
-            "active": "TRUE",
-            "created_by": email_id,
-            "created_at": timestamp,
+            "active": True,
         }
-        template_rows.append([template_row.get(header, "") for header in TEMPLATE_HEADERS])
 
-        for index, rule in enumerate(seed.get("rules") or [], start=1):
-            row_map = {
-                "rule_id": f"rule_{_slugify_identifier(template_id)}_{index:03d}",
+        if existing_template:
+            success, response = update_template_record(
+                email_id,
+                existing_template.get("template_id"),
+                template_payload,
+            )
+            if not success:
+                return False, response
+            template_id = str(existing_template.get("template_id") or "").strip()
+            updated_templates += 1
+        else:
+            success, response = append_template_record(email_id, template_payload)
+            if not success:
+                return False, response
+            template_id = str(response or "").strip()
+            existing_templates_by_name[template_name_key] = {
+                **template_payload,
                 "template_id": template_id,
-                "rule_scope": str(rule.get("rule_scope") or "").strip(),
-                "field_name": str(rule.get("field_name") or "").strip(),
-                "rule_type": str(rule.get("rule_type") or "").strip(),
-                "expected_values": str(rule.get("expected_values") or "").strip(),
-                "notes": str(rule.get("notes") or "").strip(),
-                "created_by": email_id,
-                "created_at": timestamp,
+                "active": True,
             }
-            rule_rows.append([row_map.get(header, "") for header in TEMPLATE_RULE_HEADERS])
+            created_templates += 1
 
-    template_ws.append_rows(template_rows, value_input_option="USER_ENTERED")
-    if rule_rows:
-        rules_ws.append_rows(rule_rows, value_input_option="USER_ENTERED")
+        existing_signatures = rules_by_template.setdefault(template_id, set())
+        for rule in seed.get("rules") or []:
+            signature = _normalize_rule_signature(
+                rule.get("rule_scope"),
+                rule.get("field_name"),
+                rule.get("rule_type"),
+                rule.get("expected_values"),
+            )
+            if signature in existing_signatures:
+                continue
+            rules_to_add.append(
+                {
+                    "template_id": template_id,
+                    "rule_scope": str(rule.get("rule_scope") or "").strip(),
+                    "field_name": str(rule.get("field_name") or "").strip(),
+                    "rule_type": str(rule.get("rule_type") or "").strip(),
+                    "expected_values": str(rule.get("expected_values") or "").strip(),
+                    "notes": str(rule.get("notes") or "").strip(),
+                }
+            )
+            existing_signatures.add(signature)
 
-    return True, f"{source_label}: imported {len(template_rows)} template(s) and {len(rule_rows)} rule(s)."
+    if rules_to_add:
+        success, response = append_template_rules(email_id, rules_to_add)
+        if not success:
+            return False, response
+
+    return True, (
+        f"{source_label}: added {created_templates} template(s), "
+        f"updated {updated_templates}, added {len(rules_to_add)} rule(s)."
+    )
 
 
 def get_homepage_starter_template() -> dict:
@@ -5881,25 +5912,27 @@ if tab_template_manager is not None:
                     st.error(f"Could not read GA mapping Excel: {exc}")
 
             keep_homepage_template = st.checkbox(
-                "Also keep the Home Page starter template",
+                "Also add/update the Home Page starter template",
                 value=True,
                 key="ga_mapping_import_keep_homepage",
             )
-            replace_mapping_confirmed = st.checkbox(
-                "I understand this will replace the current Template Manager rows with the imported mapping.",
-                key="ga_mapping_import_replace_confirmed",
+            add_mapping_confirmed = st.checkbox(
+                "I understand this will add templates from the workbook and update matching template names.",
+                key="ga_mapping_import_add_confirmed",
             )
             if st.button(
-                "Replace templates with GA mapping",
-                key="replace_templates_with_ga_mapping",
-                disabled=mapping_file is None or not imported_mapping_templates or not replace_mapping_confirmed,
+                "Add GA mapping templates",
+                key="add_templates_from_ga_mapping",
+                disabled=mapping_file is None or not imported_mapping_templates or not add_mapping_confirmed,
             ):
                 seeds_to_import = list(imported_mapping_templates)
                 if keep_homepage_template:
                     seeds_to_import = [get_homepage_starter_template(), *seeds_to_import]
-                success, response = replace_templates_with_seed_templates(
+                success, response = add_templates_from_seed_templates(
                     logged_in_email,
                     seeds_to_import,
+                    template_records,
+                    template_rules,
                     "GA mapping templates",
                 )
                 if success:
