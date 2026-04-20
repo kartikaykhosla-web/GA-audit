@@ -3859,14 +3859,15 @@ active_templates = [
     if template.get("active")
 ]
 
-tab_labels = ["Audit URLs", "Compare Prod vs Stage"]
+tab_labels = ["Audit URLs", "Domain Audit", "Compare Prod vs Stage"]
 if is_template_admin(logged_in_email):
     tab_labels.append("Template Manager")
 
 tabs = st.tabs(tab_labels)
 tab_main = tabs[0]
-tab_compare = tabs[1]
-tab_template_manager = tabs[2] if len(tabs) > 2 else None
+tab_domain_audit = tabs[1]
+tab_compare = tabs[2]
+tab_template_manager = tabs[3] if len(tabs) > 3 else None
 
 
 def load_json_payload(raw_value, fallback):
@@ -4799,6 +4800,375 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
             )
 
     return pd.DataFrame(display_rows)
+
+
+DOMAIN_AUDIT_TEMPLATE_LIMIT = 3
+
+
+def get_template_domain_label(template: dict) -> str:
+    return str(template.get("domain_name") or "").strip() or "Unspecified domain"
+
+
+def split_template_reference_patterns(raw_value: str) -> List[str]:
+    pieces: List[str] = []
+    for line in str(raw_value or "").splitlines():
+        for part in line.split("|"):
+            text = part.strip()
+            if text:
+                pieces.append(text)
+    return pieces
+
+
+def _pattern_to_candidate_url(pattern: str) -> str:
+    text = str(pattern or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", "", text)
+    text = text.replace("*", "")
+    text = text.replace("\\", "")
+    text = re.sub(r"[\[\]\(\)\{\}\^\$]+", "", text)
+    if not text:
+        return ""
+    if text.endswith("."):
+        text = text[:-1]
+    return text
+
+
+def choose_template_sample_url(template: dict) -> Tuple[str, str]:
+    patterns = split_template_reference_patterns(template.get("url_pattern") or "")
+    exact_candidates = [pattern for pattern in patterns if "*" not in pattern and not re.search(r"[\[\]\(\)\{\}\^\$]", pattern)]
+    fallback_candidates = [pattern for pattern in patterns if pattern not in exact_candidates]
+
+    for pattern in [*exact_candidates, *fallback_candidates]:
+        candidate = _pattern_to_candidate_url(pattern)
+        if not candidate:
+            continue
+        _, normalized_url, input_error = normalize_single_url(candidate)
+        if not input_error:
+            return normalized_url, ""
+
+    return "", "No usable reference URL/pattern found for this template."
+
+
+def template_search_blob(template: dict) -> str:
+    return " ".join(
+        [
+            str(template.get("template_name") or ""),
+            get_template_domain_label(template),
+            str(template.get("measurement_id") or ""),
+            str(template.get("container_id") or ""),
+            str(template.get("url_pattern") or ""),
+        ]
+    ).lower()
+
+
+def pick_first_matching_template(templates: List[dict], terms: List[str], used_ids: Set[str]) -> Optional[dict]:
+    for template in templates:
+        template_id = str(template.get("template_id") or "").strip()
+        if template_id in used_ids:
+            continue
+        blob = template_search_blob(template)
+        if any(term in blob for term in terms):
+            return template
+    return None
+
+
+def select_domain_audit_templates(domain_templates: List[dict], limit: int = DOMAIN_AUDIT_TEMPLATE_LIMIT) -> List[dict]:
+    sorted_templates = sorted(
+        domain_templates or [],
+        key=lambda template: str(template.get("template_name") or "").lower(),
+    )
+    selected: List[dict] = []
+    used_ids: Set[str] = set()
+
+    for terms in (
+        ["home page", "homepage", "home"],
+        ["article detail", "article"],
+        ["listing", "landing"],
+    ):
+        match = pick_first_matching_template(sorted_templates, terms, used_ids)
+        if match:
+            selected.append(match)
+            used_ids.add(str(match.get("template_id") or "").strip())
+        if len(selected) >= limit:
+            return selected[:limit]
+
+    for template in sorted_templates:
+        template_id = str(template.get("template_id") or "").strip()
+        if template_id in used_ids:
+            continue
+        selected.append(template)
+        used_ids.add(template_id)
+        if len(selected) >= limit:
+            break
+
+    return selected[:limit]
+
+
+def build_domain_audit_plan(domain_templates: List[dict], limit: int = DOMAIN_AUDIT_TEMPLATE_LIMIT) -> List[dict]:
+    plan_rows = []
+    for template in select_domain_audit_templates(domain_templates, limit=limit):
+        sample_url, sample_error = choose_template_sample_url(template)
+        plan_rows.append(
+            {
+                "template": template,
+                "template_id": str(template.get("template_id") or "").strip(),
+                "template_name": str(template.get("template_name") or "Unnamed template"),
+                "sample_url": sample_url,
+                "sample_error": sample_error,
+            }
+        )
+    return plan_rows
+
+
+def summarize_validation_failures(
+    result: dict,
+    template: dict,
+    selected_template_rules: List[dict],
+) -> Dict[str, Any]:
+    audit_summary = build_audit_focus_summary(result)
+    snapshot = build_datalayer_snapshot_export(result)
+    _, execution_validation_rows = build_execution_validation_rows(snapshot, selected_template_rules)
+    event_df = build_event_validation_rows(audit_summary["event_rows"], selected_template_rules)
+
+    execution_failures = []
+    for row in execution_validation_rows:
+        if row.get("validation") != VALIDATION_FAIL_LABEL:
+            continue
+        execution_failures.append(
+            f"{row.get('field_name')}: expected {row.get('expected') or 'configured rule'}, got {row.get('actual_value')}"
+        )
+
+    event_failures = []
+    if isinstance(event_df, pd.DataFrame) and not event_df.empty and "validation" in event_df.columns:
+        for _, event_row in event_df.iterrows():
+            if event_row.get("validation") != VALIDATION_FAIL_LABEL:
+                continue
+            expected = event_row.get("expected") or event_row.get("event_name") or "configured event"
+            status = event_row.get("status") or "not observed"
+            event_failures.append(f"{expected}: {status}")
+
+    issue_parts = []
+    if str(result.get("issues") or "").strip():
+        issue_parts.append(str(result.get("issues")).strip())
+    if not audit_summary["pageview_triggered"]:
+        issue_parts.append("page_view was not triggered")
+    if execution_failures:
+        issue_parts.append(f"{len(execution_failures)} execution validation mismatch(es)")
+    if event_failures:
+        issue_parts.append(f"{len(event_failures)} event validation mismatch(es)")
+
+    return {
+        "pageview_triggered": audit_summary["pageview_triggered"],
+        "pageview_source": audit_summary["pageview_source"],
+        "container_id": audit_summary["container_id"],
+        "measurement_id": audit_summary["measurement_id"],
+        "events_fired": audit_summary["events_fired"],
+        "events_count": len(audit_summary["events_fired"]),
+        "comscore_present": audit_summary["comscore_present"],
+        "chartbeat_present": audit_summary["chartbeat_present"],
+        "execution_failures": execution_failures,
+        "event_failures": event_failures,
+        "issues": " | ".join(issue_parts),
+        "audit_outcome": "Issue" if issue_parts else "Pass",
+        "implementation_status": result.get("status") or "",
+        "audit_duration_seconds": result.get("audit_duration_seconds") or 0,
+        "template_name": template.get("template_name") or "Unnamed template",
+        "template_id": template.get("template_id") or "",
+    }
+
+
+def build_domain_audit_report_row(
+    domain_name: str,
+    template: dict,
+    sample_url: str,
+    result: Optional[dict] = None,
+    error_message: str = "",
+) -> Dict[str, Any]:
+    if not result:
+        return {
+            "domain": domain_name,
+            "template_name": template.get("template_name") or "Unnamed template",
+            "sample_url": sample_url,
+            "audit_outcome": "Issue",
+            "implementation_status": "ERROR",
+            "pageview_triggered": False,
+            "pageview_source": "Not tested",
+            "events_count": 0,
+            "events_fired": "",
+            "container_id": "Not found",
+            "measurement_id": "Not found",
+            "comscore_present": False,
+            "chartbeat_present": False,
+            "issues": error_message or "Audit did not complete.",
+            "execution_failures": [],
+            "event_failures": [],
+            "audit_duration_seconds": 0,
+        }
+
+    selected_template_rules = [
+        rule
+        for rule in template_rules
+        if str(rule.get("template_id") or "").strip() == str(template.get("template_id") or "").strip()
+    ]
+    validation_summary = summarize_validation_failures(result, template, selected_template_rules)
+    return {
+        "domain": domain_name,
+        "template_name": validation_summary["template_name"],
+        "sample_url": sample_url,
+        "audit_outcome": validation_summary["audit_outcome"],
+        "implementation_status": validation_summary["implementation_status"],
+        "pageview_triggered": validation_summary["pageview_triggered"],
+        "pageview_source": validation_summary["pageview_source"],
+        "events_count": validation_summary["events_count"],
+        "events_fired": ", ".join(validation_summary["events_fired"]) or "None",
+        "container_id": validation_summary["container_id"],
+        "measurement_id": validation_summary["measurement_id"],
+        "comscore_present": validation_summary["comscore_present"],
+        "chartbeat_present": validation_summary["chartbeat_present"],
+        "issues": validation_summary["issues"],
+        "execution_failures": validation_summary["execution_failures"],
+        "event_failures": validation_summary["event_failures"],
+        "audit_duration_seconds": validation_summary["audit_duration_seconds"],
+    }
+
+
+def _short_report_text(value: Any, limit: int = 240) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit - 3]}..."
+
+
+def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
+    import html
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=24,
+        leftMargin=24,
+        topMargin=24,
+        bottomMargin=24,
+    )
+    styles = getSampleStyleSheet()
+    title_style = styles["Title"]
+    heading_style = styles["Heading2"]
+    body_style = ParagraphStyle(
+        "DomainAuditBody",
+        parent=styles["BodyText"],
+        fontSize=8,
+        leading=10,
+        wordWrap="CJK",
+    )
+    small_style = ParagraphStyle(
+        "DomainAuditSmall",
+        parent=styles["BodyText"],
+        fontSize=7,
+        leading=8,
+        wordWrap="CJK",
+    )
+
+    def p(value: Any, limit: int = 320):
+        return Paragraph(html.escape(_short_report_text(value, limit)), small_style)
+
+    def add_table(elements: List[Any], headers: List[str], rows: List[List[Any]], widths: List[int]):
+        table_data = [[Paragraph(html.escape(header), body_style) for header in headers]]
+        for row in rows:
+            table_data.append([p(cell) for cell in row])
+        table = Table(table_data, colWidths=widths, repeatRows=1)
+        table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#111827")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#9ca3af")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
+                ]
+            )
+        )
+        elements.append(table)
+
+    generated_at = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S %Z")
+    issue_rows = [row for row in report_rows if row.get("audit_outcome") == "Issue"]
+    passed_rows = [row for row in report_rows if row.get("audit_outcome") != "Issue"]
+
+    elements: List[Any] = [
+        Paragraph(f"GA4 Domain Audit Report: {html.escape(domain_name)}", title_style),
+        Paragraph(
+            html.escape(
+                f"Generated {generated_at}. Tested {len(report_rows)} template URL(s): "
+                f"{len(issue_rows)} with issue(s), {len(passed_rows)} passed."
+            ),
+            body_style,
+        ),
+        Spacer(1, 12),
+        Paragraph("URLs Needing Attention", heading_style),
+    ]
+
+    if issue_rows:
+        add_table(
+            elements,
+            ["Template", "URL", "Issues"],
+            [
+                [
+                    row.get("template_name"),
+                    row.get("sample_url"),
+                    row.get("issues") or "Issue observed",
+                ]
+                for row in issue_rows
+            ],
+            [130, 260, 390],
+        )
+    else:
+        elements.append(Paragraph("No issues were detected in this run.", body_style))
+
+    elements.extend([Spacer(1, 14), Paragraph("Full Audit Results", heading_style)])
+    add_table(
+        elements,
+        ["Template", "URL", "Outcome", "Pageview", "Events", "GA IDs", "Comscore", "Chartbeat", "Issues"],
+        [
+            [
+                row.get("template_name"),
+                row.get("sample_url"),
+                row.get("audit_outcome"),
+                f"{'Yes' if row.get('pageview_triggered') else 'No'} ({row.get('pageview_source')})",
+                f"{row.get('events_count')} - {row.get('events_fired')}",
+                f"{row.get('measurement_id')} / {row.get('container_id')}",
+                "Yes" if row.get("comscore_present") else "No",
+                "Yes" if row.get("chartbeat_present") else "No",
+                row.get("issues") or "None",
+            ]
+            for row in report_rows
+        ],
+        [105, 205, 55, 75, 105, 95, 45, 50, 145],
+    )
+
+    detailed_rows = []
+    for row in report_rows:
+        for failure in row.get("execution_failures") or []:
+            detailed_rows.append([row.get("template_name"), row.get("sample_url"), "Execution", failure])
+        for failure in row.get("event_failures") or []:
+            detailed_rows.append([row.get("template_name"), row.get("sample_url"), "Event", failure])
+
+    if detailed_rows:
+        elements.extend([Spacer(1, 14), Paragraph("Validation Failure Details", heading_style)])
+        add_table(
+            elements,
+            ["Template", "URL", "Layer", "Failure"],
+            detailed_rows,
+            [130, 260, 80, 310],
+        )
+
+    doc.build(elements)
+    return buffer.getvalue()
 
 
 def style_validation_table(dataframe: pd.DataFrame, validation_column: str):
@@ -5858,6 +6228,223 @@ This capture is split into three layers:
                             "No consent click was performed.",
                         )
 
+
+with tab_domain_audit:
+    st.markdown(
+        """
+Run a controlled domain-level audit from saved templates.
+
+For this first testing version, each domain run is capped to **three templates**:
+- homepage
+- article detail
+- one listing/landing template
+
+The app audits one URL at a time and generates a PDF report that includes every tested URL, whether it passed or failed.
+"""
+    )
+
+    if template_load_error:
+        st.info(template_load_error)
+    else:
+        domain_wait_seconds = st.slider(
+            "Wait time per URL after page load (seconds)",
+            min_value=4,
+            max_value=20,
+            value=8,
+            key="domain_audit_wait_seconds",
+        )
+
+        active_domain_templates = [template for template in active_templates if template.get("active")]
+        domain_names = sorted(
+            {get_template_domain_label(template) for template in active_domain_templates},
+            key=str.lower,
+        )
+
+        if not domain_names:
+            st.info("No active templates are available. Add templates in Template Manager first.")
+        else:
+            st.markdown("### Domains")
+            st.caption(
+                "Each Run audit button uses one sample URL from each selected template. "
+                "This keeps the test safe for Streamlit memory while we validate the report."
+            )
+
+            requested_domain = ""
+            header_cols = st.columns([2.0, 1.0, 1.1, 3.0, 1.0])
+            for col, label in zip(
+                header_cols,
+                ["Domain", "Templates", "Test size", "Templates selected for this test", "Action"],
+            ):
+                col.markdown(f"**{label}**")
+
+            for domain_name in domain_names:
+                domain_templates = [
+                    template
+                    for template in active_domain_templates
+                    if get_template_domain_label(template) == domain_name
+                ]
+                domain_plan = build_domain_audit_plan(domain_templates, limit=DOMAIN_AUDIT_TEMPLATE_LIMIT)
+                template_names = ", ".join(row["template_name"] for row in domain_plan) or "No usable templates"
+                row_cols = st.columns([2.0, 1.0, 1.1, 3.0, 1.0])
+                row_cols[0].write(domain_name)
+                row_cols[1].write(str(len(domain_templates)))
+                row_cols[2].write(str(len(domain_plan)))
+                row_cols[3].write(template_names)
+                button_key = f"run_domain_audit_{re.sub(r'[^a-zA-Z0-9_]+', '_', domain_name)}"
+                if row_cols[4].button("Run audit", key=button_key, disabled=not domain_plan):
+                    requested_domain = domain_name
+
+            if requested_domain:
+                domain_templates = [
+                    template
+                    for template in active_domain_templates
+                    if get_template_domain_label(template) == requested_domain
+                ]
+                audit_plan = build_domain_audit_plan(domain_templates, limit=DOMAIN_AUDIT_TEMPLATE_LIMIT)
+
+                st.markdown(f"### Running Domain Audit: {requested_domain}")
+                plan_preview_df = pd.DataFrame(
+                    [
+                        {
+                            "Template": row["template_name"],
+                            "Sample URL": row["sample_url"] or "Not available",
+                            "Issue": row["sample_error"],
+                        }
+                        for row in audit_plan
+                    ]
+                )
+                st.dataframe(plan_preview_df, use_container_width=True, hide_index=True)
+
+                progress = st.progress(0)
+                status_box = st.empty()
+                report_rows = []
+
+                for index, plan_row in enumerate(audit_plan, start=1):
+                    template = plan_row["template"]
+                    sample_url = plan_row["sample_url"]
+                    sample_error = plan_row["sample_error"]
+                    status_box.write(
+                        f"Auditing {plan_row['template_name']} ({index}/{len(audit_plan)})"
+                    )
+
+                    if sample_error or not sample_url:
+                        report_rows.append(
+                            build_domain_audit_report_row(
+                                requested_domain,
+                                template,
+                                sample_url,
+                                result=None,
+                                error_message=sample_error,
+                            )
+                        )
+                        progress.progress(index / len(audit_plan))
+                        continue
+
+                    driver = None
+                    try:
+                        driver = create_driver(headless=True)
+                        result = audit_single_url(driver, sample_url, domain_wait_seconds)
+                        report_rows.append(
+                            build_domain_audit_report_row(
+                                requested_domain,
+                                template,
+                                sample_url,
+                                result=result,
+                            )
+                        )
+                    except Exception as exc:
+                        report_rows.append(
+                            build_domain_audit_report_row(
+                                requested_domain,
+                                template,
+                                sample_url,
+                                result=None,
+                                error_message=str(exc),
+                            )
+                        )
+                    finally:
+                        if driver is not None:
+                            try:
+                                driver.quit()
+                            except Exception:
+                                pass
+
+                    progress.progress(index / len(audit_plan))
+                    time.sleep(0.5)
+
+                status_box.write("Domain audit complete.")
+                st.session_state["domain_audit_report_domain"] = requested_domain
+                st.session_state["domain_audit_report_rows"] = report_rows
+
+            report_rows = st.session_state.get("domain_audit_report_rows") or []
+            report_domain = st.session_state.get("domain_audit_report_domain") or ""
+            if report_rows:
+                st.markdown("### Latest Domain Audit Report")
+                st.caption(f"Domain: {report_domain}")
+
+                issue_rows = [row for row in report_rows if row.get("audit_outcome") == "Issue"]
+                metric_col1, metric_col2, metric_col3 = st.columns(3)
+                metric_col1.metric("URLs tested", len(report_rows))
+                metric_col2.metric("URLs with issues", len(issue_rows))
+                metric_col3.metric("Passed", len(report_rows) - len(issue_rows))
+
+                issues_df = pd.DataFrame(
+                    [
+                        {
+                            "Template": row.get("template_name"),
+                            "URL": row.get("sample_url"),
+                            "Issues": row.get("issues"),
+                        }
+                        for row in issue_rows
+                    ]
+                )
+                if issues_df.empty:
+                    st.success("No issues were detected in the latest domain audit.")
+                else:
+                    st.markdown("#### URLs Needing Attention")
+                    st.dataframe(issues_df, use_container_width=True, hide_index=True)
+
+                full_report_df = pd.DataFrame(
+                    [
+                        {
+                            "Template": row.get("template_name"),
+                            "URL": row.get("sample_url"),
+                            "Outcome": row.get("audit_outcome"),
+                            "Implementation Status": row.get("implementation_status"),
+                            "Pageview Triggered": "Yes" if row.get("pageview_triggered") else "No",
+                            "Pageview Source": row.get("pageview_source"),
+                            "Events Fired": row.get("events_count"),
+                            "Measurement ID": row.get("measurement_id"),
+                            "Container ID": row.get("container_id"),
+                            "Comscore": "Yes" if row.get("comscore_present") else "No",
+                            "Chartbeat": "Yes" if row.get("chartbeat_present") else "No",
+                            "Issues": row.get("issues") or "None",
+                        }
+                        for row in report_rows
+                    ]
+                )
+                st.markdown("#### Full Audit Results")
+                st.dataframe(full_report_df, use_container_width=True, hide_index=True)
+
+                download_col1, download_col2 = st.columns([1, 1])
+                download_col1.download_button(
+                    "Download domain audit CSV",
+                    full_report_df.to_csv(index=False).encode("utf-8"),
+                    export_filename("domain_audit_report", "csv"),
+                    "text/csv",
+                )
+                try:
+                    pdf_bytes = build_domain_audit_pdf(report_domain, report_rows)
+                    download_col2.download_button(
+                        "Download domain audit PDF",
+                        pdf_bytes,
+                        export_filename("domain_audit_report", "pdf"),
+                        "application/pdf",
+                    )
+                except Exception as exc:
+                    st.warning(f"PDF report could not be generated. {exc}")
+
+
 with tab_compare:
     st.markdown("Compare tagging between two URLs, typically Prod vs Stage.")
 
@@ -5926,9 +6513,6 @@ if tab_template_manager is not None:
             for rule in template_rules:
                 template_rules_by_template.setdefault(str(rule.get("template_id") or "").strip(), []).append(rule)
             rule_scope_labels = {value: label for label, value in RULE_SCOPE_OPTIONS.items()}
-
-            def get_template_domain_label(template: dict) -> str:
-                return str(template.get("domain_name") or "").strip() or "Unspecified domain"
 
             domain_options = sorted(
                 {get_template_domain_label(template) for template in template_records},
