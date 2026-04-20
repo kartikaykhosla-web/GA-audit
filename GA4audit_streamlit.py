@@ -4978,6 +4978,86 @@ def summarize_validation_failures(
     }
 
 
+def dataframe_report_records(dataframe: pd.DataFrame, columns: Optional[List[str]] = None, limit: int = 40) -> List[dict]:
+    if not isinstance(dataframe, pd.DataFrame) or dataframe.empty:
+        return []
+
+    frame = dataframe.copy()
+    if columns:
+        existing_columns = [column for column in columns if column in frame.columns]
+        frame = frame[existing_columns] if existing_columns else frame
+    frame = frame.head(limit)
+    records = []
+    for record in frame.fillna("").to_dict("records"):
+        records.append({str(key): format_exact_value(value) for key, value in record.items()})
+    return records
+
+
+def build_domain_audit_detail_payload(result: dict, selected_template_rules: List[dict]) -> Dict[str, Any]:
+    audit_summary = build_audit_focus_summary(result)
+    snapshot = build_datalayer_snapshot_export(result)
+
+    if selected_template_rules:
+        execution_display_df, _ = build_execution_validation_rows(snapshot, selected_template_rules)
+    else:
+        execution_display_df = snapshot["execution_df"]
+        if execution_display_df.empty and not snapshot["network_df"].empty:
+            execution_display_df = snapshot["network_df"]
+
+    event_df = (
+        build_event_validation_rows(audit_summary["event_rows"], selected_template_rules)
+        if selected_template_rules
+        else pd.DataFrame(audit_summary["event_rows"])
+    )
+    event_display_columns = ["event_name", "status", "times_fired", "capture_layer"]
+    if isinstance(event_df, pd.DataFrame) and not event_df.empty:
+        if "expected" in event_df.columns:
+            event_display_columns.append("expected")
+        if "validation" in event_df.columns:
+            event_display_columns.append("validation")
+
+    comscore_df = pd.DataFrame(audit_summary.get("comscore_rows") or [])
+    if not comscore_df.empty:
+        comscore_columns = [
+            column
+            for column in ["hit_type", "times_fired", "status_chain", "c1", "c2", "c7", "c8"]
+            if column in comscore_df.columns
+        ]
+    else:
+        comscore_columns = []
+
+    chartbeat_rows = audit_summary.get("chartbeat_rows") or []
+    total_chartbeat_fires = sum(
+        int(row.get("times_fired") or 0)
+        for row in chartbeat_rows
+        if isinstance(row, dict)
+    )
+    if audit_summary["chartbeat_present"] and total_chartbeat_fires <= 0:
+        total_chartbeat_fires = 1
+    chartbeat_df = pd.DataFrame(
+        [
+            {
+                "Check": "Chartbeat ping",
+                "Fired": "Yes" if audit_summary["chartbeat_present"] else "No",
+                "Times Fired": total_chartbeat_fires,
+            }
+        ]
+    )
+
+    return {
+        "trigger_rows": dataframe_report_records(snapshot["trigger_df"], ["Field", "Value"]),
+        "computed_rows": dataframe_report_records(snapshot["computed_df"], ["Field", "Value"]),
+        "execution_rows": dataframe_report_records(
+            execution_display_df,
+            ["Field", "Value", "Expected", "Validation"],
+        ),
+        "event_rows": dataframe_report_records(event_df, event_display_columns),
+        "comscore_rows": dataframe_report_records(comscore_df, comscore_columns),
+        "chartbeat_rows": dataframe_report_records(chartbeat_df),
+        "selected_datalayer_index": snapshot.get("selected_index"),
+    }
+
+
 def build_domain_audit_report_row(
     domain_name: str,
     template: dict,
@@ -4994,6 +5074,7 @@ def build_domain_audit_report_row(
             "implementation_status": "ERROR",
             "pageview_triggered": False,
             "pageview_source": "Not tested",
+            "ga_present": False,
             "events_count": 0,
             "events_fired": "",
             "container_id": "Not found",
@@ -5004,6 +5085,7 @@ def build_domain_audit_report_row(
             "execution_failures": [],
             "event_failures": [],
             "audit_duration_seconds": 0,
+            "detail_payload": {},
         }
 
     selected_template_rules = [
@@ -5012,6 +5094,13 @@ def build_domain_audit_report_row(
         if str(rule.get("template_id") or "").strip() == str(template.get("template_id") or "").strip()
     ]
     validation_summary = summarize_validation_failures(result, template, selected_template_rules)
+    detail_payload = build_domain_audit_detail_payload(result, selected_template_rules)
+    ga_present = bool(
+        result.get("ga4_collect_present")
+        or result.get("ccm_pageview_present")
+        or result.get("ga4_execution_present")
+        or validation_summary["pageview_triggered"]
+    )
     return {
         "domain": domain_name,
         "template_name": validation_summary["template_name"],
@@ -5020,6 +5109,7 @@ def build_domain_audit_report_row(
         "implementation_status": validation_summary["implementation_status"],
         "pageview_triggered": validation_summary["pageview_triggered"],
         "pageview_source": validation_summary["pageview_source"],
+        "ga_present": ga_present,
         "events_count": validation_summary["events_count"],
         "events_fired": ", ".join(validation_summary["events_fired"]) or "None",
         "container_id": validation_summary["container_id"],
@@ -5030,6 +5120,7 @@ def build_domain_audit_report_row(
         "execution_failures": validation_summary["execution_failures"],
         "event_failures": validation_summary["event_failures"],
         "audit_duration_seconds": validation_summary["audit_duration_seconds"],
+        "detail_payload": detail_payload,
     }
 
 
@@ -5045,7 +5136,7 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.platypus import PageBreak, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -5057,8 +5148,32 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
         bottomMargin=24,
     )
     styles = getSampleStyleSheet()
-    title_style = styles["Title"]
-    heading_style = styles["Heading2"]
+    title_style = ParagraphStyle(
+        "DomainAuditTitle",
+        parent=styles["Title"],
+        fontSize=18,
+        leading=22,
+        alignment=0,
+        textColor=colors.HexColor("#111827"),
+    )
+    heading_style = ParagraphStyle(
+        "DomainAuditHeading",
+        parent=styles["Heading2"],
+        fontSize=12,
+        leading=15,
+        textColor=colors.HexColor("#111827"),
+        spaceBefore=8,
+        spaceAfter=6,
+    )
+    subheading_style = ParagraphStyle(
+        "DomainAuditSubheading",
+        parent=styles["Heading3"],
+        fontSize=10,
+        leading=12,
+        textColor=colors.HexColor("#111827"),
+        spaceBefore=6,
+        spaceAfter=4,
+    )
     body_style = ParagraphStyle(
         "DomainAuditBody",
         parent=styles["BodyText"],
@@ -5078,6 +5193,9 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
         return Paragraph(html.escape(_short_report_text(value, limit)), small_style)
 
     def add_table(elements: List[Any], headers: List[str], rows: List[List[Any]], widths: List[int]):
+        if not rows:
+            elements.append(Paragraph("No values captured.", body_style))
+            return
         table_data = [[Paragraph(html.escape(header), body_style) for header in headers]]
         for row in rows:
             table_data.append([p(cell) for cell in row])
@@ -5085,9 +5203,9 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
         table.setStyle(
             TableStyle(
                 [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#111827")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#9ca3af")),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e5e7eb")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#111827")),
+                    ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#9ca3af")),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
                     ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
@@ -5096,12 +5214,27 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
         )
         elements.append(table)
 
+    def add_records_table(
+        elements: List[Any],
+        title: str,
+        records: List[dict],
+        column_labels: List[str],
+        column_keys: List[str],
+        widths: List[int],
+    ):
+        elements.append(Paragraph(title, subheading_style))
+        rows = [
+            [record.get(key, "") for key in column_keys]
+            for record in records
+        ]
+        add_table(elements, column_labels, rows, widths)
+
     generated_at = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S %Z")
     issue_rows = [row for row in report_rows if row.get("audit_outcome") == "Issue"]
     passed_rows = [row for row in report_rows if row.get("audit_outcome") != "Issue"]
 
     elements: List[Any] = [
-        Paragraph(f"GA4 Domain Audit Report: {html.escape(domain_name)}", title_style),
+        Paragraph(f"GA4 Domain Audit Report: {html.escape(str(domain_name or 'Unknown domain'))}", title_style),
         Paragraph(
             html.escape(
                 f"Generated {generated_at}. Tested {len(report_rows)} template URL(s): "
@@ -5116,16 +5249,19 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     if issue_rows:
         add_table(
             elements,
-            ["Template", "URL", "Issues"],
+            ["Template", "URL", "GA Fired", "Comscore", "Chartbeat", "Issues"],
             [
                 [
                     row.get("template_name"),
                     row.get("sample_url"),
+                    "Yes" if row.get("ga_present") else "No",
+                    "Yes" if row.get("comscore_present") else "No",
+                    "Yes" if row.get("chartbeat_present") else "No",
                     row.get("issues") or "Issue observed",
                 ]
                 for row in issue_rows
             ],
-            [130, 260, 390],
+            [120, 245, 55, 60, 60, 240],
         )
     else:
         elements.append(Paragraph("No issues were detected in this run.", body_style))
@@ -5133,12 +5269,13 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     elements.extend([Spacer(1, 14), Paragraph("Full Audit Results", heading_style)])
     add_table(
         elements,
-        ["Template", "URL", "Outcome", "Pageview", "Events", "GA IDs", "Comscore", "Chartbeat", "Issues"],
+        ["Template", "URL", "Outcome", "GA Fired", "Pageview", "Events", "GA IDs", "Comscore", "Chartbeat", "Issues"],
         [
             [
                 row.get("template_name"),
                 row.get("sample_url"),
                 row.get("audit_outcome"),
+                "Yes" if row.get("ga_present") else "No",
                 f"{'Yes' if row.get('pageview_triggered') else 'No'} ({row.get('pageview_source')})",
                 f"{row.get('events_count')} - {row.get('events_fired')}",
                 f"{row.get('measurement_id')} / {row.get('container_id')}",
@@ -5148,7 +5285,7 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
             ]
             for row in report_rows
         ],
-        [105, 205, 55, 75, 105, 95, 45, 50, 145],
+        [80, 155, 45, 45, 60, 85, 85, 45, 45, 140],
     )
 
     detailed_rows = []
@@ -5165,6 +5302,91 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
             ["Template", "URL", "Layer", "Failure"],
             detailed_rows,
             [130, 260, 80, 310],
+        )
+
+    for index, row in enumerate(report_rows, start=1):
+        elements.append(PageBreak())
+        elements.append(Paragraph(f"URL Audit Detail {index}: {html.escape(str(row.get('template_name') or 'Template'))}", heading_style))
+        elements.append(Paragraph(html.escape(str(row.get("sample_url") or "")), body_style))
+        elements.append(Spacer(1, 6))
+        add_table(
+            elements,
+            ["Outcome", "GA Fired", "Pageview", "Events", "Measurement ID", "Container ID", "Comscore", "Chartbeat"],
+            [
+                [
+                    row.get("audit_outcome"),
+                    "Yes" if row.get("ga_present") else "No",
+                    f"{'Yes' if row.get('pageview_triggered') else 'No'} ({row.get('pageview_source')})",
+                    f"{row.get('events_count')} - {row.get('events_fired')}",
+                    row.get("measurement_id"),
+                    row.get("container_id"),
+                    "Yes" if row.get("comscore_present") else "No",
+                    "Yes" if row.get("chartbeat_present") else "No",
+                ]
+            ],
+            [70, 55, 90, 170, 105, 90, 65, 65],
+        )
+
+        detail_payload = row.get("detail_payload") or {}
+        selected_index = detail_payload.get("selected_datalayer_index")
+        if selected_index not in (None, ""):
+            elements.append(Paragraph(f"Selected dataLayer index: {html.escape(str(selected_index))}", body_style))
+
+        elements.append(Spacer(1, 8))
+        elements.append(Paragraph("DataLayer Snapshot", heading_style))
+        add_records_table(
+            elements,
+            "Trigger Event",
+            detail_payload.get("trigger_rows") or [],
+            ["Field", "Value"],
+            ["Field", "Value"],
+            [170, 590],
+        )
+        add_records_table(
+            elements,
+            "Computed State",
+            detail_payload.get("computed_rows") or [],
+            ["Field", "Value"],
+            ["Field", "Value"],
+            [170, 590],
+        )
+        add_records_table(
+            elements,
+            "Execution Payload / Custom Dimensions",
+            detail_payload.get("execution_rows") or [],
+            ["Field", "Value", "Expected", "Validation"],
+            ["Field", "Value", "Expected", "Validation"],
+            [145, 245, 250, 90],
+        )
+
+        elements.append(Spacer(1, 8))
+        elements.append(Paragraph("Events", heading_style))
+        add_records_table(
+            elements,
+            "GA4 Events",
+            detail_payload.get("event_rows") or [],
+            ["Event", "Status", "Times Fired", "Seen In", "Expected", "Validation"],
+            ["event_name", "status", "times_fired", "capture_layer", "expected", "validation"],
+            [150, 120, 60, 90, 240, 80],
+        )
+
+        elements.append(Spacer(1, 8))
+        elements.append(Paragraph("Third-party Tag Checks", heading_style))
+        add_records_table(
+            elements,
+            "Comscore",
+            detail_payload.get("comscore_rows") or [],
+            ["Hit Type", "Times Fired", "Status", "c1", "c2", "c7", "c8"],
+            ["hit_type", "times_fired", "status_chain", "c1", "c2", "c7", "c8"],
+            [95, 55, 70, 40, 70, 220, 220],
+        )
+        add_records_table(
+            elements,
+            "Chartbeat",
+            detail_payload.get("chartbeat_rows") or [],
+            ["Check", "Fired", "Times Fired"],
+            ["Check", "Fired", "Times Fired"],
+            [180, 80, 80],
         )
 
     doc.build(elements)
@@ -6393,6 +6615,9 @@ The app audits one URL at a time and generates a PDF report that includes every 
                         {
                             "Template": row.get("template_name"),
                             "URL": row.get("sample_url"),
+                            "GA Fired": "Yes" if row.get("ga_present") else "No",
+                            "Comscore Fired": "Yes" if row.get("comscore_present") else "No",
+                            "Chartbeat Fired": "Yes" if row.get("chartbeat_present") else "No",
                             "Issues": row.get("issues"),
                         }
                         for row in issue_rows
@@ -6411,13 +6636,14 @@ The app audits one URL at a time and generates a PDF report that includes every 
                             "URL": row.get("sample_url"),
                             "Outcome": row.get("audit_outcome"),
                             "Implementation Status": row.get("implementation_status"),
+                            "GA Fired": "Yes" if row.get("ga_present") else "No",
                             "Pageview Triggered": "Yes" if row.get("pageview_triggered") else "No",
                             "Pageview Source": row.get("pageview_source"),
                             "Events Fired": row.get("events_count"),
                             "Measurement ID": row.get("measurement_id"),
                             "Container ID": row.get("container_id"),
-                            "Comscore": "Yes" if row.get("comscore_present") else "No",
-                            "Chartbeat": "Yes" if row.get("chartbeat_present") else "No",
+                            "Comscore Fired": "Yes" if row.get("comscore_present") else "No",
+                            "Chartbeat Fired": "Yes" if row.get("chartbeat_present") else "No",
                             "Issues": row.get("issues") or "None",
                         }
                         for row in report_rows
