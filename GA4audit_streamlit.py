@@ -1,5 +1,6 @@
 import os
 import re
+import io
 import json
 import time
 import glob
@@ -2285,6 +2286,32 @@ RULE_TYPE_OPTIONS = ["exact", "one_of", "contains", "regex", "required", "option
 VALIDATION_PASS_LABEL = "Matched"
 VALIDATION_FAIL_LABEL = "Mismatch"
 VALIDATION_OPTIONAL_LABEL = "Optional"
+MAPPING_DATE_TIME_REGEX = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2}|Z)$"
+MAPPING_INTEGER_REGEX = r"^\d+$"
+MAPPING_FIELD_ALIASES = {
+    "article_type": "article_type",
+    "author": "author",
+    "category": "category",
+    "dynamic_video_embed_type": "dynamic_video_embed_type",
+    "event name": "event name",
+    "event_name": "event name",
+    "language": "Language",
+    "online_offline": "online_offline",
+    "page_type": "page_type",
+    "planned_trending": "planned_trending",
+    "posted_by": "posted_by",
+    "publish_date": "publish_date",
+    "smart_view_enabled": "smart_view_enabled",
+    "story_id": "story_id",
+    "sub_category": "sub_category",
+    "tags": "tags",
+    "tvc_event_name": "tvc_event_name",
+    "update_date": "update_date",
+    "user id": "User_Id",
+    "user_id": "User_Id",
+    "user_status": "User_Status",
+    "word_count": "word_count",
+}
 JAGRAN_STARTER_TEMPLATES = [
     {
         "template_name": "Home Page",
@@ -3176,6 +3203,425 @@ def _normalize_rule_signature(rule_scope: str, field_name: str, rule_type: str, 
         str(rule_type or "").strip().lower(),
         str(expected_values or "").strip(),
     )
+
+
+def _slugify_identifier(value: str, fallback: str = "template") -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    return slug or fallback
+
+
+def _mapping_clean_text(value) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    return re.sub(r"\s+", " ", str(value).strip())
+
+
+def _mapping_field_key(value) -> str:
+    return _mapping_clean_text(value).lower().replace(" ", "_")
+
+
+def _canonical_mapping_field(value) -> str:
+    text = _mapping_clean_text(value)
+    if not text:
+        return ""
+    return MAPPING_FIELD_ALIASES.get(text.lower()) or MAPPING_FIELD_ALIASES.get(_mapping_field_key(text), "")
+
+
+def _normalize_mapping_expected_value(value: str) -> str:
+    text = _mapping_clean_text(value)
+    text = re.sub(r"^\(?\s*", "", text)
+    text = re.sub(r"\s*\)?$", "", text)
+    text = re.sub(r"^static\s*[-:]\s*", "", text, flags=re.IGNORECASE)
+    return _mapping_clean_text(text)
+
+
+def _extract_mapping_allowed_values(structure: str, sample_value: str) -> List[str]:
+    structure_text = _mapping_clean_text(structure)
+    lower_text = structure_text.lower()
+    values: List[str] = []
+
+    if "yes/no" in lower_text:
+        values.extend(["yes", "no"])
+
+    if "logged_in" in lower_text or "guest" in lower_text:
+        if "logged_in" in lower_text:
+            values.append("logged_in")
+        if "guest" in lower_text:
+            values.append("guest")
+        sample = _normalize_mapping_expected_value(sample_value)
+        if sample.lower() in {"logged_in", "guest"}:
+            values.append(sample)
+
+    bracket_match = re.search(r"\(([^)]+)\)", structure_text)
+    if bracket_match:
+        inner_text = bracket_match.group(1)
+        for token in re.split(r"[/,|]", inner_text):
+            token = _normalize_mapping_expected_value(token)
+            if token and token.lower() not in {"dynamic", "static"}:
+                values.append(token)
+
+    seen = set()
+    unique_values = []
+    for value in values:
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_values.append(value)
+    return unique_values
+
+
+def _infer_mapping_rule(field_name: str, sample_value: str, structure: str, page_type: str) -> dict:
+    field = _mapping_clean_text(field_name)
+    sample = _normalize_mapping_expected_value(sample_value)
+    expected_structure = _mapping_clean_text(structure)
+    structure_lower = expected_structure.lower()
+
+    if field == "event name":
+        event_name = sample or expected_structure or "page_view"
+        return {
+            "rule_scope": "event",
+            "field_name": event_name,
+            "rule_type": "exact",
+            "expected_values": event_name,
+            "notes": "Imported from GA mapping Excel.",
+        }
+
+    if field == "page_type":
+        expected_page_type = _mapping_clean_text(page_type) or sample or expected_structure
+        return {
+            "rule_scope": "execution",
+            "field_name": "page_type",
+            "rule_type": "exact",
+            "expected_values": expected_page_type,
+            "notes": f"Imported from GA mapping Excel. Sample: {sample or '-'}",
+        }
+
+    if field in {"publish_date", "update_date"} or "yyyy-mm-dd" in structure_lower:
+        return {
+            "rule_scope": "execution",
+            "field_name": field,
+            "rule_type": "regex",
+            "expected_values": MAPPING_DATE_TIME_REGEX,
+            "notes": f"Imported from GA mapping Excel. Expected format: {expected_structure or 'ISO datetime'}",
+        }
+
+    if field in {"story_id", "word_count"}:
+        return {
+            "rule_scope": "execution",
+            "field_name": field,
+            "rule_type": "regex",
+            "expected_values": MAPPING_INTEGER_REGEX,
+            "notes": f"Imported from GA mapping Excel. Numeric dynamic value. Sample: {sample or '-'}",
+        }
+
+    allowed_values = _extract_mapping_allowed_values(expected_structure, sample)
+    if allowed_values:
+        return {
+            "rule_scope": "execution",
+            "field_name": field,
+            "rule_type": "one_of",
+            "expected_values": "|".join(allowed_values),
+            "notes": f"Imported from GA mapping Excel. Allowed by format: {expected_structure}",
+        }
+
+    if structure_lower == "static":
+        return {
+            "rule_scope": "execution",
+            "field_name": field,
+            "rule_type": "exact",
+            "expected_values": sample,
+            "notes": "Imported from GA mapping Excel. Static value.",
+        }
+
+    if structure_lower == "dynamic" or structure_lower.startswith("dynamic"):
+        return {
+            "rule_scope": "execution",
+            "field_name": field,
+            "rule_type": "required",
+            "expected_values": "",
+            "notes": f"Imported from GA mapping Excel. Dynamic value. Sample: {sample or '-'}",
+        }
+
+    if expected_structure:
+        return {
+            "rule_scope": "execution",
+            "field_name": field,
+            "rule_type": "exact",
+            "expected_values": expected_structure,
+            "notes": f"Imported from GA mapping Excel. Sample: {sample or '-'}",
+        }
+
+    return {
+        "rule_scope": "execution",
+        "field_name": field,
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": f"Imported from GA mapping Excel. Sample: {sample or '-'}",
+    }
+
+
+def _merge_mapping_rule(existing_rule: Optional[dict], incoming_rule: dict, page_type: str) -> dict:
+    if not existing_rule:
+        return incoming_rule
+
+    field_name = str(existing_rule.get("field_name") or incoming_rule.get("field_name") or "").strip()
+    if field_name == "page_type":
+        existing_rule["rule_type"] = "exact"
+        existing_rule["expected_values"] = _mapping_clean_text(page_type)
+        return existing_rule
+
+    existing_type = str(existing_rule.get("rule_type") or "").strip()
+    incoming_type = str(incoming_rule.get("rule_type") or "").strip()
+    existing_values = parse_expected_values(existing_rule.get("expected_values"))
+    incoming_values = parse_expected_values(incoming_rule.get("expected_values"))
+
+    if existing_type == incoming_type and existing_values == incoming_values:
+        return existing_rule
+
+    if existing_type in {"required", "optional", "regex"} or incoming_type in {"required", "optional", "regex"}:
+        if existing_type == incoming_type == "regex" and existing_values == incoming_values:
+            return existing_rule
+        existing_rule["rule_type"] = "required"
+        existing_rule["expected_values"] = ""
+        existing_rule["notes"] = "Imported from GA mapping Excel. Multiple examples differ, so any non-empty value is accepted."
+        return existing_rule
+
+    combined_values = []
+    for value in [*existing_values, *incoming_values]:
+        cleaned = _normalize_mapping_expected_value(value)
+        if cleaned and cleaned.lower() not in {item.lower() for item in combined_values}:
+            combined_values.append(cleaned)
+
+    existing_rule["rule_type"] = "one_of" if len(combined_values) > 1 else "exact"
+    existing_rule["expected_values"] = "|".join(combined_values)
+    existing_rule["notes"] = "Imported from GA mapping Excel. Multiple static examples were merged."
+    return existing_rule
+
+
+def _infer_mapping_url_patterns(page_type: str, urls: List[str]) -> str:
+    page_type_lower = str(page_type or "").strip().lower()
+    cleaned_urls = []
+    for url in urls or []:
+        url_text = _mapping_clean_text(url)
+        if url_text and url_text not in cleaned_urls:
+            cleaned_urls.append(url_text)
+
+    inferred_patterns = []
+    if page_type_lower == "article detail":
+        inferred_patterns.extend([
+            "https://www.jagran.com/*/*-*.html",
+            "https://www.jagran.com/smart-choice/*/*",
+        ])
+    elif page_type_lower == "live blog detail":
+        inferred_patterns.append("https://www.jagran.com/*/*-lb-*.html")
+    elif page_type_lower == "short video detail":
+        inferred_patterns.append("https://www.jagran.com/short-videos/*")
+    elif page_type_lower == "photo detail":
+        inferred_patterns.append("https://www.jagran.com/photo-stories/*")
+    elif page_type_lower == "topic listing page":
+        inferred_patterns.append("https://www.jagran.com/topics/*")
+
+    all_patterns = []
+    for pattern in [*inferred_patterns, *cleaned_urls]:
+        if pattern and pattern not in all_patterns:
+            all_patterns.append(pattern)
+    return "\n".join(all_patterns)
+
+
+def parse_ga_mapping_excel_templates(
+    excel_bytes: bytes,
+    default_domain: str,
+    default_measurement_id: str,
+    default_container_id: str,
+) -> Tuple[List[dict], List[str]]:
+    workbook = pd.ExcelFile(io.BytesIO(excel_bytes))
+    if "Finalized" not in workbook.sheet_names:
+        return [], ["The workbook must contain a sheet named 'Finalized'."]
+
+    sheet = pd.read_excel(
+        io.BytesIO(excel_bytes),
+        sheet_name="Finalized",
+        dtype=str,
+        header=None,
+        keep_default_na=False,
+    )
+
+    templates_by_key: Dict[str, dict] = {}
+    notes: List[str] = []
+    current_section = ""
+
+    for row_index in range(2, len(sheet)):
+        row = sheet.iloc[row_index].tolist()
+        section = _mapping_clean_text(row[0] if len(row) > 0 else "")
+        if section:
+            current_section = section
+
+        page_type = _mapping_clean_text(row[1] if len(row) > 1 else "")
+        if not page_type:
+            continue
+
+        page_location = _mapping_clean_text(row[2] if len(row) > 2 else "")
+        template_key = page_type.lower()
+        template = templates_by_key.setdefault(
+            template_key,
+            {
+                "template_name": page_type,
+                "domain_name": _mapping_clean_text(default_domain),
+                "measurement_id": _mapping_clean_text(default_measurement_id),
+                "container_id": _mapping_clean_text(default_container_id),
+                "url_examples": [],
+                "rules_by_key": {},
+                "section": current_section,
+            },
+        )
+        if page_location and page_location not in template["url_examples"]:
+            template["url_examples"].append(page_location)
+
+        rules_by_key = template["rules_by_key"]
+        event_rule = {
+            "rule_scope": "event",
+            "field_name": "page_view",
+            "rule_type": "exact",
+            "expected_values": "page_view",
+            "notes": "Added by importer because every GA4 audit template should validate page_view.",
+        }
+        rules_by_key[("event", "page_view")] = _merge_mapping_rule(
+            rules_by_key.get(("event", "page_view")),
+            event_rule,
+            page_type,
+        )
+
+        seen_fields_in_row = set()
+        column = 3
+        while column < len(row):
+            field_name = _canonical_mapping_field(row[column])
+            if not field_name:
+                column += 1
+                continue
+
+            next_column = column + 1
+            sample_value = ""
+            expected_structure = ""
+            if next_column < len(row) and not _canonical_mapping_field(row[next_column]):
+                sample_value = _mapping_clean_text(row[next_column])
+                next_column += 1
+            if next_column < len(row) and not _canonical_mapping_field(row[next_column]):
+                expected_structure = _mapping_clean_text(row[next_column])
+                next_column += 1
+
+            if (
+                field_name == "page_type"
+                and field_name in seen_fields_in_row
+                and _mapping_clean_text(sample_value).lower() != page_type.lower()
+            ):
+                notes.append(
+                    f"Stopped reading row {row_index + 1} after a conflicting duplicate page_type value."
+                )
+                break
+
+            seen_fields_in_row.add(field_name)
+            rule = _infer_mapping_rule(field_name, sample_value, expected_structure, page_type)
+            rule_key = (
+                str(rule.get("rule_scope") or "").strip().lower(),
+                str(rule.get("field_name") or "").strip().lower(),
+            )
+            rules_by_key[rule_key] = _merge_mapping_rule(rules_by_key.get(rule_key), rule, page_type)
+            column = max(next_column, column + 1)
+
+    imported_templates = []
+    for template in templates_by_key.values():
+        imported_templates.append(
+            {
+                "template_name": template["template_name"],
+                "domain_name": template["domain_name"],
+                "measurement_id": template["measurement_id"],
+                "container_id": template["container_id"],
+                "url_pattern": _infer_mapping_url_patterns(
+                    template["template_name"],
+                    template.get("url_examples") or [],
+                ),
+                "rules": list(template["rules_by_key"].values()),
+            }
+        )
+
+    imported_templates.sort(key=lambda item: str(item.get("template_name") or "").lower())
+    return imported_templates, notes
+
+
+def replace_templates_with_seed_templates(email_id: str, template_seeds: List[dict], source_label: str):
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        return False, "Google Sheets logging is not configured yet."
+
+    seeds = [seed for seed in (template_seeds or []) if isinstance(seed, dict)]
+    if not seeds:
+        return False, "No templates were found to import."
+
+    settings = get_template_sheet_settings()
+    template_ws, rules_ws = get_template_worksheets(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["template_worksheet_name"],
+        settings["template_rules_worksheet_name"],
+    )
+
+    template_ws.clear()
+    rules_ws.clear()
+    ensure_fixed_headers(template_ws, TEMPLATE_HEADERS)
+    ensure_fixed_headers(rules_ws, TEMPLATE_RULE_HEADERS)
+
+    timestamp = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    template_rows = []
+    rule_rows = []
+    used_template_ids = set()
+
+    for seed in seeds:
+        base_id = f"tpl_{_slugify_identifier(seed.get('template_name'))}"
+        template_id = base_id
+        suffix = 2
+        while template_id in used_template_ids:
+            template_id = f"{base_id}_{suffix}"
+            suffix += 1
+        used_template_ids.add(template_id)
+
+        template_row = {
+            "template_id": template_id,
+            "template_name": str(seed.get("template_name") or "").strip(),
+            "domain_name": str(seed.get("domain_name") or "").strip(),
+            "measurement_id": str(seed.get("measurement_id") or "").strip(),
+            "container_id": str(seed.get("container_id") or "").strip(),
+            "url_pattern": str(seed.get("url_pattern") or "").strip(),
+            "active": "TRUE",
+            "created_by": email_id,
+            "created_at": timestamp,
+        }
+        template_rows.append([template_row.get(header, "") for header in TEMPLATE_HEADERS])
+
+        for index, rule in enumerate(seed.get("rules") or [], start=1):
+            row_map = {
+                "rule_id": f"rule_{_slugify_identifier(template_id)}_{index:03d}",
+                "template_id": template_id,
+                "rule_scope": str(rule.get("rule_scope") or "").strip(),
+                "field_name": str(rule.get("field_name") or "").strip(),
+                "rule_type": str(rule.get("rule_type") or "").strip(),
+                "expected_values": str(rule.get("expected_values") or "").strip(),
+                "notes": str(rule.get("notes") or "").strip(),
+                "created_by": email_id,
+                "created_at": timestamp,
+            }
+            rule_rows.append([row_map.get(header, "") for header in TEMPLATE_RULE_HEADERS])
+
+    template_ws.append_rows(template_rows, value_input_option="USER_ENTERED")
+    if rule_rows:
+        rules_ws.append_rows(rule_rows, value_input_option="USER_ENTERED")
+
+    return True, f"{source_label}: imported {len(template_rows)} template(s) and {len(rule_rows)} rule(s)."
 
 
 def get_homepage_starter_template() -> dict:
@@ -5365,50 +5811,120 @@ if tab_template_manager is not None:
         if template_load_error:
             st.error(template_load_error)
         else:
-            if should_auto_cleanup_homepage_templates(template_records):
-                with st.spinner("Cleaning Template Manager so only Home Page remains..."):
-                    success, response = reset_templates_to_homepage_only(logged_in_email)
+            st.caption(
+                "Templates are stored in the same Google Sheet backing this app."
+            )
+
+            st.markdown("### Template Imports")
+            st.caption(
+                "Upload the GA mapping workbook. The importer uses the Finalized sheet, groups templates by page_type, "
+                "and converts static/dynamic formats into validation rules."
+            )
+            mapping_file = st.file_uploader(
+                "GA mapping Excel",
+                type=["xlsx"],
+                key="ga_mapping_excel_import_file",
+            )
+            import_meta_col1, import_meta_col2, import_meta_col3 = st.columns(3)
+            with import_meta_col1:
+                mapping_domain = st.text_input(
+                    "Default domain",
+                    value="www.jagran.com",
+                    key="ga_mapping_import_domain",
+                )
+            with import_meta_col2:
+                mapping_measurement_id = st.text_input(
+                    "Default measurement ID",
+                    value="G-3RLQSM7QQQ",
+                    key="ga_mapping_import_measurement_id",
+                )
+            with import_meta_col3:
+                mapping_container_id = st.text_input(
+                    "Default container ID",
+                    value="GTM-5CTQK3",
+                    key="ga_mapping_import_container_id",
+                )
+
+            imported_mapping_templates = []
+            mapping_parse_notes = []
+            if mapping_file is not None:
+                try:
+                    imported_mapping_templates, mapping_parse_notes = parse_ga_mapping_excel_templates(
+                        mapping_file.getvalue(),
+                        mapping_domain,
+                        mapping_measurement_id,
+                        mapping_container_id,
+                    )
+                    total_imported_rules = sum(
+                        len(template.get("rules") or [])
+                        for template in imported_mapping_templates
+                    )
+                    st.success(
+                        f"Detected {len(imported_mapping_templates)} page_type template(s) "
+                        f"and {total_imported_rules} rule(s)."
+                    )
+                    if mapping_parse_notes:
+                        with st.expander("Import parser notes"):
+                            for note in mapping_parse_notes[:20]:
+                                st.write(note)
+                    preview_rows = [
+                        {
+                            "Template": template.get("template_name"),
+                            "Rules": len(template.get("rules") or []),
+                            "Reference URLs / Patterns": format_multiline_entries_display(template.get("url_pattern") or ""),
+                        }
+                        for template in imported_mapping_templates[:8]
+                    ]
+                    if preview_rows:
+                        st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+                except Exception as exc:
+                    st.error(f"Could not read GA mapping Excel: {exc}")
+
+            keep_homepage_template = st.checkbox(
+                "Also keep the Home Page starter template",
+                value=True,
+                key="ga_mapping_import_keep_homepage",
+            )
+            replace_mapping_confirmed = st.checkbox(
+                "I understand this will replace the current Template Manager rows with the imported mapping.",
+                key="ga_mapping_import_replace_confirmed",
+            )
+            if st.button(
+                "Replace templates with GA mapping",
+                key="replace_templates_with_ga_mapping",
+                disabled=mapping_file is None or not imported_mapping_templates or not replace_mapping_confirmed,
+            ):
+                seeds_to_import = list(imported_mapping_templates)
+                if keep_homepage_template:
+                    seeds_to_import = [get_homepage_starter_template(), *seeds_to_import]
+                success, response = replace_templates_with_seed_templates(
+                    logged_in_email,
+                    seeds_to_import,
+                    "GA mapping templates",
+                )
                 if success:
                     st.success(response)
                     st.rerun()
                 else:
                     st.error(response)
 
-            st.caption(
-                "Templates are stored in the same Google Sheet backing this app."
-            )
-
-            st.markdown("### Starter Templates")
-            st.caption("Use this when you want the Template Manager to contain only the homepage template.")
-            action_col1, action_col2 = st.columns([1.2, 2.8])
-            with action_col1:
-                if st.button("Import homepage template", key="import_jagran_starter_templates"):
-                    success, response = import_jagran_starter_templates(
-                        logged_in_email,
-                        template_records,
-                        template_rules,
-                    )
+            with st.expander("Homepage-only cleanup"):
+                st.caption("Use this only if you want to remove every template except Home Page.")
+                cleanup_confirmed = st.checkbox(
+                    "I understand this will remove all saved templates except Home Page.",
+                    key="reset_templates_to_homepage_confirmed",
+                )
+                if st.button(
+                    "Remove all templates except Home Page",
+                    key="reset_templates_to_homepage_only",
+                    disabled=not cleanup_confirmed,
+                ):
+                    success, response = reset_templates_to_homepage_only(logged_in_email)
                     if success:
                         st.success(response)
                         st.rerun()
                     else:
                         st.error(response)
-            with action_col2:
-                reset_confirmed = st.checkbox(
-                    "I understand this will remove all saved templates except Home Page.",
-                    key="reset_templates_to_homepage_confirmed",
-                )
-            if st.button(
-                "Remove all templates except Home Page",
-                key="reset_templates_to_homepage_only",
-                disabled=not reset_confirmed,
-            ):
-                success, response = reset_templates_to_homepage_only(logged_in_email)
-                if success:
-                    st.success(response)
-                    st.rerun()
-                else:
-                    st.error(response)
 
             template_rules_by_template = {}
             for rule in template_rules:
