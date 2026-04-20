@@ -3338,6 +3338,22 @@ def reset_templates_to_homepage_only(email_id: str):
     return True, "Template Manager reset. Only the Home Page template remains."
 
 
+def should_auto_cleanup_homepage_templates(template_records: List[dict]) -> bool:
+    starter_template_names = {
+        _normalize_template_name_key(seed.get("template_name"))
+        for seed in JAGRAN_STARTER_TEMPLATES[1:]
+    }
+    homepage_names = {"home page", "jagran homepage"}
+    names = [
+        _normalize_template_name_key(template.get("template_name"))
+        for template in (template_records or [])
+        if str(template.get("template_name") or "").strip()
+    ]
+    has_old_starter_templates = any(name in starter_template_names for name in names)
+    has_duplicate_homepage_templates = sum(1 for name in names if name in homepage_names) > 1
+    return has_old_starter_templates or has_duplicate_homepage_templates
+
+
 def render_sidebar_session(email_id: str):
     with st.sidebar:
         st.markdown("### Session")
@@ -5349,6 +5365,15 @@ if tab_template_manager is not None:
         if template_load_error:
             st.error(template_load_error)
         else:
+            if should_auto_cleanup_homepage_templates(template_records):
+                with st.spinner("Cleaning Template Manager so only Home Page remains..."):
+                    success, response = reset_templates_to_homepage_only(logged_in_email)
+                if success:
+                    st.success(response)
+                    st.rerun()
+                else:
+                    st.error(response)
+
             st.caption(
                 "Templates are stored in the same Google Sheet backing this app."
             )
