@@ -5416,16 +5416,35 @@ This capture is split into three layers:
         st.info(template_load_error)
 
     url_text = st.text_input(
-        "URL",
+        "URL *",
         placeholder="https://www.example.com/article-1 or www.example.com/article-1",
     )
 
-    template_options = [None, *active_templates]
-    selected_template = st.selectbox(
-        "Template",
-        options=template_options,
-        format_func=lambda template: "No template selected" if template is None else build_template_option_label(template),
+    template_search_text = st.text_input(
+        "Template search",
+        placeholder="Search by template name, domain, measurement ID, or container ID",
+        key="audit_template_search",
     )
+
+    filtered_active_templates = list(active_templates)
+    search_query = str(template_search_text or "").strip().lower()
+    if search_query:
+        filtered_active_templates = [
+            template
+            for template in active_templates
+            if search_query in build_template_option_label(template).lower()
+        ]
+
+    selected_template = None
+    if not filtered_active_templates:
+        st.warning("No templates match the current search.")
+    else:
+        template_options = [None, *filtered_active_templates]
+        selected_template = st.selectbox(
+            "Template *",
+            options=template_options,
+            format_func=lambda template: "Select a template" if template is None else build_template_option_label(template),
+        )
 
     wait_seconds = st.slider(
         "Wait time after page load (seconds)",
@@ -5434,10 +5453,17 @@ This capture is split into three layers:
         value=8,
     )
 
-    if st.button("Run audit"):
+    st.caption("`URL` and `Template` are required to run the audit.")
+
+    if st.button(
+        "Run audit",
+        disabled=not str(url_text or "").strip() or selected_template is None,
+    ):
         original_url, normalized_url, input_error = normalize_single_url(url_text)
 
-        if input_error:
+        if selected_template is None:
+            st.error("Please select a template before running the audit.")
+        elif input_error:
             st.error(input_error)
         else:
             if normalized_url != original_url:
