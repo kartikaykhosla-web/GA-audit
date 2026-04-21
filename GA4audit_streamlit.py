@@ -6726,7 +6726,15 @@ Choose a domain, select the templates you want to test, and run the audit in bat
             if selection_changed:
                 st.info("Template selection changed. Start a new run to use the updated selection.")
 
-            run_cols = st.columns([1.2, 1.2, 4])
+            auto_run_requested = st.checkbox(
+                "Auto-run all remaining batches",
+                value=True,
+                key=f"domain_audit_auto_run_requested_{domain_state_key}",
+                help="Runs one batch per Streamlit execution, then automatically refreshes and continues.",
+            )
+            auto_run_active = bool(st.session_state.get("domain_audit_auto_run"))
+
+            run_cols = st.columns([1.2, 1.2, 1.2, 3.8])
             start_clicked = run_cols[0].button(
                 "Start new audit",
                 key=f"start_domain_audit_{domain_state_key}",
@@ -6738,9 +6746,17 @@ Choose a domain, select the templates you want to test, and run the audit in bat
                 key=f"continue_domain_audit_{domain_state_key}",
                 disabled=not run_in_progress,
             )
-            run_cols[2].caption(
-                "Use Start new audit once, then keep clicking Run next batch until all selected templates are complete."
+            pause_clicked = run_cols[2].button(
+                "Pause auto-run" if auto_run_active else "Auto-run paused",
+                key=f"pause_domain_audit_{domain_state_key}",
+                disabled=not auto_run_active,
             )
+            run_cols[3].caption(
+                "Start once. If auto-run is enabled, batches continue by themselves until completion."
+            )
+            if pause_clicked:
+                st.session_state["domain_audit_auto_run"] = False
+                auto_run_active = False
 
             if start_clicked:
                 st.session_state["domain_audit_run_domain"] = selected_domain
@@ -6749,13 +6765,23 @@ Choose a domain, select the templates you want to test, and run the audit in bat
                 st.session_state["domain_audit_report_domain"] = selected_domain
                 st.session_state["domain_audit_report_rows"] = []
                 st.session_state["domain_audit_plan_signature"] = plan_signature
+                st.session_state["domain_audit_auto_run"] = bool(auto_run_requested)
                 current_run_domain = selected_domain
                 current_plan = st.session_state["domain_audit_run_plan"]
                 current_cursor = 0
                 current_rows = []
                 next_clicked = True
+                auto_run_active = bool(auto_run_requested)
 
-            if next_clicked and current_plan:
+            auto_should_continue = (
+                auto_run_active
+                and bool(current_plan)
+                and current_cursor < len(current_plan)
+                and not selection_changed
+            )
+            should_run_batch = bool(next_clicked or auto_should_continue)
+
+            if should_run_batch and current_plan:
                 st.markdown(f"### Running Domain Audit: {current_run_domain or selected_domain}")
                 end_index = min(current_cursor + int(batch_size), len(current_plan))
                 batch_plan = current_plan[current_cursor:end_index]
@@ -6828,10 +6854,14 @@ Choose a domain, select the templates you want to test, and run the audit in bat
 
                 if end_index >= len(current_plan):
                     status_box.write("Domain audit complete.")
+                    st.session_state["domain_audit_auto_run"] = False
                 else:
                     status_box.write(
                         f"Batch complete. {len(current_plan) - end_index} template URL(s) remaining."
                     )
+                    if st.session_state.get("domain_audit_auto_run"):
+                        time.sleep(1.0)
+                        st.rerun()
 
             run_plan = st.session_state.get("domain_audit_run_plan") or []
             run_cursor = int(st.session_state.get("domain_audit_run_cursor") or 0)
