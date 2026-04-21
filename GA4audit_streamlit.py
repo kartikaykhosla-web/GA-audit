@@ -404,7 +404,16 @@ COMMON_CONSENT_SELECTORS = [
 
 # Embedded GA4 audit engine
 
-def create_driver(headless: bool = True):
+NETWORK_CAPTURE_SCOPES = [
+    r".*googletagmanager\.com/.*",
+    r".*google-analytics\.com/.*collect.*",
+    r".*google\.com/ccm/collect.*",
+    r".*scorecardresearch\.com/.*",
+    r".*chartbeat\.net/.*",
+]
+
+
+def create_driver(headless: bool = True, performance_logs: bool = True):
     chrome_options = Options()
     if headless:
         chrome_options.add_argument("--headless=new")
@@ -428,7 +437,8 @@ def create_driver(headless: bool = True):
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
     )
-    chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+    if performance_logs:
+        chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
 
     chrome_binary = os.environ.get("CHROME_BINARY")
     binary_candidates = [
@@ -499,12 +509,28 @@ def create_driver(headless: bool = True):
                 chromedriver_path = candidate
                 break
     service = Service(executable_path=chromedriver_path) if chromedriver_path else None
+    seleniumwire_options = {
+        "request_storage": "memory",
+        "request_storage_max_size": 120,
+        "disable_encoding": True,
+    }
 
     try:
         if service:
-            driver = webdriver.Chrome(options=chrome_options, service=service)
+            driver = webdriver.Chrome(
+                options=chrome_options,
+                service=service,
+                seleniumwire_options=seleniumwire_options,
+            )
         else:
-            driver = webdriver.Chrome(options=chrome_options)
+            driver = webdriver.Chrome(
+                options=chrome_options,
+                seleniumwire_options=seleniumwire_options,
+            )
+        try:
+            driver.scopes = NETWORK_CAPTURE_SCOPES
+        except Exception:
+            pass
         try:
             driver.execute_cdp_cmd("Network.enable", {})
             driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
@@ -1971,7 +1997,7 @@ def _format_hits_sample(hits: List[Dict[str, Any]]) -> str:
 # Core auditor
 # -------------------------
 
-def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
+def audit_single_url(driver, url: str, wait_seconds: int = 8, compact: bool = False) -> Dict[str, Any]:
     print(f"\n🔍 Auditing: {url}")
 
     audit_start = time.time()
@@ -2121,14 +2147,20 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
         except Exception as e:
             result["pageview_event_json"] = f"Error serializing pageview event: {e}"
 
-    # Full dataLayer JSON
-    try:
-        safe_dl_list = sanitize_for_json(dl_list)
-        result["all_datalayer_json"] = json.dumps(
-            safe_dl_list, ensure_ascii=False, indent=2, sort_keys=True
-        )
-    except Exception as e:
-        result["all_datalayer_json"] = f"Error serializing dataLayer: {e}"
+    # Full dataLayer JSON is useful for the one-URL UI, but too heavy for domain-scale runs.
+    if compact:
+        compact_datalayer = []
+        if pageview_event is not None:
+            compact_datalayer.append(pageview_event)
+        result["all_datalayer_json"] = safe_json(sanitize_for_json(compact_datalayer))
+    else:
+        try:
+            safe_dl_list = sanitize_for_json(dl_list)
+            result["all_datalayer_json"] = json.dumps(
+                safe_dl_list, ensure_ascii=False, indent=2, sort_keys=True
+            )
+        except Exception as e:
+            result["all_datalayer_json"] = f"Error serializing dataLayer: {e}"
 
     # Scroll-related events
     scroll_events = find_events_by_name(dl_list, ["scroll", "scroll_event", "scrolldepth"])
@@ -2163,12 +2195,12 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
     preload_state = extract_preload_state(driver)
     gtag_calls = preload_state.get("gtagCalls", []) or []
     gtag_events = normalize_gtag_calls(gtag_calls)
-    result["ga4_gtag_calls_json"] = safe_json(gtag_calls)
+    result["ga4_gtag_calls_json"] = "" if compact else safe_json(gtag_calls)
     result["ga4_events_json"] = safe_json(gtag_events)
 
     execution_hits, execution_events = normalize_transport_hits(preload_state)
     result["ga4_execution_present"] = bool(execution_hits or execution_events)
-    result["ga4_execution_hits_json"] = safe_json(execution_hits)
+    result["ga4_execution_hits_json"] = "" if compact else safe_json(execution_hits)
     result["ga4_execution_events_json"] = safe_json(execution_events)
 
     # GA4 events decoded from actual network requests
@@ -2179,7 +2211,7 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
             if isinstance(decoded_event, dict):
                 decoded_events.append(decoded_event)
 
-    result["ga4_network_hits_json"] = safe_json(network_hits)
+    result["ga4_network_hits_json"] = "" if compact else safe_json(network_hits)
     result["ga4_network_events_json"] = safe_json(decoded_events)
     result["ga4_decoded_events_json"] = safe_json(decoded_events)
     result["comscore_hits_json"] = safe_json(
@@ -5106,6 +5138,7 @@ def build_domain_audit_report_row(
     sample_url: str,
     result: Optional[dict] = None,
     error_message: str = "",
+    include_detail: bool = True,
 ) -> Dict[str, Any]:
     if not result:
         return {
@@ -5136,7 +5169,11 @@ def build_domain_audit_report_row(
         if str(rule.get("template_id") or "").strip() == str(template.get("template_id") or "").strip()
     ]
     validation_summary = summarize_validation_failures(result, template, selected_template_rules)
-    detail_payload = build_domain_audit_detail_payload(result, selected_template_rules)
+    detail_payload = (
+        build_domain_audit_detail_payload(result, selected_template_rules)
+        if include_detail
+        else {}
+    )
     ga_present = bool(
         result.get("ga4_collect_present")
         or result.get("ccm_pageview_present")
@@ -5489,6 +5526,10 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
         )
 
         detail_payload = row.get("detail_payload") or {}
+        if not detail_payload:
+            elements.append(Paragraph("Detailed dataLayer snapshot was skipped for this bulk run to keep Streamlit memory within limits.", body_style))
+            continue
+
         selected_index = detail_payload.get("selected_datalayer_index")
         if selected_index not in (None, ""):
             elements.append(Paragraph(f"Selected dataLayer index: {html.escape(str(selected_index))}", body_style))
@@ -6816,16 +6857,22 @@ Choose a domain, select the templates you want to test, and run the audit in bat
                     driver = None
                     result = None
                     try:
-                        driver = create_driver(headless=True)
-                        result = audit_single_url(driver, sample_url, domain_wait_seconds)
-                        report_rows.append(
-                            build_domain_audit_report_row(
-                                current_run_domain or selected_domain,
-                                template,
+                            driver = create_driver(headless=True, performance_logs=False)
+                            result = audit_single_url(
+                                driver,
                                 sample_url,
-                                result=result,
+                                domain_wait_seconds,
+                                compact=True,
                             )
-                        )
+                            report_rows.append(
+                                build_domain_audit_report_row(
+                                    current_run_domain or selected_domain,
+                                    template,
+                                    sample_url,
+                                    result=result,
+                                    include_detail=False,
+                                )
+                            )
                     except Exception as exc:
                         report_rows.append(
                             build_domain_audit_report_row(
