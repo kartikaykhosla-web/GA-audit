@@ -28,6 +28,7 @@ try:
 except Exception:
     gspread = None
     Credentials = None
+from selenium import webdriver as selenium_webdriver
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -413,7 +414,11 @@ NETWORK_CAPTURE_SCOPES = [
 ]
 
 
-def create_driver(headless: bool = True, performance_logs: bool = True):
+def create_driver(
+    headless: bool = True,
+    performance_logs: bool = True,
+    capture_network: bool = True,
+):
     chrome_options = Options()
     if headless:
         chrome_options.add_argument("--headless=new")
@@ -422,6 +427,12 @@ def create_driver(headless: bool = True, performance_logs: bool = True):
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--disable-quic")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-background-networking")
+    chrome_options.add_argument("--disable-default-apps")
+    chrome_options.add_argument("--disable-sync")
+    chrome_options.add_argument("--metrics-recording-only")
+    chrome_options.add_argument("--no-first-run")
     chrome_options.add_argument("--window-size=1920,1080")
 
     # Anti-bot / more human-like
@@ -516,21 +527,29 @@ def create_driver(headless: bool = True, performance_logs: bool = True):
     }
 
     try:
+        driver_module = webdriver if capture_network else selenium_webdriver
         if service:
-            driver = webdriver.Chrome(
-                options=chrome_options,
-                service=service,
-                seleniumwire_options=seleniumwire_options,
-            )
+            if capture_network:
+                driver = driver_module.Chrome(
+                    options=chrome_options,
+                    service=service,
+                    seleniumwire_options=seleniumwire_options,
+                )
+            else:
+                driver = driver_module.Chrome(options=chrome_options, service=service)
         else:
-            driver = webdriver.Chrome(
-                options=chrome_options,
-                seleniumwire_options=seleniumwire_options,
-            )
-        try:
-            driver.scopes = NETWORK_CAPTURE_SCOPES
-        except Exception:
-            pass
+            if capture_network:
+                driver = driver_module.Chrome(
+                    options=chrome_options,
+                    seleniumwire_options=seleniumwire_options,
+                )
+            else:
+                driver = driver_module.Chrome(options=chrome_options)
+        if capture_network:
+            try:
+                driver.scopes = NETWORK_CAPTURE_SCOPES
+            except Exception:
+                pass
         try:
             driver.execute_cdp_cmd("Network.enable", {})
             driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
@@ -1743,6 +1762,46 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
     }
 
 
+def categorize_preload_transport_hits(hits: List[Dict[str, Any]], page_domain: str) -> Dict[str, Any]:
+    ga4_collects: List[Dict[str, Any]] = []
+    ccm_pageviews: List[Dict[str, Any]] = []
+    comscore_hits: List[Dict[str, Any]] = []
+    chartbeat_hits: List[Dict[str, Any]] = []
+
+    for hit in hits or []:
+        url = str(hit.get("url") or hit.get("request_url") or "")
+        normalized_hit = dict(hit)
+        if "url" not in normalized_hit:
+            normalized_hit["url"] = url
+        normalized_hit.setdefault("source", "preload_transport")
+        normalized_hit.setdefault("status", "Observed")
+        normalized_hit.setdefault("response_status", "Observed")
+
+        if _is_comscore_hit(url):
+            comscore_hits.append(normalized_hit)
+        elif _is_chartbeat_hit(url):
+            chartbeat_hits.append(normalized_hit)
+        elif _is_ccm_pageview_hit(url, page_domain):
+            ccm_pageviews.append(normalized_hit)
+        elif _is_ga4_collect_hit(url):
+            ga4_collects.append(normalized_hit)
+
+    return {
+        "gtm_present": False,
+        "gtag_present": False,
+        "ga4_collect_present": bool(ga4_collects),
+        "ccm_pageview_present": bool(ccm_pageviews),
+        "comscore_present": bool(comscore_hits),
+        "chartbeat_present": bool(chartbeat_hits),
+        "gtm_scripts": [],
+        "gtag_scripts": [],
+        "ga4_collects": ga4_collects,
+        "ccm_pageviews": ccm_pageviews,
+        "comscore_hits": comscore_hits,
+        "chartbeat_hits": chartbeat_hits,
+    }
+
+
 def hook_ga4_gtag(driver) -> None:
     install_preload_instrumentation(driver)
 
@@ -2174,9 +2233,23 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8, compact: bool = Fa
         except Exception as e:
             result["scroll_event_json"] = f"Error serializing scroll event: {e}"
 
-    # Network hits
+    preload_state = extract_preload_state(driver)
+    gtag_calls = preload_state.get("gtagCalls", []) or []
+    gtag_events = normalize_gtag_calls(gtag_calls)
+    result["ga4_gtag_calls_json"] = "" if compact else safe_json(gtag_calls)
+    result["ga4_events_json"] = safe_json(gtag_events)
+
+    execution_hits, execution_events = normalize_transport_hits(preload_state)
+    result["ga4_execution_present"] = bool(execution_hits or execution_events)
+    result["ga4_execution_hits_json"] = "" if compact else safe_json(execution_hits)
+    result["ga4_execution_events_json"] = safe_json(execution_events)
+
+    # Network hits. Domain-scale compact mode avoids Selenium Wire and uses the preload transport hook.
     page_domain = urlparse(url).netloc
-    net_info = categorize_network_requests(driver, page_domain)
+    if compact:
+        net_info = categorize_preload_transport_hits(execution_hits, page_domain)
+    else:
+        net_info = categorize_network_requests(driver, page_domain)
 
     result["gtm_present"] = net_info["gtm_present"]
     result["gtag_present"] = net_info["gtag_present"]
@@ -2191,17 +2264,6 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8, compact: bool = Fa
     result["ccm_pageviews_sample"] = _format_hits_sample(net_info["ccm_pageviews"])
     result["comscore_hits_sample"] = _format_hits_sample(net_info["comscore_hits"])
     result["chartbeat_hits_sample"] = _format_hits_sample(net_info["chartbeat_hits"])
-
-    preload_state = extract_preload_state(driver)
-    gtag_calls = preload_state.get("gtagCalls", []) or []
-    gtag_events = normalize_gtag_calls(gtag_calls)
-    result["ga4_gtag_calls_json"] = "" if compact else safe_json(gtag_calls)
-    result["ga4_events_json"] = safe_json(gtag_events)
-
-    execution_hits, execution_events = normalize_transport_hits(preload_state)
-    result["ga4_execution_present"] = bool(execution_hits or execution_events)
-    result["ga4_execution_hits_json"] = "" if compact else safe_json(execution_hits)
-    result["ga4_execution_events_json"] = safe_json(execution_events)
 
     # GA4 events decoded from actual network requests
     decoded_events: List[dict] = []
@@ -4842,7 +4904,7 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
 
 
 DOMAIN_AUDIT_TEMPLATE_LIMIT = 3
-DOMAIN_AUDIT_BATCH_DEFAULT = 5
+DOMAIN_AUDIT_BATCH_DEFAULT = 1
 
 
 def get_template_domain_label(template: dict) -> str:
@@ -6652,9 +6714,9 @@ Choose a domain, select the templates you want to test, and run the audit in bat
         batch_size = st.slider(
             "Templates per batch",
             min_value=1,
-            max_value=10,
+            max_value=3,
             value=DOMAIN_AUDIT_BATCH_DEFAULT,
-            help="Lower this if Streamlit Cloud still approaches its memory limit. 5 is a safe default.",
+            help="Streamlit Community is tight for browser automation. Keep this at 1 for large domains.",
             key="domain_audit_batch_size",
         )
 
@@ -6857,7 +6919,11 @@ Choose a domain, select the templates you want to test, and run the audit in bat
                     driver = None
                     result = None
                     try:
-                            driver = create_driver(headless=True, performance_logs=False)
+                            driver = create_driver(
+                                headless=True,
+                                performance_logs=False,
+                                capture_network=False,
+                            )
                             result = audit_single_url(
                                 driver,
                                 sample_url,
