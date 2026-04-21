@@ -3858,6 +3858,12 @@ active_templates = [
     for template in template_records
     if template.get("active")
 ]
+template_rules_by_template = {}
+for template_rule in template_rules:
+    template_rules_by_template.setdefault(
+        str(template_rule.get("template_id") or "").strip(),
+        [],
+    ).append(template_rule)
 
 tab_labels = ["Audit URLs", "Domain Audit", "Compare Prod vs Stage"]
 if is_template_admin(logged_in_email):
@@ -4921,6 +4927,25 @@ def build_domain_audit_plan(domain_templates: List[dict], limit: int = DOMAIN_AU
     return plan_rows
 
 
+def build_domain_audit_plan_from_templates(domain_templates: List[dict]) -> List[dict]:
+    plan_rows = []
+    for template in sorted(
+        domain_templates or [],
+        key=lambda item: str(item.get("template_name") or "").lower(),
+    ):
+        sample_url, sample_error = choose_template_sample_url(template)
+        plan_rows.append(
+            {
+                "template": template,
+                "template_id": str(template.get("template_id") or "").strip(),
+                "template_name": str(template.get("template_name") or "Unnamed template"),
+                "sample_url": sample_url,
+                "sample_error": sample_error,
+            }
+        )
+    return plan_rows
+
+
 def summarize_validation_failures(
     result: dict,
     template: dict,
@@ -5136,7 +5161,49 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.platypus import PageBreak, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+
+    def resolve_pdf_fonts() -> Tuple[str, str]:
+        regular_candidates = [
+            "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansDevanagariUI-Regular.ttf",
+            "/usr/share/fonts/truetype/lohit-devanagari/Lohit-Devanagari.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+        bold_candidates = [
+            "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansDevanagari-Bold.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansDevanagariUI-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ]
+
+        regular_font = "Helvetica"
+        bold_font = "Helvetica-Bold"
+        for font_path in regular_candidates:
+            if not os.path.exists(font_path):
+                continue
+            try:
+                pdfmetrics.registerFont(TTFont("GAAuditUnicode", font_path))
+                regular_font = "GAAuditUnicode"
+                bold_font = regular_font
+                break
+            except Exception:
+                continue
+
+        for font_path in bold_candidates:
+            if not os.path.exists(font_path):
+                continue
+            try:
+                pdfmetrics.registerFont(TTFont("GAAuditUnicodeBold", font_path))
+                bold_font = "GAAuditUnicodeBold"
+                break
+            except Exception:
+                continue
+
+        return regular_font, bold_font
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -5148,9 +5215,11 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
         bottomMargin=24,
     )
     styles = getSampleStyleSheet()
+    pdf_font_name, pdf_bold_font_name = resolve_pdf_fonts()
     title_style = ParagraphStyle(
         "DomainAuditTitle",
         parent=styles["Title"],
+        fontName=pdf_bold_font_name,
         fontSize=18,
         leading=22,
         alignment=0,
@@ -5159,6 +5228,7 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     heading_style = ParagraphStyle(
         "DomainAuditHeading",
         parent=styles["Heading2"],
+        fontName=pdf_bold_font_name,
         fontSize=12,
         leading=15,
         textColor=colors.HexColor("#111827"),
@@ -5168,6 +5238,7 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     subheading_style = ParagraphStyle(
         "DomainAuditSubheading",
         parent=styles["Heading3"],
+        fontName=pdf_bold_font_name,
         fontSize=10,
         leading=12,
         textColor=colors.HexColor("#111827"),
@@ -5177,6 +5248,7 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     body_style = ParagraphStyle(
         "DomainAuditBody",
         parent=styles["BodyText"],
+        fontName=pdf_font_name,
         fontSize=8,
         leading=10,
         wordWrap="CJK",
@@ -5184,6 +5256,7 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     small_style = ParagraphStyle(
         "DomainAuditSmall",
         parent=styles["BodyText"],
+        fontName=pdf_font_name,
         fontSize=7,
         leading=8,
         wordWrap="CJK",
@@ -5207,7 +5280,7 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
                     ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#111827")),
                     ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#9ca3af")),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTNAME", (0, 0), (-1, 0), pdf_bold_font_name),
                     ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
                 ]
             )
@@ -5292,7 +5365,7 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
                     ("TEXTCOLOR", (0, 1), (-1, 1), colors.HexColor("#111827")),
                     ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#9ca3af")),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("FONTNAME", (0, 0), (-1, 1), "Helvetica-Bold"),
+                    ("FONTNAME", (0, 0), (-1, 1), pdf_bold_font_name),
                     ("ALIGN", (0, 0), (-1, 0), "CENTER"),
                     ("ROWBACKGROUNDS", (0, 2), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
                 ]
@@ -6504,12 +6577,7 @@ with tab_domain_audit:
         """
 Run a controlled domain-level audit from saved templates.
 
-For this first testing version, each domain run is capped to **three templates**:
-- homepage
-- article detail
-- one listing/landing template
-
-The app audits one URL at a time and generates a PDF report that includes every tested URL, whether it passed or failed.
+Choose a domain, select the templates you want to test, and run the audit. The app audits one URL at a time and generates a PDF report that includes every tested URL, whether it passed or failed.
 """
     )
 
@@ -6533,46 +6601,72 @@ The app audits one URL at a time and generates a PDF report that includes every 
         if not domain_names:
             st.info("No active templates are available. Add templates in Template Manager first.")
         else:
-            st.markdown("### Domains")
-            st.caption(
-                "Each Run audit button uses one sample URL from each selected template. "
-                "This keeps the test safe for Streamlit memory while we validate the report."
+            selected_domain = st.selectbox(
+                "Choose domain",
+                domain_names,
+                key="domain_audit_selected_domain",
+            )
+            selected_domain_templates = sorted(
+                [
+                    template
+                    for template in active_domain_templates
+                    if get_template_domain_label(template) == selected_domain
+                ],
+                key=lambda template: str(template.get("template_name") or "").lower(),
+            )
+            domain_state_key = re.sub(r"[^a-zA-Z0-9_]+", "_", selected_domain).strip("_") or "domain"
+            checkbox_keys = []
+            for index, template in enumerate(selected_domain_templates):
+                template_identity = str(template.get("template_id") or template.get("template_name") or index)
+                checkbox_key = f"domain_audit_template_selected_{domain_state_key}_{index}_{_slugify_identifier(template_identity)}"
+                checkbox_keys.append(checkbox_key)
+                if checkbox_key not in st.session_state:
+                    st.session_state[checkbox_key] = True
+
+            select_col1, select_col2, select_col3 = st.columns([1, 1, 5])
+            if select_col1.button("Select all", key=f"domain_audit_select_all_{domain_state_key}"):
+                for checkbox_key in checkbox_keys:
+                    st.session_state[checkbox_key] = True
+                st.rerun()
+            if select_col2.button("Clear all", key=f"domain_audit_clear_all_{domain_state_key}"):
+                for checkbox_key in checkbox_keys:
+                    st.session_state[checkbox_key] = False
+                st.rerun()
+            select_col3.caption(
+                "All templates are selected by default. Uncheck any template you do not want in this domain run."
             )
 
-            requested_domain = ""
-            header_cols = st.columns([2.0, 1.0, 1.1, 3.0, 1.0])
-            for col, label in zip(
-                header_cols,
-                ["Domain", "Templates", "Test size", "Templates selected for this test", "Action"],
-            ):
-                col.markdown(f"**{label}**")
+            st.markdown("### Templates to audit")
+            selected_templates = []
+            if not selected_domain_templates:
+                st.info("No active templates are available for this domain.")
+            else:
+                header_cols = st.columns([0.45, 2.2, 2.8, 0.7])
+                for col, label in zip(header_cols, ["Run", "Template", "Reference URL / Pattern", "Rules"]):
+                    col.markdown(f"**{label}**")
 
-            for domain_name in domain_names:
-                domain_templates = [
-                    template
-                    for template in active_domain_templates
-                    if get_template_domain_label(template) == domain_name
-                ]
-                domain_plan = build_domain_audit_plan(domain_templates, limit=DOMAIN_AUDIT_TEMPLATE_LIMIT)
-                template_names = ", ".join(row["template_name"] for row in domain_plan) or "No usable templates"
-                row_cols = st.columns([2.0, 1.0, 1.1, 3.0, 1.0])
-                row_cols[0].write(domain_name)
-                row_cols[1].write(str(len(domain_templates)))
-                row_cols[2].write(str(len(domain_plan)))
-                row_cols[3].write(template_names)
-                button_key = f"run_domain_audit_{re.sub(r'[^a-zA-Z0-9_]+', '_', domain_name)}"
-                if row_cols[4].button("Run audit", key=button_key, disabled=not domain_plan):
-                    requested_domain = domain_name
+                for index, template in enumerate(selected_domain_templates):
+                    checkbox_key = checkbox_keys[index]
+                    row_cols = st.columns([0.45, 2.2, 2.8, 0.7])
+                    is_selected = row_cols[0].checkbox(
+                        "Select template",
+                        key=checkbox_key,
+                        label_visibility="collapsed",
+                    )
+                    row_cols[1].write(str(template.get("template_name") or "Unnamed template"))
+                    row_cols[2].write(str(template.get("url_pattern") or "No reference URL/pattern"))
+                    template_id = str(template.get("template_id") or "").strip()
+                    row_cols[3].write(str(len(template_rules_by_template.get(template_id, []))))
+                    if is_selected:
+                        selected_templates.append(template)
 
-            if requested_domain:
-                domain_templates = [
-                    template
-                    for template in active_domain_templates
-                    if get_template_domain_label(template) == requested_domain
-                ]
-                audit_plan = build_domain_audit_plan(domain_templates, limit=DOMAIN_AUDIT_TEMPLATE_LIMIT)
+            audit_plan = build_domain_audit_plan_from_templates(selected_templates)
+            st.caption(
+                f"{len(audit_plan)} template URL(s) selected for {selected_domain}. "
+                "Runs are processed sequentially to reduce Streamlit memory pressure."
+            )
 
-                st.markdown(f"### Running Domain Audit: {requested_domain}")
+            if audit_plan:
                 plan_preview_df = pd.DataFrame(
                     [
                         {
@@ -6583,68 +6677,80 @@ The app audits one URL at a time and generates a PDF report that includes every 
                         for row in audit_plan
                     ]
                 )
-                st.dataframe(plan_preview_df, use_container_width=True, hide_index=True)
+                with st.expander("Selected URL plan", expanded=False):
+                    st.dataframe(plan_preview_df, use_container_width=True, hide_index=True)
 
-                progress = st.progress(0)
-                status_box = st.empty()
-                report_rows = []
+            run_disabled = not audit_plan
+            if st.button(
+                "Run audit",
+                key=f"run_domain_audit_{domain_state_key}",
+                disabled=run_disabled,
+                type="primary",
+            ):
+                st.markdown(f"### Running Domain Audit: {selected_domain}")
+                if audit_plan:
+                    st.dataframe(plan_preview_df, use_container_width=True, hide_index=True)
 
-                for index, plan_row in enumerate(audit_plan, start=1):
-                    template = plan_row["template"]
-                    sample_url = plan_row["sample_url"]
-                    sample_error = plan_row["sample_error"]
-                    status_box.write(
-                        f"Auditing {plan_row['template_name']} ({index}/{len(audit_plan)})"
-                    )
+                    progress = st.progress(0)
+                    status_box = st.empty()
+                    report_rows = []
 
-                    if sample_error or not sample_url:
-                        report_rows.append(
-                            build_domain_audit_report_row(
-                                requested_domain,
-                                template,
-                                sample_url,
-                                result=None,
-                                error_message=sample_error,
-                            )
+                    for index, plan_row in enumerate(audit_plan, start=1):
+                        template = plan_row["template"]
+                        sample_url = plan_row["sample_url"]
+                        sample_error = plan_row["sample_error"]
+                        status_box.write(
+                            f"Auditing {plan_row['template_name']} ({index}/{len(audit_plan)})"
                         )
+
+                        if sample_error or not sample_url:
+                            report_rows.append(
+                                build_domain_audit_report_row(
+                                    selected_domain,
+                                    template,
+                                    sample_url,
+                                    result=None,
+                                    error_message=sample_error,
+                                )
+                            )
+                            progress.progress(index / len(audit_plan))
+                            continue
+
+                        driver = None
+                        try:
+                            driver = create_driver(headless=True)
+                            result = audit_single_url(driver, sample_url, domain_wait_seconds)
+                            report_rows.append(
+                                build_domain_audit_report_row(
+                                    selected_domain,
+                                    template,
+                                    sample_url,
+                                    result=result,
+                                )
+                            )
+                        except Exception as exc:
+                            report_rows.append(
+                                build_domain_audit_report_row(
+                                    selected_domain,
+                                    template,
+                                    sample_url,
+                                    result=None,
+                                    error_message=str(exc),
+                                )
+                            )
+                        finally:
+                            if driver is not None:
+                                try:
+                                    driver.quit()
+                                except Exception:
+                                    pass
+
                         progress.progress(index / len(audit_plan))
-                        continue
+                        time.sleep(0.5)
 
-                    driver = None
-                    try:
-                        driver = create_driver(headless=True)
-                        result = audit_single_url(driver, sample_url, domain_wait_seconds)
-                        report_rows.append(
-                            build_domain_audit_report_row(
-                                requested_domain,
-                                template,
-                                sample_url,
-                                result=result,
-                            )
-                        )
-                    except Exception as exc:
-                        report_rows.append(
-                            build_domain_audit_report_row(
-                                requested_domain,
-                                template,
-                                sample_url,
-                                result=None,
-                                error_message=str(exc),
-                            )
-                        )
-                    finally:
-                        if driver is not None:
-                            try:
-                                driver.quit()
-                            except Exception:
-                                pass
-
-                    progress.progress(index / len(audit_plan))
-                    time.sleep(0.5)
-
-                status_box.write("Domain audit complete.")
-                st.session_state["domain_audit_report_domain"] = requested_domain
-                st.session_state["domain_audit_report_rows"] = report_rows
+                    status_box.write("Domain audit complete.")
+                    st.session_state["domain_audit_report_domain"] = selected_domain
+                    st.session_state["domain_audit_report_rows"] = report_rows
 
             report_rows = st.session_state.get("domain_audit_report_rows") or []
             report_domain = st.session_state.get("domain_audit_report_domain") or ""
