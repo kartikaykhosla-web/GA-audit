@@ -1,6 +1,7 @@
 import os
 import re
 import io
+import gc
 import json
 import time
 import glob
@@ -4809,6 +4810,7 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
 
 
 DOMAIN_AUDIT_TEMPLATE_LIMIT = 3
+DOMAIN_AUDIT_BATCH_DEFAULT = 5
 
 
 def get_template_domain_label(template: dict) -> str:
@@ -4944,6 +4946,21 @@ def build_domain_audit_plan_from_templates(domain_templates: List[dict]) -> List
             }
         )
     return plan_rows
+
+
+def compact_domain_audit_plan(plan_rows: List[dict]) -> List[dict]:
+    compact_rows = []
+    for row in plan_rows or []:
+        compact_rows.append(
+            {
+                "template": row.get("template") or {},
+                "template_id": row.get("template_id") or "",
+                "template_name": row.get("template_name") or "Unnamed template",
+                "sample_url": row.get("sample_url") or "",
+                "sample_error": row.get("sample_error") or "",
+            }
+        )
+    return compact_rows
 
 
 def summarize_validation_failures(
@@ -6577,7 +6594,7 @@ with tab_domain_audit:
         """
 Run a controlled domain-level audit from saved templates.
 
-Choose a domain, select the templates you want to test, and run the audit. The app audits one URL at a time and generates a PDF report that includes every tested URL, whether it passed or failed.
+Choose a domain, select the templates you want to test, and run the audit in batches. The app audits one URL at a time and keeps completed results, so larger domains can finish without forcing Streamlit to hold one massive browser run in memory.
 """
     )
 
@@ -6590,6 +6607,14 @@ Choose a domain, select the templates you want to test, and run the audit. The a
             max_value=20,
             value=8,
             key="domain_audit_wait_seconds",
+        )
+        batch_size = st.slider(
+            "Templates per batch",
+            min_value=1,
+            max_value=10,
+            value=DOMAIN_AUDIT_BATCH_DEFAULT,
+            help="Lower this if Streamlit Cloud still approaches its memory limit. 5 is a safe default.",
+            key="domain_audit_batch_size",
         )
 
         active_domain_templates = [template for template in active_templates if template.get("active")]
@@ -6663,7 +6688,7 @@ Choose a domain, select the templates you want to test, and run the audit. The a
             audit_plan = build_domain_audit_plan_from_templates(selected_templates)
             st.caption(
                 f"{len(audit_plan)} template URL(s) selected for {selected_domain}. "
-                "Runs are processed sequentially to reduce Streamlit memory pressure."
+                "Runs are processed sequentially in batches to reduce Streamlit memory pressure."
             )
 
             if audit_plan:
@@ -6680,77 +6705,139 @@ Choose a domain, select the templates you want to test, and run the audit. The a
                 with st.expander("Selected URL plan", expanded=False):
                     st.dataframe(plan_preview_df, use_container_width=True, hide_index=True)
 
-            run_disabled = not audit_plan
-            if st.button(
-                "Run audit",
-                key=f"run_domain_audit_{domain_state_key}",
-                disabled=run_disabled,
+            current_run_domain = st.session_state.get("domain_audit_run_domain")
+            current_plan = st.session_state.get("domain_audit_run_plan") or []
+            current_cursor = int(st.session_state.get("domain_audit_run_cursor") or 0)
+            current_rows = st.session_state.get("domain_audit_report_rows") or []
+            run_in_progress = bool(current_plan) and current_cursor < len(current_plan)
+            plan_signature = json.dumps(
+                [
+                    [row.get("template_id"), row.get("sample_url"), row.get("sample_error")]
+                    for row in audit_plan
+                ],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            stored_plan_signature = st.session_state.get("domain_audit_plan_signature")
+            selection_changed = bool(current_plan) and (
+                current_run_domain != selected_domain or stored_plan_signature != plan_signature
+            )
+
+            if selection_changed:
+                st.info("Template selection changed. Start a new run to use the updated selection.")
+
+            run_cols = st.columns([1.2, 1.2, 4])
+            start_clicked = run_cols[0].button(
+                "Start new audit",
+                key=f"start_domain_audit_{domain_state_key}",
+                disabled=not audit_plan,
                 type="primary",
-            ):
-                st.markdown(f"### Running Domain Audit: {selected_domain}")
-                if audit_plan:
-                    st.dataframe(plan_preview_df, use_container_width=True, hide_index=True)
+            )
+            next_clicked = run_cols[1].button(
+                "Run next batch",
+                key=f"continue_domain_audit_{domain_state_key}",
+                disabled=not run_in_progress,
+            )
+            run_cols[2].caption(
+                "Use Start new audit once, then keep clicking Run next batch until all selected templates are complete."
+            )
 
-                    progress = st.progress(0)
-                    status_box = st.empty()
-                    report_rows = []
+            if start_clicked:
+                st.session_state["domain_audit_run_domain"] = selected_domain
+                st.session_state["domain_audit_run_plan"] = compact_domain_audit_plan(audit_plan)
+                st.session_state["domain_audit_run_cursor"] = 0
+                st.session_state["domain_audit_report_domain"] = selected_domain
+                st.session_state["domain_audit_report_rows"] = []
+                st.session_state["domain_audit_plan_signature"] = plan_signature
+                current_run_domain = selected_domain
+                current_plan = st.session_state["domain_audit_run_plan"]
+                current_cursor = 0
+                current_rows = []
+                next_clicked = True
 
-                    for index, plan_row in enumerate(audit_plan, start=1):
-                        template = plan_row["template"]
-                        sample_url = plan_row["sample_url"]
-                        sample_error = plan_row["sample_error"]
-                        status_box.write(
-                            f"Auditing {plan_row['template_name']} ({index}/{len(audit_plan)})"
+            if next_clicked and current_plan:
+                st.markdown(f"### Running Domain Audit: {current_run_domain or selected_domain}")
+                end_index = min(current_cursor + int(batch_size), len(current_plan))
+                batch_plan = current_plan[current_cursor:end_index]
+                progress = st.progress(current_cursor / len(current_plan))
+                status_box = st.empty()
+                report_rows = list(current_rows)
+
+                for offset, plan_row in enumerate(batch_plan, start=1):
+                    absolute_index = current_cursor + offset
+                    template = plan_row["template"]
+                    sample_url = plan_row["sample_url"]
+                    sample_error = plan_row["sample_error"]
+                    status_box.write(
+                        f"Auditing {plan_row['template_name']} ({absolute_index}/{len(current_plan)})"
+                    )
+
+                    if sample_error or not sample_url:
+                        report_rows.append(
+                            build_domain_audit_report_row(
+                                current_run_domain or selected_domain,
+                                template,
+                                sample_url,
+                                result=None,
+                                error_message=sample_error,
+                            )
                         )
+                        st.session_state["domain_audit_run_cursor"] = absolute_index
+                        st.session_state["domain_audit_report_rows"] = report_rows
+                        progress.progress(absolute_index / len(current_plan))
+                        continue
 
-                        if sample_error or not sample_url:
-                            report_rows.append(
-                                build_domain_audit_report_row(
-                                    selected_domain,
-                                    template,
-                                    sample_url,
-                                    result=None,
-                                    error_message=sample_error,
-                                )
+                    driver = None
+                    result = None
+                    try:
+                        driver = create_driver(headless=True)
+                        result = audit_single_url(driver, sample_url, domain_wait_seconds)
+                        report_rows.append(
+                            build_domain_audit_report_row(
+                                current_run_domain or selected_domain,
+                                template,
+                                sample_url,
+                                result=result,
                             )
-                            progress.progress(index / len(audit_plan))
-                            continue
-
+                        )
+                    except Exception as exc:
+                        report_rows.append(
+                            build_domain_audit_report_row(
+                                current_run_domain or selected_domain,
+                                template,
+                                sample_url,
+                                result=None,
+                                error_message=str(exc),
+                            )
+                        )
+                    finally:
+                        if driver is not None:
+                            try:
+                                driver.quit()
+                            except Exception:
+                                pass
+                        result = None
                         driver = None
-                        try:
-                            driver = create_driver(headless=True)
-                            result = audit_single_url(driver, sample_url, domain_wait_seconds)
-                            report_rows.append(
-                                build_domain_audit_report_row(
-                                    selected_domain,
-                                    template,
-                                    sample_url,
-                                    result=result,
-                                )
-                            )
-                        except Exception as exc:
-                            report_rows.append(
-                                build_domain_audit_report_row(
-                                    selected_domain,
-                                    template,
-                                    sample_url,
-                                    result=None,
-                                    error_message=str(exc),
-                                )
-                            )
-                        finally:
-                            if driver is not None:
-                                try:
-                                    driver.quit()
-                                except Exception:
-                                    pass
+                        gc.collect()
 
-                        progress.progress(index / len(audit_plan))
-                        time.sleep(0.5)
-
-                    status_box.write("Domain audit complete.")
-                    st.session_state["domain_audit_report_domain"] = selected_domain
+                    st.session_state["domain_audit_run_cursor"] = absolute_index
+                    st.session_state["domain_audit_report_domain"] = current_run_domain or selected_domain
                     st.session_state["domain_audit_report_rows"] = report_rows
+                    progress.progress(absolute_index / len(current_plan))
+                    time.sleep(0.2)
+
+                if end_index >= len(current_plan):
+                    status_box.write("Domain audit complete.")
+                else:
+                    status_box.write(
+                        f"Batch complete. {len(current_plan) - end_index} template URL(s) remaining."
+                    )
+
+            run_plan = st.session_state.get("domain_audit_run_plan") or []
+            run_cursor = int(st.session_state.get("domain_audit_run_cursor") or 0)
+            if run_plan:
+                st.progress(min(run_cursor / len(run_plan), 1.0))
+                st.caption(f"Domain audit progress: {run_cursor}/{len(run_plan)} template URL(s) completed.")
 
             report_rows = st.session_state.get("domain_audit_report_rows") or []
             report_domain = st.session_state.get("domain_audit_report_domain") or ""
