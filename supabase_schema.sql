@@ -45,3 +45,45 @@ create index if not exists idx_ga_audit_template_rules_template
 create index if not exists idx_ga_audit_logs_created_at
     on public.ga_audit_logs(created_at desc);
 
+create table if not exists public.bulk_audit_jobs (
+    job_id text primary key,
+    domain_name text default '',
+    status text default 'queued',
+    total_count integer default 0,
+    completed_count integer default 0,
+    failed_count integer default 0,
+    requested_by text default '',
+    payload jsonb default '{}'::jsonb,
+    error_message text default '',
+    created_at timestamptz default now(),
+    started_at timestamptz,
+    completed_at timestamptz
+);
+
+create table if not exists public.bulk_audit_results (
+    result_id text primary key,
+    job_id text not null references public.bulk_audit_jobs(job_id) on delete cascade,
+    template_id text default '',
+    template_name text default '',
+    sample_url text default '',
+    audit_outcome text default '',
+    implementation_status text default '',
+    ga_present boolean default false,
+    pageview_triggered boolean default false,
+    pageview_source text default '',
+    events_count integer default 0,
+    events_fired text default '',
+    measurement_id text default '',
+    container_id text default '',
+    comscore_present boolean default false,
+    chartbeat_present boolean default false,
+    issues text default '',
+    result_json jsonb default '{}'::jsonb,
+    created_at timestamptz default now()
+);
+
+create index if not exists idx_bulk_audit_jobs_created_at
+    on public.bulk_audit_jobs(created_at desc);
+
+create index if not exists idx_bulk_audit_results_job
+    on public.bulk_audit_results(job_id);

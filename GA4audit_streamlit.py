@@ -3297,6 +3297,8 @@ def delete_template_rule(rule_id: str):
 SUPABASE_TEMPLATE_TABLE = "ga_audit_templates"
 SUPABASE_TEMPLATE_RULE_TABLE = "ga_audit_template_rules"
 SUPABASE_LOG_TABLE = "ga_audit_logs"
+SUPABASE_BULK_JOB_TABLE = "bulk_audit_jobs"
+SUPABASE_BULK_RESULT_TABLE = "bulk_audit_results"
 
 
 def get_supabase_settings() -> Dict[str, str]:
@@ -3637,6 +3639,160 @@ def reset_templates_to_homepage_only(email_id: str):
         return True, "Template Manager reset. Only the Home Page template remains."
     except Exception as exc:
         return False, str(exc)
+
+
+def get_github_settings() -> Dict[str, str]:
+    settings = {
+        "owner": os.environ.get("GITHUB_OWNER", "").strip(),
+        "repo": os.environ.get("GITHUB_REPO", "").strip(),
+        "workflow": os.environ.get("GITHUB_WORKFLOW", "bulk-audit.yml").strip() or "bulk-audit.yml",
+        "token": os.environ.get("GITHUB_TOKEN", "").strip(),
+        "ref": os.environ.get("GITHUB_REF_NAME", "main").strip() or "main",
+    }
+    try:
+        raw = st.secrets.get("github", {})
+    except Exception:
+        raw = {}
+    if raw:
+        raw_settings = dict(raw)
+        settings["owner"] = settings["owner"] or str(raw_settings.get("owner") or "").strip()
+        settings["repo"] = settings["repo"] or str(raw_settings.get("repo") or "").strip()
+        settings["workflow"] = str(raw_settings.get("workflow") or settings["workflow"]).strip() or "bulk-audit.yml"
+        settings["token"] = settings["token"] or str(raw_settings.get("token") or "").strip()
+        settings["ref"] = str(raw_settings.get("ref") or settings["ref"]).strip() or "main"
+    return settings
+
+
+def github_is_configured() -> bool:
+    settings = get_github_settings()
+    return bool(settings["owner"] and settings["repo"] and settings["workflow"] and settings["token"])
+
+
+def trigger_bulk_audit_workflow(job_id: str) -> Tuple[bool, str]:
+    settings = get_github_settings()
+    missing = [key for key in ("owner", "repo", "workflow", "token") if not settings.get(key)]
+    if missing:
+        return False, f"GitHub trigger is not configured. Missing: {', '.join(missing)}."
+    url = (
+        f"https://api.github.com/repos/{settings['owner']}/{settings['repo']}"
+        f"/actions/workflows/{settings['workflow']}/dispatches"
+    )
+    response = requests.post(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {settings['token']}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        json={"ref": settings["ref"], "inputs": {"job_id": job_id}},
+        timeout=30,
+    )
+    if response.status_code not in {200, 201, 204}:
+        return False, f"GitHub workflow trigger failed: {response.status_code} {response.text}"
+    return True, "GitHub bulk audit workflow started."
+
+
+def create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict], wait_seconds: int) -> Tuple[bool, str]:
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+    job_id = f"job_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
+    compact_plan = []
+    for row in compact_domain_audit_plan(plan_rows):
+        template = dict(row.get("template") or {})
+        template_id = str(template.get("template_id") or "").strip()
+        rules = [
+            rule
+            for rule in template_rules
+            if str(rule.get("template_id") or "").strip() == template_id
+        ]
+        compact_plan.append(
+            {
+                **row,
+                "domain_name": domain_name,
+                "rules": rules,
+            }
+        )
+    payload = {
+        "domain_name": domain_name,
+        "wait_seconds": int(wait_seconds or 8),
+        "plan": compact_plan,
+    }
+    row = {
+        "job_id": job_id,
+        "domain_name": domain_name,
+        "status": "queued",
+        "total_count": len(compact_plan),
+        "completed_count": 0,
+        "failed_count": 0,
+        "requested_by": email_id,
+        "payload": payload,
+    }
+    try:
+        supabase_request("POST", SUPABASE_BULK_JOB_TABLE, payload=row, prefer="return=minimal")
+        return True, job_id
+    except Exception as exc:
+        return False, str(exc)
+
+
+def load_bulk_audit_jobs(domain_name: str = "", limit: int = 10) -> Tuple[List[dict], str]:
+    if not supabase_is_configured():
+        return [], "Supabase is not configured yet."
+    params = {"select": "*", "order": "created_at.desc", "limit": str(limit)}
+    if domain_name:
+        params["domain_name"] = f"eq.{domain_name}"
+    try:
+        return supabase_request("GET", SUPABASE_BULK_JOB_TABLE, params=params), ""
+    except Exception as exc:
+        return [], str(exc)
+
+
+def load_bulk_audit_results(job_id: str) -> Tuple[List[dict], str]:
+    if not supabase_is_configured():
+        return [], "Supabase is not configured yet."
+    if not job_id:
+        return [], "Job ID is missing."
+    try:
+        return supabase_request(
+            "GET",
+            SUPABASE_BULK_RESULT_TABLE,
+            params={"select": "*", "job_id": f"eq.{job_id}", "order": "created_at.asc"},
+        ), ""
+    except Exception as exc:
+        return [], str(exc)
+
+
+def bulk_result_records_to_report_rows(result_records: List[dict]) -> List[dict]:
+    rows = []
+    for record in result_records or []:
+        result_json = record.get("result_json") or {}
+        if isinstance(result_json, str):
+            try:
+                result_json = json.loads(result_json)
+            except Exception:
+                result_json = {}
+        row = {
+            "domain": result_json.get("domain") or "",
+            "template_name": record.get("template_name") or result_json.get("template_name") or "",
+            "sample_url": record.get("sample_url") or result_json.get("sample_url") or "",
+            "audit_outcome": record.get("audit_outcome") or result_json.get("audit_outcome") or "",
+            "implementation_status": record.get("implementation_status") or result_json.get("implementation_status") or "",
+            "pageview_triggered": bool(record.get("pageview_triggered") or result_json.get("pageview_triggered")),
+            "pageview_source": record.get("pageview_source") or result_json.get("pageview_source") or "",
+            "ga_present": bool(record.get("ga_present") or result_json.get("ga_present")),
+            "events_count": int(record.get("events_count") or result_json.get("events_count") or 0),
+            "events_fired": record.get("events_fired") or result_json.get("events_fired") or "",
+            "container_id": record.get("container_id") or result_json.get("container_id") or "",
+            "measurement_id": record.get("measurement_id") or result_json.get("measurement_id") or "",
+            "comscore_present": bool(record.get("comscore_present") or result_json.get("comscore_present")),
+            "chartbeat_present": bool(record.get("chartbeat_present") or result_json.get("chartbeat_present")),
+            "issues": record.get("issues") or result_json.get("issues") or "",
+            "execution_failures": result_json.get("execution_failures") or [],
+            "event_failures": result_json.get("event_failures") or [],
+            "audit_duration_seconds": result_json.get("audit_duration_seconds") or 0,
+            "detail_payload": result_json.get("detail_payload") or {},
+        }
+        rows.append(row)
+    return rows
 
 
 def _normalize_template_name_key(value: str) -> str:
@@ -7182,9 +7338,9 @@ This capture is split into three layers:
 with tab_domain_audit:
     st.markdown(
         """
-Run a controlled domain-level audit from saved templates.
+Run a domain-level audit from saved templates.
 
-Choose a domain, select the templates you want to test, and run the audit in batches. The app audits one URL at a time and keeps completed results, so larger domains can finish without forcing Streamlit to hold one massive browser run in memory.
+Choose a domain, select templates, and click Run audit. The browser work runs in GitHub Actions and writes results back to Supabase, so Streamlit stays lightweight.
 """
     )
 
@@ -7198,15 +7354,6 @@ Choose a domain, select the templates you want to test, and run the audit in bat
             value=8,
             key="domain_audit_wait_seconds",
         )
-        batch_size = st.slider(
-            "Templates per batch",
-            min_value=1,
-            max_value=3,
-            value=DOMAIN_AUDIT_BATCH_DEFAULT,
-            help="Streamlit Community is tight for browser automation. Keep this at 1 for large domains.",
-            key="domain_audit_batch_size",
-        )
-
         active_domain_templates = [template for template in active_templates if template.get("active")]
         domain_names = sorted(
             {get_template_domain_label(template) for template in active_domain_templates},
@@ -7278,7 +7425,7 @@ Choose a domain, select the templates you want to test, and run the audit in bat
             audit_plan = build_domain_audit_plan_from_templates(selected_templates)
             st.caption(
                 f"{len(audit_plan)} template URL(s) selected for {selected_domain}. "
-                "Runs are processed sequentially in batches to reduce Streamlit memory pressure."
+                "GitHub Actions will process them sequentially."
             )
 
             if audit_plan:
@@ -7295,185 +7442,90 @@ Choose a domain, select the templates you want to test, and run the audit in bat
                 with st.expander("Selected URL plan", expanded=False):
                     st.dataframe(plan_preview_df, use_container_width=True, hide_index=True)
 
-            current_run_domain = st.session_state.get("domain_audit_run_domain")
-            current_plan = st.session_state.get("domain_audit_run_plan") or []
-            current_cursor = int(st.session_state.get("domain_audit_run_cursor") or 0)
-            current_rows = st.session_state.get("domain_audit_report_rows") or []
-            run_in_progress = bool(current_plan) and current_cursor < len(current_plan)
-            plan_signature = json.dumps(
-                [
-                    [row.get("template_id"), row.get("sample_url"), row.get("sample_error")]
-                    for row in audit_plan
-                ],
-                ensure_ascii=False,
-                sort_keys=True,
+            st.markdown("### Run Bulk Audit")
+            st.caption(
+                "This now runs in GitHub Actions. Streamlit only creates the job and reads Supabase results, "
+                "so the app should not hit Selenium memory limits."
             )
-            stored_plan_signature = st.session_state.get("domain_audit_plan_signature")
-            selection_changed = bool(current_plan) and (
-                current_run_domain != selected_domain or stored_plan_signature != plan_signature
-            )
+            if not github_is_configured():
+                st.warning(
+                    "GitHub trigger is not configured in Streamlit secrets. Add [github] owner, repo, workflow, and token."
+                )
 
-            if selection_changed:
-                st.info("Template selection changed. Start a new run to use the updated selection.")
-
-            auto_run_requested = st.checkbox(
-                "Auto-run all remaining batches",
-                value=True,
-                key=f"domain_audit_auto_run_requested_{domain_state_key}",
-                help="Runs one batch per Streamlit execution, then automatically refreshes and continues.",
-            )
-            auto_run_active = bool(st.session_state.get("domain_audit_auto_run"))
-
-            run_cols = st.columns([1.2, 1.2, 1.2, 3.8])
-            start_clicked = run_cols[0].button(
-                "Start new audit",
-                key=f"start_domain_audit_{domain_state_key}",
-                disabled=not audit_plan,
+            run_cols = st.columns([1, 3])
+            run_clicked = run_cols[0].button(
+                "Run audit",
+                key=f"start_github_domain_audit_{domain_state_key}",
+                disabled=not audit_plan or not supabase_is_configured() or not github_is_configured(),
                 type="primary",
             )
-            next_clicked = run_cols[1].button(
-                "Run next batch",
-                key=f"continue_domain_audit_{domain_state_key}",
-                disabled=not run_in_progress,
+            run_cols[1].caption(
+                "The selected templates will be processed one by one by GitHub Actions."
             )
-            pause_clicked = run_cols[2].button(
-                "Pause auto-run" if auto_run_active else "Auto-run paused",
-                key=f"pause_domain_audit_{domain_state_key}",
-                disabled=not auto_run_active,
-            )
-            run_cols[3].caption(
-                "Start once. If auto-run is enabled, batches continue by themselves until completion."
-            )
-            if pause_clicked:
-                st.session_state["domain_audit_auto_run"] = False
-                auto_run_active = False
-
-            if start_clicked:
-                st.session_state["domain_audit_run_domain"] = selected_domain
-                st.session_state["domain_audit_run_plan"] = compact_domain_audit_plan(audit_plan)
-                st.session_state["domain_audit_run_cursor"] = 0
-                st.session_state["domain_audit_report_domain"] = selected_domain
-                st.session_state["domain_audit_report_rows"] = []
-                st.session_state["domain_audit_plan_signature"] = plan_signature
-                st.session_state["domain_audit_auto_run"] = bool(auto_run_requested)
-                current_run_domain = selected_domain
-                current_plan = st.session_state["domain_audit_run_plan"]
-                current_cursor = 0
-                current_rows = []
-                next_clicked = True
-                auto_run_active = bool(auto_run_requested)
-
-            auto_should_continue = (
-                auto_run_active
-                and bool(current_plan)
-                and current_cursor < len(current_plan)
-                and not selection_changed
-            )
-            should_run_batch = bool(next_clicked or auto_should_continue)
-
-            if should_run_batch and current_plan:
-                st.markdown(f"### Running Domain Audit: {current_run_domain or selected_domain}")
-                end_index = min(current_cursor + int(batch_size), len(current_plan))
-                batch_plan = current_plan[current_cursor:end_index]
-                progress = st.progress(current_cursor / len(current_plan))
-                status_box = st.empty()
-                report_rows = list(current_rows)
-
-                for offset, plan_row in enumerate(batch_plan, start=1):
-                    absolute_index = current_cursor + offset
-                    template = plan_row["template"]
-                    sample_url = plan_row["sample_url"]
-                    sample_error = plan_row["sample_error"]
-                    status_box.write(
-                        f"Auditing {plan_row['template_name']} ({absolute_index}/{len(current_plan)})"
-                    )
-
-                    if sample_error or not sample_url:
-                        report_rows.append(
-                            build_domain_audit_report_row(
-                                current_run_domain or selected_domain,
-                                template,
-                                sample_url,
-                                result=None,
-                                error_message=sample_error,
-                            )
-                        )
-                        st.session_state["domain_audit_run_cursor"] = absolute_index
-                        st.session_state["domain_audit_report_rows"] = report_rows
-                        progress.progress(absolute_index / len(current_plan))
-                        continue
-
-                    driver = None
-                    result = None
-                    try:
-                            driver = create_driver(
-                                headless=True,
-                                performance_logs=False,
-                                capture_network=False,
-                            )
-                            result = audit_single_url(
-                                driver,
-                                sample_url,
-                                domain_wait_seconds,
-                                compact=True,
-                            )
-                            report_rows.append(
-                                build_domain_audit_report_row(
-                                    current_run_domain or selected_domain,
-                                    template,
-                                    sample_url,
-                                    result=result,
-                                    include_detail=False,
-                                )
-                            )
-                    except Exception as exc:
-                        report_rows.append(
-                            build_domain_audit_report_row(
-                                current_run_domain or selected_domain,
-                                template,
-                                sample_url,
-                                result=None,
-                                error_message=str(exc),
-                            )
-                        )
-                    finally:
-                        if driver is not None:
-                            try:
-                                driver.quit()
-                            except Exception:
-                                pass
-                        result = None
-                        driver = None
-                        gc.collect()
-
-                    st.session_state["domain_audit_run_cursor"] = absolute_index
-                    st.session_state["domain_audit_report_domain"] = current_run_domain or selected_domain
-                    st.session_state["domain_audit_report_rows"] = report_rows
-                    progress.progress(absolute_index / len(current_plan))
-                    time.sleep(0.2)
-
-                if end_index >= len(current_plan):
-                    status_box.write("Domain audit complete.")
-                    st.session_state["domain_audit_auto_run"] = False
+            if run_clicked:
+                success, response = create_bulk_audit_job(
+                    logged_in_email,
+                    selected_domain,
+                    audit_plan,
+                    domain_wait_seconds,
+                )
+                if not success:
+                    st.error(response)
                 else:
-                    status_box.write(
-                        f"Batch complete. {len(current_plan) - end_index} template URL(s) remaining."
-                    )
-                    if st.session_state.get("domain_audit_auto_run"):
-                        time.sleep(1.0)
-                        st.rerun()
+                    job_id = response
+                    trigger_success, trigger_message = trigger_bulk_audit_workflow(job_id)
+                    if trigger_success:
+                        st.session_state["latest_bulk_audit_job_id"] = job_id
+                        st.success(f"Bulk audit started in GitHub Actions. Job ID: {job_id}")
+                    else:
+                        st.error(trigger_message)
 
-            run_plan = st.session_state.get("domain_audit_run_plan") or []
-            run_cursor = int(st.session_state.get("domain_audit_run_cursor") or 0)
-            if run_plan:
-                st.progress(min(run_cursor / len(run_plan), 1.0))
-                st.caption(f"Domain audit progress: {run_cursor}/{len(run_plan)} template URL(s) completed.")
+            jobs, jobs_error = load_bulk_audit_jobs(selected_domain, limit=12)
+            if jobs_error:
+                st.warning(jobs_error)
+            elif jobs:
+                st.markdown("### Bulk Audit Jobs")
+                job_options = {
+                    f"{job.get('created_at', '')} | {job.get('status', '')} | {job.get('completed_count', 0)}/{job.get('total_count', 0)} | {job.get('job_id')}": job
+                    for job in jobs
+                }
+                latest_job_id = st.session_state.get("latest_bulk_audit_job_id")
+                labels = list(job_options.keys())
+                default_index = 0
+                if latest_job_id:
+                    for index, label in enumerate(labels):
+                        if latest_job_id in label:
+                            default_index = index
+                            break
+                selected_job_label = st.selectbox(
+                    "View job",
+                    labels,
+                    index=default_index,
+                    key=f"domain_audit_job_select_{domain_state_key}",
+                )
+                selected_job = job_options[selected_job_label]
+                selected_job_id = str(selected_job.get("job_id") or "").strip()
+                job_total = int(selected_job.get("total_count") or 0)
+                job_completed = int(selected_job.get("completed_count") or 0)
+                st.progress((job_completed / job_total) if job_total else 0)
+                metric_cols = st.columns(4)
+                metric_cols[0].metric("Status", str(selected_job.get("status") or ""))
+                metric_cols[1].metric("Completed", f"{job_completed}/{job_total}")
+                metric_cols[2].metric("Failed", int(selected_job.get("failed_count") or 0))
+                metric_cols[3].metric("Job ID", selected_job_id[-12:] if selected_job_id else "-")
+                if selected_job.get("error_message"):
+                    st.error(str(selected_job.get("error_message")))
+                if st.button("Refresh job status", key=f"refresh_bulk_job_{domain_state_key}"):
+                    st.rerun()
 
-            report_rows = st.session_state.get("domain_audit_report_rows") or []
-            report_domain = st.session_state.get("domain_audit_report_domain") or ""
-            if report_rows:
-                st.markdown("### Latest Domain Audit Report")
-                st.caption(f"Domain: {report_domain}")
+                result_records, results_error = load_bulk_audit_results(selected_job_id)
+                if results_error:
+                    st.warning(results_error)
+                report_rows = bulk_result_records_to_report_rows(result_records)
+                report_domain = str(selected_job.get("domain_name") or selected_domain)
+                if report_rows:
+                    st.markdown("### Latest Domain Audit Report")
+                    st.caption(f"Domain: {report_domain}")
 
                 issue_rows = [row for row in report_rows if row.get("audit_outcome") == "Issue"]
                 metric_col1, metric_col2, metric_col3 = st.columns(3)
