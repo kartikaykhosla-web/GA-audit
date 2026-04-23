@@ -22,12 +22,6 @@ try:
     import extra_streamlit_components as stx
 except Exception:
     stx = None
-try:
-    import gspread
-    from google.oauth2.service_account import Credentials
-except Exception:
-    gspread = None
-    Credentials = None
 from selenium import webdriver as selenium_webdriver
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -3287,6 +3281,355 @@ def delete_template_rule(rule_id: str):
     return True, rule_id_text
 
 
+# -------------------------
+# Supabase persistence
+# -------------------------
+
+SUPABASE_TEMPLATE_TABLE = "ga_audit_templates"
+SUPABASE_TEMPLATE_RULE_TABLE = "ga_audit_template_rules"
+SUPABASE_LOG_TABLE = "ga_audit_logs"
+
+
+def get_supabase_settings() -> Dict[str, str]:
+    settings = {
+        "url": os.environ.get("SUPABASE_URL", "").strip(),
+        "key": (
+            os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+            or os.environ.get("SUPABASE_ANON_KEY")
+            or ""
+        ).strip(),
+    }
+    try:
+        raw = st.secrets.get("supabase", {})
+    except Exception:
+        raw = {}
+    if raw:
+        raw_settings = dict(raw)
+        settings["url"] = settings["url"] or str(raw_settings.get("url") or "").strip()
+        settings["key"] = settings["key"] or str(
+            raw_settings.get("service_role_key")
+            or raw_settings.get("anon_key")
+            or raw_settings.get("key")
+            or ""
+        ).strip()
+    settings["url"] = settings["url"].rstrip("/")
+    return settings
+
+
+def supabase_is_configured() -> bool:
+    settings = get_supabase_settings()
+    return bool(settings["url"] and settings["key"])
+
+
+def supabase_headers(prefer: str = "") -> Dict[str, str]:
+    settings = get_supabase_settings()
+    headers = {
+        "apikey": settings["key"],
+        "Authorization": f"Bearer {settings['key']}",
+        "Content-Type": "application/json",
+    }
+    if prefer:
+        headers["Prefer"] = prefer
+    return headers
+
+
+def supabase_request(method: str, table: str, params: Optional[dict] = None, payload: Any = None, prefer: str = ""):
+    settings = get_supabase_settings()
+    if not settings["url"] or not settings["key"]:
+        raise RuntimeError("Supabase is not configured. Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
+    url = f"{settings['url']}/rest/v1/{table}"
+    response = requests.request(
+        method,
+        url,
+        headers=supabase_headers(prefer=prefer),
+        params=params or {},
+        json=payload,
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Supabase {method} {table} failed: {response.status_code} {response.text}")
+    if not response.text:
+        return []
+    try:
+        return response.json()
+    except Exception:
+        return []
+
+
+def _supabase_clean_record(record: dict, headers: List[str]) -> dict:
+    cleaned = {header: "" for header in headers}
+    for key, value in (record or {}).items():
+        if key == "active":
+            cleaned[key] = _normalize_template_flag(value)
+        elif value is None:
+            cleaned[str(key)] = ""
+        else:
+            cleaned[str(key)] = str(value).strip()
+    return cleaned
+
+
+def _template_payload_for_supabase(email_id: str, template_payload: dict, template_id: str = "", existing: Optional[dict] = None) -> dict:
+    now_text = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    existing = existing or {}
+    return {
+        "template_id": template_id or f"tpl_{uuid.uuid4().hex[:8]}",
+        "template_name": str(template_payload.get("template_name") or "").strip(),
+        "domain_name": str(template_payload.get("domain_name") or "").strip(),
+        "measurement_id": str(template_payload.get("measurement_id") or "").strip(),
+        "container_id": str(template_payload.get("container_id") or "").strip(),
+        "url_pattern": str(template_payload.get("url_pattern") or "").strip(),
+        "active": bool(template_payload.get("active", True)),
+        "created_by": str(existing.get("created_by") or email_id or "").strip(),
+        "created_at": str(existing.get("created_at") or now_text),
+    }
+
+
+def _rule_payload_for_supabase(email_id: str, rule_payload: dict, rule_id: str = "", existing: Optional[dict] = None) -> dict:
+    now_text = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    existing = existing or {}
+    return {
+        "rule_id": rule_id or f"rule_{uuid.uuid4().hex[:8]}",
+        "template_id": str(rule_payload.get("template_id") or existing.get("template_id") or "").strip(),
+        "rule_scope": str(rule_payload.get("rule_scope") or existing.get("rule_scope") or "").strip(),
+        "field_name": str(rule_payload.get("field_name") or "").strip(),
+        "rule_type": str(rule_payload.get("rule_type") or "").strip(),
+        "expected_values": str(rule_payload.get("expected_values") or "").strip(),
+        "notes": str(rule_payload.get("notes") or "").strip(),
+        "created_by": str(existing.get("created_by") or email_id or "").strip(),
+        "created_at": str(existing.get("created_at") or now_text),
+    }
+
+
+def append_audit_log(email_id: str, result: dict, audit_summary: dict):
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+
+    execution_dimension_map = build_execution_dimension_map(audit_summary)
+    execution_dimensions = [
+        f"{dimension}={value}"
+        for dimension, value in execution_dimension_map.items()
+    ]
+    payload = {
+        "date": datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
+        "email_id": email_id,
+        "url_checked": result.get("page_url") or "",
+        "pageview_trigger_found": bool(audit_summary.get("pageview_triggered")),
+        LEGACY_EXECUTION_SUMMARY_HEADER: "\n".join(execution_dimensions) if execution_dimensions else "None",
+        "execution_dimensions": execution_dimension_map,
+    }
+    try:
+        supabase_request("POST", SUPABASE_LOG_TABLE, payload=payload, prefer="return=minimal")
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def load_templates_and_rules():
+    if not supabase_is_configured():
+        return [], [], "Supabase is not configured yet. Add `supabase.url` and `supabase.service_role_key` to Streamlit secrets."
+
+    try:
+        template_rows = supabase_request(
+            "GET",
+            SUPABASE_TEMPLATE_TABLE,
+            params={"select": "*", "order": "template_name.asc"},
+        )
+        rule_rows = supabase_request(
+            "GET",
+            SUPABASE_TEMPLATE_RULE_TABLE,
+            params={"select": "*", "order": "field_name.asc"},
+        )
+    except Exception as exc:
+        return [], [], str(exc)
+
+    templates = [_supabase_clean_record(record, TEMPLATE_HEADERS) for record in template_rows]
+    rules = [_supabase_clean_record(record, TEMPLATE_RULE_HEADERS) for record in rule_rows]
+
+    active_template_ids = {
+        str(template.get("template_id") or "").strip()
+        for template in templates
+        if template.get("active")
+    }
+    rules = [
+        rule
+        for rule in rules
+        if str(rule.get("template_id") or "").strip() in active_template_ids
+    ]
+    return templates, rules, ""
+
+
+def append_template_record(email_id: str, template_payload: dict):
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+    row_map = _template_payload_for_supabase(email_id, template_payload)
+    try:
+        response = supabase_request(
+            "POST",
+            SUPABASE_TEMPLATE_TABLE,
+            payload=row_map,
+            prefer="return=representation",
+        )
+        if isinstance(response, list) and response:
+            return True, str(response[0].get("template_id") or row_map["template_id"])
+        return True, row_map["template_id"]
+    except Exception as exc:
+        return False, str(exc)
+
+
+def update_template_record(email_id: str, template_id: str, template_payload: dict):
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+    template_id_text = str(template_id or "").strip()
+    if not template_id_text:
+        return False, "Template ID is missing."
+    try:
+        existing_rows = supabase_request(
+            "GET",
+            SUPABASE_TEMPLATE_TABLE,
+            params={"select": "*", "template_id": f"eq.{template_id_text}", "limit": "1"},
+        )
+        existing = existing_rows[0] if isinstance(existing_rows, list) and existing_rows else {}
+        row_map = _template_payload_for_supabase(email_id, template_payload, template_id_text, existing)
+        supabase_request(
+            "PATCH",
+            SUPABASE_TEMPLATE_TABLE,
+            params={"template_id": f"eq.{template_id_text}"},
+            payload=row_map,
+            prefer="return=minimal",
+        )
+        return True, template_id_text
+    except Exception as exc:
+        return False, str(exc)
+
+
+def append_template_rule(email_id: str, rule_payload: dict):
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+    row_map = _rule_payload_for_supabase(email_id, rule_payload)
+    try:
+        response = supabase_request(
+            "POST",
+            SUPABASE_TEMPLATE_RULE_TABLE,
+            payload=row_map,
+            prefer="return=representation",
+        )
+        if isinstance(response, list) and response:
+            return True, str(response[0].get("rule_id") or row_map["rule_id"])
+        return True, row_map["rule_id"]
+    except Exception as exc:
+        return False, str(exc)
+
+
+def append_template_rules(email_id: str, rule_payloads: List[dict]):
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+    payloads = [payload for payload in (rule_payloads or []) if isinstance(payload, dict)]
+    if not payloads:
+        return False, "No rules to save."
+    rows = [_rule_payload_for_supabase(email_id, payload) for payload in payloads]
+    try:
+        supabase_request(
+            "POST",
+            SUPABASE_TEMPLATE_RULE_TABLE,
+            payload=rows,
+            prefer="return=minimal",
+        )
+        return True, str(len(rows))
+    except Exception as exc:
+        return False, str(exc)
+
+
+def update_template_rule(email_id: str, rule_id: str, rule_payload: dict):
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+    rule_id_text = str(rule_id or "").strip()
+    if not rule_id_text:
+        return False, "Rule ID is missing."
+    try:
+        existing_rows = supabase_request(
+            "GET",
+            SUPABASE_TEMPLATE_RULE_TABLE,
+            params={"select": "*", "rule_id": f"eq.{rule_id_text}", "limit": "1"},
+        )
+        existing = existing_rows[0] if isinstance(existing_rows, list) and existing_rows else {}
+        row_map = _rule_payload_for_supabase(email_id, rule_payload, rule_id_text, existing)
+        supabase_request(
+            "PATCH",
+            SUPABASE_TEMPLATE_RULE_TABLE,
+            params={"rule_id": f"eq.{rule_id_text}"},
+            payload=row_map,
+            prefer="return=minimal",
+        )
+        return True, rule_id_text
+    except Exception as exc:
+        return False, str(exc)
+
+
+def delete_template_rule(rule_id: str):
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+    rule_id_text = str(rule_id or "").strip()
+    if not rule_id_text:
+        return False, "Rule ID is missing."
+    try:
+        supabase_request(
+            "DELETE",
+            SUPABASE_TEMPLATE_RULE_TABLE,
+            params={"rule_id": f"eq.{rule_id_text}"},
+            prefer="return=minimal",
+        )
+        return True, rule_id_text
+    except Exception as exc:
+        return False, str(exc)
+
+
+def reset_templates_to_homepage_only(email_id: str):
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+
+    homepage_seed = get_homepage_starter_template()
+    homepage_template_id = "tpl_home_page"
+    timestamp = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        supabase_request("DELETE", SUPABASE_TEMPLATE_RULE_TABLE, params={"rule_id": "not.is.null"}, prefer="return=minimal")
+        supabase_request("DELETE", SUPABASE_TEMPLATE_TABLE, params={"template_id": "not.is.null"}, prefer="return=minimal")
+
+        template_row = {
+            "template_id": homepage_template_id,
+            "template_name": homepage_seed.get("template_name"),
+            "domain_name": homepage_seed.get("domain_name"),
+            "measurement_id": homepage_seed.get("measurement_id"),
+            "container_id": homepage_seed.get("container_id"),
+            "url_pattern": homepage_seed.get("url_pattern"),
+            "active": True,
+            "created_by": email_id,
+            "created_at": timestamp,
+        }
+        supabase_request("POST", SUPABASE_TEMPLATE_TABLE, payload=template_row, prefer="return=minimal")
+
+        rule_rows = []
+        for index, rule in enumerate(homepage_seed.get("rules", []), start=1):
+            rule_rows.append(
+                {
+                    "rule_id": f"rule_home_page_{index:02d}",
+                    "template_id": homepage_template_id,
+                    "rule_scope": str(rule.get("rule_scope") or "").strip(),
+                    "field_name": str(rule.get("field_name") or "").strip(),
+                    "rule_type": str(rule.get("rule_type") or "").strip(),
+                    "expected_values": str(rule.get("expected_values") or "").strip(),
+                    "notes": str(rule.get("notes") or "").strip(),
+                    "created_by": email_id,
+                    "created_at": timestamp,
+                }
+            )
+        if rule_rows:
+            supabase_request("POST", SUPABASE_TEMPLATE_RULE_TABLE, payload=rule_rows, prefer="return=minimal")
+        return True, "Template Manager reset. Only the Home Page template remains."
+    except Exception as exc:
+        return False, str(exc)
+
+
 def _normalize_template_name_key(value: str) -> str:
     return str(value or "").strip().lower()
 
@@ -3926,6 +4269,53 @@ def should_auto_cleanup_homepage_templates(template_records: List[dict]) -> bool
     return has_old_starter_templates or has_duplicate_homepage_templates
 
 
+def reset_templates_to_homepage_only(email_id: str):
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+
+    homepage_seed = get_homepage_starter_template()
+    homepage_template_id = "tpl_home_page"
+    timestamp = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        supabase_request("DELETE", SUPABASE_TEMPLATE_RULE_TABLE, params={"rule_id": "not.is.null"}, prefer="return=minimal")
+        supabase_request("DELETE", SUPABASE_TEMPLATE_TABLE, params={"template_id": "not.is.null"}, prefer="return=minimal")
+
+        template_row = {
+            "template_id": homepage_template_id,
+            "template_name": homepage_seed.get("template_name"),
+            "domain_name": homepage_seed.get("domain_name"),
+            "measurement_id": homepage_seed.get("measurement_id"),
+            "container_id": homepage_seed.get("container_id"),
+            "url_pattern": homepage_seed.get("url_pattern"),
+            "active": True,
+            "created_by": email_id,
+            "created_at": timestamp,
+        }
+        supabase_request("POST", SUPABASE_TEMPLATE_TABLE, payload=template_row, prefer="return=minimal")
+
+        rule_rows = []
+        for index, rule in enumerate(homepage_seed.get("rules", []), start=1):
+            rule_rows.append(
+                {
+                    "rule_id": f"rule_home_page_{index:02d}",
+                    "template_id": homepage_template_id,
+                    "rule_scope": str(rule.get("rule_scope") or "").strip(),
+                    "field_name": str(rule.get("field_name") or "").strip(),
+                    "rule_type": str(rule.get("rule_type") or "").strip(),
+                    "expected_values": str(rule.get("expected_values") or "").strip(),
+                    "notes": str(rule.get("notes") or "").strip(),
+                    "created_by": email_id,
+                    "created_at": timestamp,
+                }
+            )
+        if rule_rows:
+            supabase_request("POST", SUPABASE_TEMPLATE_RULE_TABLE, payload=rule_rows, prefer="return=minimal")
+        return True, "Template Manager reset. Only the Home Page template remains."
+    except Exception as exc:
+        return False, str(exc)
+
+
 def render_sidebar_session(email_id: str):
     with st.sidebar:
         st.markdown("### Session")
@@ -3935,13 +4325,12 @@ def render_sidebar_session(email_id: str):
             clear_login_cookie()
             st.rerun()
 
-        st.markdown("### Log Sheet")
-        service_account_info = get_service_account_info()
-        if service_account_info:
-            st.success("Google Sheets logging configured")
+        st.markdown("### Storage")
+        if supabase_is_configured():
+            st.success("Supabase configured")
         else:
-            st.warning("Google Sheets logging not configured")
-            st.caption("Add `gcp_service_account` to Streamlit secrets to enable logging.")
+            st.warning("Supabase not configured")
+            st.caption("Add `supabase.url` and `supabase.service_role_key` to Streamlit secrets.")
 
 
 logged_in_email = require_login()
