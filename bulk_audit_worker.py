@@ -90,9 +90,17 @@ def create_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-quic")
+    options.add_argument("--disable-background-networking")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests")
     options.add_argument("--window-size=1365,1600")
     options.add_argument("--ignore-certificate-errors")
-    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument(
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+    )
+    options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     chrome_binary = os.environ.get("CHROME_BINARY") or os.environ.get("CHROME_PATH")
     if chrome_binary:
         options.binary_location = chrome_binary
@@ -110,6 +118,8 @@ def create_driver():
     )
     driver.scopes = [
         r".*google-analytics\.com/.*collect.*",
+        r".*analytics\.google\.com/.*collect.*",
+        r".*google\.com/ccm/collect.*",
         r".*googletagmanager\.com/.*",
         r".*scorecardresearch\.com/.*",
         r".*chartbeat\.net/.*ping.*",
@@ -122,9 +132,40 @@ def install_datalayer_probe(driver):
 (() => {
   if (window.__gaAuditProbeInstalled) return;
   window.__gaAuditProbeInstalled = true;
-  window.__gaAudit = window.__gaAudit || { pushes: [], state: {}, gtag: [] };
+  window.__gaAudit = window.__gaAudit || { pushes: [], state: {}, gtag: [], transportHits: [] };
   const clone = (value) => {
     try { return JSON.parse(JSON.stringify(value)); } catch (e) { return String(value); }
+  };
+  const asText = (data) => {
+    try {
+      if (data === null || data === undefined) return "";
+      if (typeof data === "string") return data;
+      if (typeof URLSearchParams !== "undefined" && data instanceof URLSearchParams) return data.toString();
+      if (typeof FormData !== "undefined" && data instanceof FormData) {
+        const pairs = [];
+        data.forEach((entryValue, entryKey) => pairs.push(encodeURIComponent(entryKey) + "=" + encodeURIComponent(String(entryValue))));
+        return pairs.join("&");
+      }
+      if (typeof Blob !== "undefined" && data instanceof Blob) return "[Blob size=" + data.size + "]";
+      return String(data);
+    } catch (e) {
+      return "[unserializable]";
+    }
+  };
+  const isGaUrl = (url) => {
+    return typeof url === "string" && /(google-analytics\.com\/(g|j|r)\/collect|analytics\.google\.com\/g\/collect|google\.com\/ccm\/collect)/i.test(url);
+  };
+  const recordTransport = (api, url, method, body) => {
+    try {
+      if (!isGaUrl(String(url || ""))) return;
+      window.__gaAudit.transportHits.push({
+        timestamp: Date.now(),
+        api,
+        url: String(url || ""),
+        method: String(method || "GET").toUpperCase(),
+        bodyText: asText(body)
+      });
+    } catch (e) {}
   };
   const mergeState = (item) => {
     if (item && typeof item === 'object' && !Array.isArray(item)) {
@@ -157,6 +198,56 @@ def install_datalayer_probe(driver):
     };
     window.gtag.__gaAuditHooked = true;
   };
+  if (navigator && typeof navigator.sendBeacon === "function" && !navigator.sendBeacon.__gaAuditHooked) {
+    const originalSendBeacon = navigator.sendBeacon.bind(navigator);
+    navigator.sendBeacon = function(url, data) {
+      recordTransport("sendBeacon", url, "POST", data);
+      return originalSendBeacon(url, data);
+    };
+    navigator.sendBeacon.__gaAuditHooked = true;
+  }
+  if (typeof window.fetch === "function" && !window.fetch.__gaAuditHooked) {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = function(input, init) {
+      const url = typeof input === "string" ? input : (input && input.url) || "";
+      const method = (init && init.method) || (input && input.method) || "GET";
+      const body = (init && init.body) || null;
+      recordTransport("fetch", url, method, body);
+      return originalFetch(input, init);
+    };
+    window.fetch.__gaAuditHooked = true;
+  }
+  if (window.XMLHttpRequest && window.XMLHttpRequest.prototype && !window.XMLHttpRequest.prototype.__gaAuditHooked) {
+    const proto = window.XMLHttpRequest.prototype;
+    const originalOpen = proto.open;
+    const originalSend = proto.send;
+    proto.open = function(method, url) {
+      this.__gaAuditMeta = { method, url };
+      return originalOpen.apply(this, arguments);
+    };
+    proto.send = function(body) {
+      const meta = this.__gaAuditMeta || {};
+      recordTransport("xhr", meta.url || "", meta.method || "GET", body);
+      return originalSend.apply(this, arguments);
+    };
+    proto.__gaAuditHooked = true;
+  }
+  try {
+    const proto = window.HTMLImageElement && window.HTMLImageElement.prototype;
+    const descriptor = proto && Object.getOwnPropertyDescriptor(proto, "src");
+    if (descriptor && descriptor.configurable && descriptor.set && !descriptor.set.__gaAuditHooked) {
+      Object.defineProperty(proto, "src", {
+        configurable: true,
+        enumerable: descriptor.enumerable,
+        get: descriptor.get,
+        set: function(value) {
+          recordTransport("image", value, "GET", "");
+          return descriptor.set.call(this, value);
+        }
+      });
+      descriptor.set.__gaAuditHooked = true;
+    }
+  } catch (e) {}
   hookDataLayer();
   hookGtag();
   window.setInterval(() => { hookDataLayer(); hookGtag(); }, 100);
@@ -178,10 +269,91 @@ def parse_query(url: str) -> Dict[str, str]:
     return values
 
 
+def parse_body(body_text: str) -> Dict[str, str]:
+    text = str(body_text or "").strip()
+    if not text or text.startswith("[Blob") or "byteLength" in text:
+        return {}
+    values = {}
+    for key, raw_values in parse_qs(text, keep_blank_values=True).items():
+        if not raw_values:
+            continue
+        values[key] = unquote_plus(str(raw_values[-1]))
+    return values
+
+
+def parse_ga_payloads(url: str, body_text: str = "") -> List[Dict[str, str]]:
+    query_payload = parse_query(url)
+    body_text = str(body_text or "").strip()
+    if not body_text or body_text.startswith("[Blob") or "byteLength" in body_text:
+        return [query_payload]
+
+    lines = [line.strip() for line in body_text.splitlines() if line.strip()]
+    if len(lines) > 1 and all("=" in line for line in lines):
+        return [{**query_payload, **parse_body(line)} for line in lines]
+    if "=" in body_text:
+        return [{**query_payload, **parse_body(body_text)}]
+    return [{**query_payload, "_body_text": body_text}]
+
+
+def clean_ga_params(params: Dict[str, str]) -> Dict[str, str]:
+    cleaned = {}
+    for key, value in (params or {}).items():
+        clean_key = key
+        if key.startswith(("ep.", "up.", "epn.", "epf.", "upn.")):
+            clean_key = key.split(".", 1)[1]
+        cleaned[clean_key] = value
+    return cleaned
+
+
+def collect_ids_from_params(params: Dict[str, str], measurement_ids: List[str], container_ids: List[str]) -> None:
+    tid = params.get("tid") or params.get("measurement_id") or params.get("measurementId") or ""
+    if tid and tid not in measurement_ids:
+        measurement_ids.append(tid)
+    gtm = (
+        params.get("ep.gtm_container_id")
+        or params.get("gtm_container_id")
+        or params.get("gtm")
+        or params.get("container_id")
+        or ""
+    )
+    if gtm and gtm not in container_ids:
+        container_ids.append(gtm)
+
+
+def build_ga_event_from_payload(params: Dict[str, str], status: str = "", url: str = "", source: str = "") -> dict:
+    event_name = ""
+    for key in GA4_EVENT_PARAM_KEYS:
+        if params.get(key):
+            event_name = normalize_event_name(params.get(key))
+            break
+    if not event_name and params.get("t") == "pageview":
+        event_name = "page_view"
+    return {
+        "event_name": event_name or "collect",
+        "params": clean_ga_params(params),
+        "status": status,
+        "url": url,
+        "source": source,
+    }
+
+
+def build_ga_events_from_request(url: str, body_text: str = "", status: str = "", source: str = "") -> List[dict]:
+    return [
+        build_ga_event_from_payload(payload, status=status, url=url, source=source)
+        for payload in parse_ga_payloads(url, body_text)
+    ]
+
+
 def is_ga_request(url: str) -> bool:
     host = urlparse(url).netloc.lower()
     path = urlparse(url).path.lower()
-    return "google-analytics.com" in host and "collect" in path
+    if "google-analytics.com" in host and "collect" in path:
+        return True
+    if "analytics.google.com" in host and "collect" in path:
+        return True
+    if host.endswith("google.com") and path.endswith("/ccm/collect"):
+        return True
+    return False
 
 
 def is_comscore_request(url: str) -> bool:
@@ -216,35 +388,15 @@ def extract_network(driver) -> dict:
             status_code = ""
 
         if is_ga_request(url):
-            event_name = ""
-            for key in GA4_EVENT_PARAM_KEYS:
-                if params.get(key):
-                    event_name = normalize_event_name(params.get(key))
-                    break
-            if not event_name and params.get("t") == "pageview":
-                event_name = "page_view"
-            tid = params.get("tid") or params.get("measurement_id") or ""
-            if tid and tid not in measurement_ids:
-                measurement_ids.append(tid)
-            gtm = params.get("ep.gtm_container_id") or params.get("gtm") or params.get("gtm_container_id") or ""
-            if gtm and gtm not in container_ids:
-                container_ids.append(gtm)
-            clean_params = {}
-            for key, value in params.items():
-                clean_key = key
-                if key.startswith("ep."):
-                    clean_key = key[3:]
-                elif key.startswith("up."):
-                    clean_key = key[3:]
-                clean_params[clean_key] = value
-            ga_events.append(
-                {
-                    "event_name": event_name or "collect",
-                    "params": clean_params,
-                    "status": status_code,
-                    "url": url,
-                }
-            )
+            body_text = ""
+            try:
+                body = getattr(request, "body", b"") or b""
+                body_text = body.decode("utf-8", errors="ignore") if isinstance(body, bytes) else str(body)
+            except Exception:
+                body_text = ""
+            for payload in parse_ga_payloads(url, body_text):
+                collect_ids_from_params(payload, measurement_ids, container_ids)
+                ga_events.append(build_ga_event_from_payload(payload, status_code, url, "seleniumwire"))
         elif is_comscore_request(url):
             comscore_hits.append({"status": status_code, "params": params, "url": url})
         elif is_chartbeat_request(url):
@@ -257,6 +409,107 @@ def extract_network(driver) -> dict:
         "measurement_id": ", ".join(measurement_ids) or "Not found",
         "container_id": ", ".join(container_ids) or "Not found",
     }
+
+
+def extract_performance_log_network(driver) -> dict:
+    ga_events: List[dict] = []
+    measurement_ids = []
+    container_ids = []
+    try:
+        entries = driver.get_log("performance")
+    except Exception:
+        return {"ga_events": [], "measurement_id": "", "container_id": ""}
+
+    for entry in entries or []:
+        try:
+            message = json.loads(entry.get("message", "{}")).get("message", {})
+        except Exception:
+            continue
+        if message.get("method") != "Network.requestWillBeSent":
+            continue
+        request = message.get("params", {}).get("request", {})
+        url = str(request.get("url") or "")
+        if not is_ga_request(url):
+            continue
+        params = parse_query(url)
+        body_text = str(request.get("postData") or "")
+        for payload in parse_ga_payloads(url, body_text):
+            collect_ids_from_params(payload, measurement_ids, container_ids)
+            ga_events.append(build_ga_event_from_payload(payload, "", url, "performance_log"))
+
+    return {
+        "ga_events": ga_events,
+        "measurement_id": ", ".join(measurement_ids),
+        "container_id": ", ".join(container_ids),
+    }
+
+
+def extract_probe_transport(probe: dict) -> dict:
+    ga_events: List[dict] = []
+    measurement_ids = []
+    container_ids = []
+    for hit in probe.get("transportHits", []) or []:
+        if not isinstance(hit, dict):
+            continue
+        url = str(hit.get("url") or "")
+        if not is_ga_request(url):
+            continue
+        body_text = str(hit.get("bodyText") or "")
+        for payload in parse_ga_payloads(url, body_text):
+            collect_ids_from_params(payload, measurement_ids, container_ids)
+            ga_events.append(build_ga_event_from_payload(payload, "Observed", url, f"probe_{hit.get('api') or 'transport'}"))
+    return {
+        "ga_events": ga_events,
+        "measurement_id": ", ".join(measurement_ids),
+        "container_id": ", ".join(container_ids),
+    }
+
+
+def extract_probe_gtag_events(probe: dict) -> List[dict]:
+    events = []
+    for call in probe.get("gtag", []) or []:
+        if not isinstance(call, list) or len(call) < 2:
+            continue
+        if call[0] != "event":
+            continue
+        params = call[2] if len(call) > 2 and isinstance(call[2], dict) else {}
+        events.append(
+            {
+                "event_name": normalize_event_name(call[1]),
+                "params": params,
+                "status": "Observed",
+                "url": "",
+                "source": "gtag",
+            }
+        )
+    return events
+
+
+def merge_ga_events(*groups: List[dict]) -> List[dict]:
+    seen = set()
+    merged = []
+    for group in groups:
+        for event in group or []:
+            key = (
+                event.get("event_name"),
+                json.dumps(event.get("params") or {}, sort_keys=True, ensure_ascii=False),
+                event.get("source"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(event)
+    return merged
+
+
+def join_nonempty_unique(*values: str) -> str:
+    output = []
+    for value in values:
+        for item in str(value or "").split(","):
+            text = item.strip()
+            if text and text != "Not found" and text not in output:
+                output.append(text)
+    return ", ".join(output) or "Not found"
 
 
 def get_probe_payload(driver) -> dict:
@@ -317,11 +570,48 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
     start = time.time()
     driver = create_driver()
     try:
+        try:
+            del driver.requests
+        except Exception:
+            pass
+        try:
+            driver.get_log("performance")
+        except Exception:
+            pass
         install_datalayer_probe(driver)
         driver.get(sample_url)
+        try:
+            driver.execute_script(
+                """
+                try {
+                    if (typeof gtag === "function") {
+                        gtag('consent', 'update', {
+                            ad_user_data: 'granted',
+                            ad_personalization: 'granted',
+                            ad_storage: 'granted',
+                            analytics_storage: 'granted'
+                        });
+                    }
+                } catch (e) {}
+                """
+            )
+        except Exception:
+            pass
+        try:
+            for percent in range(0, 71, 10):
+                driver.execute_script(
+                    "window.scrollTo(0, document.body.scrollHeight * arguments[0] / 100);",
+                    percent,
+                )
+                time.sleep(0.4)
+        except Exception:
+            pass
         time.sleep(max(1, int(wait_seconds or 8)))
         probe = get_probe_payload(driver)
         network = extract_network(driver)
+        performance_network = extract_performance_log_network(driver)
+        transport_network = extract_probe_transport(probe)
+        gtag_events = extract_probe_gtag_events(probe)
     finally:
         try:
             driver.quit()
@@ -329,15 +619,34 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
             pass
 
     state = probe.get("state") if isinstance(probe.get("state"), dict) else {}
-    ga_events = network["ga_events"]
+    ga_events = merge_ga_events(
+        network["ga_events"],
+        performance_network["ga_events"],
+        transport_network["ga_events"],
+        gtag_events,
+    )
     event_names = [event.get("event_name") for event in ga_events if event.get("event_name")]
     event_set = sorted({name for name in event_names if name})
     pageview_triggered = "page_view" in event_set
-    pageview_source = "Network" if pageview_triggered else "Not fired"
+    pageview_source = "Not fired"
+    if pageview_triggered:
+        pageview_sources = {
+            str(event.get("source") or "")
+            for event in ga_events
+            if normalize_event_name(event.get("event_name") or "") == "page_view"
+        }
+        if any(source in {"seleniumwire", "performance_log"} or source.startswith("probe_") for source in pageview_sources):
+            pageview_source = "Network"
+        elif "gtag" in pageview_sources:
+            pageview_source = "Execution"
+        else:
+            pageview_source = "Observed"
     latest_params = {}
     for event in ga_events:
         latest_params.update(event.get("params") or {})
     execution_values = {**state, **latest_params}
+    measurement_id = join_nonempty_unique(network["measurement_id"], performance_network["measurement_id"], transport_network["measurement_id"])
+    container_id = join_nonempty_unique(network["container_id"], performance_network["container_id"], transport_network["container_id"])
 
     execution_failures = []
     event_failures = []
@@ -357,7 +666,7 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
     if not ga_present:
         issues.append("GA4 collect hit not observed")
     if not pageview_triggered:
-        issues.append("page_view not observed in GA4 network")
+        issues.append("page_view not observed in GA4 capture")
     issues.extend(execution_failures[:5])
     issues.extend(event_failures[:5])
 
@@ -373,8 +682,8 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         "ga_present": ga_present,
         "events_count": len(event_set),
         "events_fired": ", ".join(event_set) or "None",
-        "container_id": network["container_id"],
-        "measurement_id": network["measurement_id"],
+        "container_id": container_id,
+        "measurement_id": measurement_id,
         "comscore_present": bool(network["comscore_hits"]),
         "chartbeat_present": bool(network["chartbeat_hits"]),
         "issues": "; ".join(issues) or "None",
@@ -471,4 +780,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
