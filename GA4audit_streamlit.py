@@ -2382,14 +2382,20 @@ MAPPING_FIELD_ALIASES = {
     "author": "author",
     "category": "category",
     "dynamic_video_embed_type": "dynamic_video_embed_type",
+    "event": "event name",
     "event name": "event name",
     "event_name": "event name",
     "language": "Language",
     "online_offline": "online_offline",
     "page_type": "page_type",
+    "player_type": "player_type",
     "planned_trending": "planned_trending",
+    "position_fold": "position_fold",
     "posted_by": "posted_by",
     "publish_date": "publish_date",
+    "registration_status": "registration_status",
+    "scroll_percent": "scroll_percent",
+    "section_name": "section_name",
     "smart_view_enabled": "smart_view_enabled",
     "story_id": "story_id",
     "sub_category": "sub_category",
@@ -2399,6 +2405,9 @@ MAPPING_FIELD_ALIASES = {
     "user id": "User_Id",
     "user_id": "User_Id",
     "user_status": "User_Status",
+    "usertype": "usertype",
+    "video_orientation": "video_orientation",
+    "video_percent": "video_percent",
     "word_count": "word_count",
 }
 JAGRAN_STARTER_TEMPLATES = [
@@ -3683,6 +3692,13 @@ def _extract_mapping_allowed_values(structure: str, sample_value: str) -> List[s
     lower_text = structure_text.lower()
     values: List[str] = []
 
+    percent_values = re.findall(r"\b\d+(?:\.\d+)?%", structure_text)
+    if percent_values:
+        values.extend(percent_values)
+        sample = _normalize_mapping_expected_value(sample_value)
+        if sample and re.fullmatch(r"\d+(?:\.\d+)?", sample):
+            values.append(f"{sample}%")
+
     if "yes/no" in lower_text:
         values.extend(["yes", "no"])
 
@@ -3698,10 +3714,22 @@ def _extract_mapping_allowed_values(structure: str, sample_value: str) -> List[s
     bracket_match = re.search(r"\(([^)]+)\)", structure_text)
     if bracket_match:
         inner_text = bracket_match.group(1)
-        for token in re.split(r"[/,|]", inner_text):
+        for token in re.split(r"[/,|&-]", inner_text):
             token = _normalize_mapping_expected_value(token)
             if token and token.lower() not in {"dynamic", "static"}:
                 values.append(token)
+
+    has_dynamic_choices = bool(
+        percent_values
+        or bracket_match
+        or "yes/no" in lower_text
+        or "logged_in" in lower_text
+        or "guest" in lower_text
+    )
+    if ("dynamic" in lower_text or "dynamci" in lower_text) and has_dynamic_choices:
+        sample = _normalize_mapping_expected_value(sample_value)
+        if sample and sample.lower() not in {"dynamic", "static", "not available", "na"}:
+            values.append(sample)
 
     seen = set()
     unique_values = []
@@ -3804,6 +3832,50 @@ def _infer_mapping_rule(field_name: str, sample_value: str, structure: str, page
     }
 
 
+def _extract_mapping_page_type_from_row(row: List[Any]) -> str:
+    column = 3
+    while column < len(row):
+        field_name = _canonical_mapping_field(row[column])
+        if field_name == "page_type":
+            sample_value = _mapping_clean_text(row[column + 1] if column + 1 < len(row) else "")
+            expected_value = _mapping_clean_text(row[column + 2] if column + 2 < len(row) else "")
+            return sample_value or expected_value
+        column += 1
+    return ""
+
+
+def _split_mapping_event_names(value: str) -> List[str]:
+    text = _mapping_clean_text(value)
+    if not text:
+        return []
+    names = []
+    for token in re.split(r"[,|\n]", text):
+        cleaned = _normalize_mapping_expected_value(token)
+        if cleaned and cleaned.lower() not in {"dynamic", "static", "not available", "na"}:
+            names.append(cleaned)
+    return names
+
+
+def _looks_like_mapping_event_label(value: str) -> bool:
+    text = _mapping_clean_text(value).lower()
+    if not text:
+        return False
+    if text in {"detail", "listing", "landing", "lisitng/landing", "listing/landing"}:
+        return False
+    return text in {"video_interaction"} or text.startswith("page_") or text.endswith("_pv")
+
+
+def _event_rule_from_mapping_name(event_name: str) -> dict:
+    event_name = _mapping_clean_text(event_name)
+    return {
+        "rule_scope": "event",
+        "field_name": event_name,
+        "rule_type": "exact",
+        "expected_values": event_name,
+        "notes": "Imported from GA mapping Excel.",
+    }
+
+
 def _merge_mapping_rule(existing_rule: Optional[dict], incoming_rule: dict, page_type: str) -> dict:
     if not existing_rule:
         return incoming_rule
@@ -3897,14 +3969,21 @@ def parse_ga_mapping_excel_templates(
     for row_index in range(2, len(sheet)):
         row = sheet.iloc[row_index].tolist()
         section = _mapping_clean_text(row[0] if len(row) > 0 else "")
-        if section:
+        if section and not _looks_like_mapping_event_label(section):
             current_section = section
 
         page_type = _mapping_clean_text(row[1] if len(row) > 1 else "")
         if not page_type:
+            page_type = _extract_mapping_page_type_from_row(row)
+        if not page_type:
             continue
 
-        page_location = _mapping_clean_text(row[2] if len(row) > 2 else "")
+        page_location_raw = "" if len(row) <= 2 else str(row[2] or "")
+        page_locations = [
+            _mapping_clean_text(url)
+            for url in re.split(r"[\r\n]+", page_location_raw)
+            if _mapping_clean_text(url)
+        ]
         template_key = page_type.lower()
         template = templates_by_key.setdefault(
             template_key,
@@ -3918,8 +3997,9 @@ def parse_ga_mapping_excel_templates(
                 "section": current_section,
             },
         )
-        if page_location and page_location not in template["url_examples"]:
-            template["url_examples"].append(page_location)
+        for page_location in page_locations:
+            if page_location and page_location not in template["url_examples"]:
+                template["url_examples"].append(page_location)
 
         rules_by_key = template["rules_by_key"]
         event_rule = {
@@ -3934,6 +4014,15 @@ def parse_ga_mapping_excel_templates(
             event_rule,
             page_type,
         )
+        if _looks_like_mapping_event_label(section):
+            for event_name in _split_mapping_event_names(section):
+                event_rule = _event_rule_from_mapping_name(event_name)
+                event_key = ("event", event_name.lower())
+                rules_by_key[event_key] = _merge_mapping_rule(
+                    rules_by_key.get(event_key),
+                    event_rule,
+                    page_type,
+                )
 
         seen_fields_in_row = set()
         column = 3
@@ -3970,6 +4059,15 @@ def parse_ga_mapping_excel_templates(
                 str(rule.get("field_name") or "").strip().lower(),
             )
             rules_by_key[rule_key] = _merge_mapping_rule(rules_by_key.get(rule_key), rule, page_type)
+            if field_name == "tvc_event_name":
+                for event_name in _split_mapping_event_names(sample_value or expected_structure):
+                    event_rule = _event_rule_from_mapping_name(event_name)
+                    event_key = ("event", event_name.lower())
+                    rules_by_key[event_key] = _merge_mapping_rule(
+                        rules_by_key.get(event_key),
+                        event_rule,
+                        page_type,
+                    )
             column = max(next_column, column + 1)
 
     imported_templates = []
