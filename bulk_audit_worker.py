@@ -6,7 +6,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qs, urlparse, unquote_plus
+from urllib.parse import parse_qs, urlparse
 
 import requests
 from seleniumwire import webdriver
@@ -271,7 +271,7 @@ def parse_query(url: str) -> Dict[str, str]:
     for key, raw_values in parse_qs(parsed.query, keep_blank_values=True).items():
         if not raw_values:
             continue
-        values[key] = unquote_plus(str(raw_values[-1]))
+        values[key] = str(raw_values[-1])
     return values
 
 
@@ -283,7 +283,7 @@ def parse_body(body_text: str) -> Dict[str, str]:
     for key, raw_values in parse_qs(text, keep_blank_values=True).items():
         if not raw_values:
             continue
-        values[key] = unquote_plus(str(raw_values[-1]))
+        values[key] = str(raw_values[-1])
     return values
 
 
