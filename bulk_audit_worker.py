@@ -567,6 +567,81 @@ def select_primary_execution_event(ga_events: List[dict]) -> Optional[dict]:
     return ga_events[0]
 
 
+def build_computed_state(data_layer: List[dict], selected_index: int) -> Dict[str, Any]:
+    state: Dict[str, Any] = {}
+    for item in (data_layer or [])[: selected_index + 1]:
+        if not isinstance(item, dict):
+            continue
+        for key, value in item.items():
+            if value is None:
+                state.pop(key, None)
+            else:
+                state[key] = value
+    return state
+
+
+def matching_score_for_snapshot(candidate_payload: Dict[str, Any], reference_payload: Dict[str, Any]) -> tuple:
+    candidate_keys = {
+        normalize_dimension_name(key)
+        for key in (candidate_payload or {}).keys()
+        if str(key or "").strip()
+    }
+    reference_keys = {
+        normalize_dimension_name(key)
+        for key in (reference_payload or {}).keys()
+        if key != "event" and not str(key).startswith("gtm") and str(key or "").strip()
+    }
+    overlap_count = len(candidate_keys & reference_keys)
+    return overlap_count, len(candidate_keys)
+
+
+def find_matching_datalayer_index(data_layer: List[dict], selected_event: Dict[str, Any]) -> Optional[int]:
+    if not isinstance(data_layer, list) or not isinstance(selected_event, dict):
+        return None
+    target_event = normalize_event_name(selected_event.get("event"))
+    best_index = None
+    best_score = (-1, -1, -1)
+    for index, item in enumerate(data_layer):
+        if not isinstance(item, dict):
+            continue
+        if target_event and normalize_event_name(item.get("event")) != target_event:
+            continue
+        overlap_count, key_count = matching_score_for_snapshot(item, selected_event)
+        score = (overlap_count, key_count, index)
+        if score >= best_score:
+            best_index = index
+            best_score = score
+    return best_index
+
+
+def merged_event_payload(event: Dict[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    params = event.get("params") or {}
+    if isinstance(params, dict):
+        payload.update(params)
+    return payload
+
+
+def best_matching_event(selected_event: Dict[str, Any], events: List[dict]) -> Optional[dict]:
+    if not isinstance(events, list) or not events:
+        return None
+    target = normalize_event_name(selected_event.get("event"))
+    best_event = None
+    best_score = (-1, -1, -1)
+    for index, event in enumerate(events):
+        if not isinstance(event, dict):
+            continue
+        if target and normalize_event_name(event.get("event_name")) != target:
+            continue
+        payload = merged_event_payload(event)
+        overlap_count, key_count = matching_score_for_snapshot(payload, selected_event)
+        score = (overlap_count, key_count, index)
+        if score >= best_score:
+            best_event = event
+            best_score = score
+    return best_event or events[-1]
+
+
 def get_probe_payload(driver) -> dict:
     try:
         payload = driver.execute_script("return window.__gaAudit || {pushes: [], state: {}, gtag: []};")
@@ -689,12 +764,31 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         except Exception:
             pass
 
+    data_layer = probe.get("pushes") if isinstance(probe.get("pushes"), list) else []
     state = probe.get("state") if isinstance(probe.get("state"), dict) else {}
     ga_events = merge_ga_events(
         network["ga_events"],
         performance_network["ga_events"],
         transport_network["ga_events"],
         gtag_events,
+    )
+    selected_event = {}
+    if isinstance(data_layer, list):
+        for item in reversed(data_layer):
+            if not isinstance(item, dict):
+                continue
+            if normalize_event_name(item.get("event")) in {"pageview", "page_view"}:
+                selected_event = item
+                break
+    selected_index = None
+    if selected_event:
+        selected_index = find_matching_datalayer_index(data_layer, selected_event)
+        if selected_index is None and data_layer:
+            selected_index = len(data_layer) - 1
+    computed_state = (
+        build_computed_state(data_layer, selected_index)
+        if selected_index is not None
+        else dict(state)
     )
     event_names = [event.get("event_name") for event in ga_events if event.get("event_name")]
     event_set = sorted({name for name in event_names if name})
@@ -712,9 +806,13 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
             pageview_source = "Execution"
         else:
             pageview_source = "Observed"
-    primary_event = select_primary_execution_event(ga_events)
+    primary_event = (
+        best_matching_event(selected_event, ga_events)
+        if selected_event
+        else select_primary_execution_event(ga_events)
+    )
     primary_params = dict((primary_event or {}).get("params") or {})
-    execution_values = {**state, **primary_params}
+    execution_values = {**computed_state, **primary_params}
     measurement_id = join_nonempty_unique(network["measurement_id"], performance_network["measurement_id"], transport_network["measurement_id"])
     container_id = join_nonempty_unique(network["container_id"], performance_network["container_id"], transport_network["container_id"])
 
