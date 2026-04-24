@@ -17,6 +17,11 @@ from selenium.webdriver.chrome.service import Service
 SUPABASE_JOB_TABLE = "bulk_audit_jobs"
 SUPABASE_RESULT_TABLE = "bulk_audit_results"
 GA4_EVENT_PARAM_KEYS = ("en", "event_name")
+FIELD_NAME_ALIASES = {
+    "scroll_percent": ["scroll_percent", "scroll_percentage", "percent_scrolled"],
+    "publish_date": ["publish_date", "tvc_publish_date"],
+    "update_date": ["update_date", "tvc_update_date"],
+}
 
 
 def utc_now() -> str:
@@ -526,12 +531,28 @@ def normalize_dimension_name(value: Any) -> str:
     return name.replace("_", "").lower()
 
 
+def normalized_field_candidates(field_name: str) -> List[str]:
+    raw = str(field_name or "").strip()
+    candidates = [raw]
+    for alias in FIELD_NAME_ALIASES.get(raw, []):
+        if alias not in candidates:
+            candidates.append(alias)
+    normalized = []
+    seen = set()
+    for candidate in candidates:
+        key = normalize_dimension_name(candidate)
+        if key and key not in seen:
+            seen.add(key)
+            normalized.append(key)
+    return normalized
+
+
 def split_actual_tokens(value: Any) -> List[str]:
     text = str(value or "").strip()
     if not text:
         return []
     tokens: List[str] = []
-    for piece in re.split(r"[|,\n\r]+", text):
+    for piece in re.split(r"[|,\n\r;]+", text):
         cleaned = normalize_compare_text(piece)
         if cleaned:
             tokens.append(cleaned)
@@ -544,11 +565,41 @@ def find_payload_value(payload: Dict[str, Any], field_name: str) -> Any:
     target = str(field_name or "").strip()
     if target in payload:
         return payload.get(target)
-    target_norm = normalize_dimension_name(target)
+    target_candidates = set(normalized_field_candidates(target))
     for key, value in payload.items():
-        if normalize_dimension_name(key) == target_norm:
+        if normalize_dimension_name(key) in target_candidates:
             return value
     return None
+
+
+def collect_event_field_values(events: List[dict], field_name: str) -> List[str]:
+    target_candidates = set(normalized_field_candidates(field_name))
+    values: List[str] = []
+    for event in events or []:
+        if not isinstance(event, dict):
+            continue
+        payload = event.get("params") or {}
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            if normalize_dimension_name(key) not in target_candidates:
+                continue
+            text = str(value or "").strip()
+            if text and text not in values:
+                values.append(text)
+    return values
+
+
+def resolve_field_value(field_name: str, execution_values: Dict[str, Any], ga_events: List[dict]) -> Any:
+    direct_value = find_payload_value(execution_values, field_name)
+    if direct_value not in (None, ""):
+        return direct_value
+    event_values = collect_event_field_values(ga_events, field_name)
+    if not event_values:
+        return None
+    if len(event_values) == 1:
+        return event_values[0]
+    return ", ".join(event_values)
 
 
 def select_primary_execution_event(ga_events: List[dict]) -> Optional[dict]:
@@ -675,8 +726,21 @@ def parse_regex_patterns(value: str) -> List[str]:
     return [token.strip() for token in re.split(r"[\n\r]+", text) if token.strip()]
 
 
+def is_valid_iso_datetime(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    try:
+        datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return True
+    except ValueError:
+        return False
+
+
 def validate_rule(rule: dict, actual: Any) -> Optional[str]:
     rule_type = str(rule.get("rule_type") or "").strip()
+    field_name = str(rule.get("field_name") or "").strip()
+    normalized_field_name = normalize_dimension_name(field_name)
     expected = parse_expected_values(rule.get("expected_values"))
     actual_text = "" if actual is None else str(actual).strip()
     actual_normalized = normalize_compare_text(actual_text)
@@ -684,32 +748,44 @@ def validate_rule(rule: dict, actual: Any) -> Optional[str]:
     if rule_type == "optional":
         return None
     if rule_type == "required":
-        return None if actual_text else f"{rule.get('field_name')} missing"
+        return None if actual_text else f"{field_name} missing"
     if not actual_text:
-        return f"{rule.get('field_name')} missing"
+        return f"{field_name} missing"
     if rule_type == "exact":
         expected_normalized = [normalize_compare_text(item) for item in expected]
         matched = actual_normalized in expected_normalized or any(token in expected_normalized for token in actual_tokens)
-        return None if matched else f"{rule.get('field_name')} expected {expected}, got {actual_text}"
+        if not matched and normalized_field_name == "scrollpercent":
+            expected_scrolls = {token.replace(" ", "") for token in expected_normalized}
+            actual_scrolls = {token.replace(" ", "") for token in actual_tokens + [actual_normalized]}
+            matched = bool(expected_scrolls & actual_scrolls)
+        return None if matched else f"{field_name} expected {expected}, got {actual_text}"
     if rule_type == "one_of":
         expected_normalized = [normalize_compare_text(item) for item in expected]
         matched = actual_normalized in expected_normalized or any(token in expected_normalized for token in actual_tokens)
-        return None if matched else f"{rule.get('field_name')} expected one of {expected}, got {actual_text}"
+        if not matched and normalized_field_name == "scrollpercent":
+            expected_scrolls = {token.replace(" ", "") for token in expected_normalized}
+            actual_scrolls = {token.replace(" ", "") for token in actual_tokens + [actual_normalized]}
+            matched = bool(expected_scrolls & actual_scrolls)
+        return None if matched else f"{field_name} expected one of {expected}, got {actual_text}"
     if rule_type == "contains":
-        return None if any(normalize_compare_text(item) in actual_normalized for item in expected) else f"{rule.get('field_name')} expected to contain {expected}, got {actual_text}"
+        return None if any(normalize_compare_text(item) in actual_normalized for item in expected) else f"{field_name} expected to contain {expected}, got {actual_text}"
     if rule_type == "regex":
         invalid_patterns = []
+        actual_candidates = [actual_text]
+        actual_candidates.extend([token.strip() for token in re.split(r"[,\n\r;]+", actual_text) if token.strip()])
         for pattern in parse_regex_patterns(rule.get("expected_values")):
             if not pattern:
                 continue
             try:
-                if re.search(pattern, actual_text):
+                if any(re.search(pattern, candidate) for candidate in actual_candidates):
                     return None
             except re.error:
                 invalid_patterns.append(pattern)
         if invalid_patterns:
-            return f"{rule.get('field_name')} has invalid regex in template: {invalid_patterns[0]}"
-        return f"{rule.get('field_name')} did not match regex"
+            return f"{field_name} has invalid regex in template: {invalid_patterns[0]}"
+        if normalized_field_name in {"publishdate", "updatedate"} and any(is_valid_iso_datetime(candidate) for candidate in actual_candidates):
+            return None
+        return f"{field_name} did not match regex"
     return None
 
 
@@ -751,12 +827,18 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         except Exception:
             pass
         try:
-            for percent in range(0, 71, 10):
+            for percent in (0, 25, 50, 75, 100):
                 driver.execute_script(
-                    "window.scrollTo(0, document.body.scrollHeight * arguments[0] / 100);",
+                    """
+                    const scrollHeight = Math.max(
+                        document.body.scrollHeight || 0,
+                        document.documentElement.scrollHeight || 0
+                    );
+                    window.scrollTo(0, scrollHeight * arguments[0] / 100);
+                    """,
                     percent,
                 )
-                time.sleep(0.4)
+                time.sleep(0.8)
         except Exception:
             pass
         time.sleep(max(1, int(wait_seconds or 8)))
@@ -832,7 +914,7 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
             if field_name not in event_set:
                 event_failures.append(f"Event {field_name} not fired")
         elif scope == "execution":
-            failure = validate_rule(rule, find_payload_value(execution_values, field_name))
+            failure = validate_rule(rule, resolve_field_value(field_name, execution_values, ga_events))
             if failure:
                 execution_failures.append(failure)
 
