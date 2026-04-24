@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 from seleniumwire import webdriver
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -45,13 +46,19 @@ VIDEO_INTERACTION_DEPENDENT_FIELDS = {
 VIDEO_PLAY_SELECTORS = [
     "video",
     "button[aria-label*='play' i]",
+    "button[title*='play' i]",
     "[role='button'][aria-label*='play' i]",
+    "[role='button'][title*='play' i]",
     ".vjs-big-play-button",
     ".jw-display-icon-container",
     ".jw-icon-playback",
     ".jw-button-container .jw-icon-playback",
     ".ytp-large-play-button",
     ".ytp-play-button",
+    ".plyr__control--overlaid",
+    ".plyr__control[aria-label*='play' i]",
+    "[class*='video'] [class*='play']",
+    "[class*='player'] [class*='play']",
     "[class*='play'][role='button']",
     "button[class*='play']",
     "[data-testid*='play']",
@@ -134,6 +141,7 @@ def create_driver():
     options.add_argument("--disable-background-networking")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests")
+    options.add_argument("--autoplay-policy=no-user-gesture-required")
     options.add_argument("--window-size=1365,1600")
     options.add_argument("--ignore-certificate-errors")
     options.add_argument(
@@ -428,6 +436,26 @@ def template_requires_video_playback(rules: List[dict]) -> bool:
     return False
 
 
+def _click_element(driver, element) -> bool:
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", element)
+    except Exception:
+        pass
+    time.sleep(0.2)
+    click_attempts = (
+        lambda: element.click(),
+        lambda: driver.execute_script("arguments[0].click();", element),
+        lambda: ActionChains(driver).move_to_element(element).pause(0.1).click(element).perform(),
+    )
+    for click_attempt in click_attempts:
+        try:
+            click_attempt()
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def _play_visible_videos_in_current_context(driver) -> bool:
     try:
         played = driver.execute_script(
@@ -466,10 +494,8 @@ def _click_video_controls_in_current_context(driver) -> bool:
             try:
                 if not element.is_displayed():
                     continue
-                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
-                time.sleep(0.2)
-                driver.execute_script("arguments[0].click();", element)
-                return True
+                if _click_element(driver, element):
+                    return True
             except Exception:
                 continue
     return False
@@ -489,14 +515,86 @@ def _click_video_text_targets_in_current_context(driver) -> bool:
             try:
                 if not element.is_displayed():
                     continue
-                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
-                time.sleep(0.2)
-                driver.execute_script("arguments[0].click();", element)
-                time.sleep(0.8)
-                return True
+                if _click_element(driver, element):
+                    time.sleep(1.0)
+                    return True
             except Exception:
                 continue
     return False
+
+
+def _attempt_video_start_in_current_context(driver) -> bool:
+    attempted = False
+    for _ in range(3):
+        if _play_visible_videos_in_current_context(driver):
+            attempted = True
+            time.sleep(0.8)
+        if _click_video_controls_in_current_context(driver):
+            attempted = True
+            time.sleep(1.0)
+        if _play_visible_videos_in_current_context(driver):
+            attempted = True
+            time.sleep(0.8)
+        if _click_video_text_targets_in_current_context(driver):
+            attempted = True
+            time.sleep(1.2)
+        if _click_video_controls_in_current_context(driver):
+            attempted = True
+            time.sleep(1.0)
+        if _play_visible_videos_in_current_context(driver):
+            attempted = True
+            time.sleep(0.8)
+    return attempted
+
+
+def _switch_to_frame_path(driver, frame_path: List[int]) -> None:
+    driver.switch_to.default_content()
+    for frame_index in frame_path:
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
+        if frame_index >= len(frames):
+            raise IndexError("Iframe path is no longer valid.")
+        driver.switch_to.frame(frames[frame_index])
+
+
+def _attempt_video_start_in_frames(
+    driver,
+    frame_path: Optional[List[int]] = None,
+    depth: int = 0,
+    max_depth: int = 2,
+) -> bool:
+    if depth > max_depth:
+        return False
+    frame_path = list(frame_path or [])
+    attempted = False
+    try:
+        _switch_to_frame_path(driver, frame_path)
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
+    except Exception:
+        frames = []
+
+    for frame_index, _frame in enumerate(frames[:12]):
+        try:
+            _switch_to_frame_path(driver, frame_path)
+            frames = driver.find_elements(By.TAG_NAME, "iframe")
+            if frame_index >= len(frames):
+                continue
+            driver.switch_to.frame(frames[frame_index])
+            attempted = _attempt_video_start_in_current_context(driver) or attempted
+            if depth + 1 <= max_depth:
+                attempted = _attempt_video_start_in_frames(
+                    driver,
+                    frame_path=frame_path + [frame_index],
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                ) or attempted
+        except Exception:
+            continue
+        finally:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+    return attempted
 
 
 def trigger_video_playback(driver) -> bool:
@@ -506,7 +604,7 @@ def trigger_video_playback(driver) -> bool:
     except Exception:
         return False
 
-    for percent in (20, 40, 60, 80):
+    for percent in (10, 25, 40, 55, 70, 85):
         try:
             driver.execute_script(
                 """
@@ -518,44 +616,11 @@ def trigger_video_playback(driver) -> bool:
                 """,
                 percent,
             )
-            time.sleep(0.6)
+            time.sleep(0.8)
         except Exception:
             pass
-        started = (
-            _play_visible_videos_in_current_context(driver)
-            or _click_video_controls_in_current_context(driver)
-            or _click_video_text_targets_in_current_context(driver)
-            or _play_visible_videos_in_current_context(driver)
-            or _click_video_controls_in_current_context(driver)
-            or started
-        )
-        if started:
-            break
-
-    try:
-        frames = driver.find_elements(By.TAG_NAME, "iframe")
-    except Exception:
-        frames = []
-
-    for frame in frames[:12]:
-        try:
-            driver.switch_to.default_content()
-            driver.switch_to.frame(frame)
-            frame_started = (
-                _play_visible_videos_in_current_context(driver)
-                or _click_video_controls_in_current_context(driver)
-                or _click_video_text_targets_in_current_context(driver)
-                or _play_visible_videos_in_current_context(driver)
-                or _click_video_controls_in_current_context(driver)
-            )
-            started = started or frame_started
-        except Exception:
-            continue
-        finally:
-            try:
-                driver.switch_to.default_content()
-            except Exception:
-                pass
+        started = _attempt_video_start_in_current_context(driver) or started
+        started = _attempt_video_start_in_frames(driver) or started
 
     return started
 

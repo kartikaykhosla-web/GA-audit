@@ -5933,7 +5933,7 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.platypus import PageBreak, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.platypus import KeepTogether, PageBreak, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
     def resolve_pdf_fonts() -> Tuple[str, str]:
         regular_candidates = [
@@ -6035,14 +6035,13 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     def p(value: Any, limit: int = 320):
         return Paragraph(html.escape(_short_report_text(value, limit)), small_style)
 
-    def add_table(elements: List[Any], headers: List[str], rows: List[List[Any]], widths: List[int]):
+    def build_table_flowable(headers: List[str], rows: List[List[Any]], widths: List[int], repeat_rows: int = 1):
         if not rows:
-            elements.append(Paragraph("No values captured.", body_style))
-            return
+            rows = [["No values captured." if index == 0 else "" for index, _ in enumerate(headers)]]
         table_data = [[Paragraph(html.escape(header), body_style) for header in headers]]
         for row in rows:
             table_data.append([p(cell) for cell in row])
-        table = Table(table_data, colWidths=widths, repeatRows=1)
+        table = Table(table_data, colWidths=widths, repeatRows=repeat_rows)
         table.setStyle(
             TableStyle(
                 [
@@ -6055,7 +6054,10 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
                 ]
             )
         )
-        elements.append(table)
+        return table
+
+    def add_table(elements: List[Any], headers: List[str], rows: List[List[Any]], widths: List[int]):
+        elements.append(build_table_flowable(headers, rows, widths))
 
     def add_records_table(
         elements: List[Any],
@@ -6072,76 +6074,65 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
         ]
         add_table(elements, column_labels, rows, widths)
 
-    def add_datalayer_snapshot_grid(elements: List[Any], detail_payload: Dict[str, Any]):
+    def add_snapshot_sections(elements: List[Any], detail_payload: Dict[str, Any]):
         trigger_records = detail_payload.get("trigger_rows") or []
         computed_records = detail_payload.get("computed_rows") or []
         execution_records = detail_payload.get("execution_rows") or []
-        max_rows = max(len(trigger_records), len(computed_records), len(execution_records), 1)
-
-        table_data = [
-            [
-                Paragraph("Trigger Event", body_style),
-                "",
-                Paragraph("Computed State", body_style),
-                "",
-                Paragraph("Execution Payload", body_style),
-                "",
-                "",
-                "",
-            ],
-            [
-                Paragraph("Field", small_style),
-                Paragraph("Value", small_style),
-                Paragraph("Field", small_style),
-                Paragraph("Value", small_style),
-                Paragraph("Field", small_style),
-                Paragraph("Value", small_style),
-                Paragraph("Expected", small_style),
-                Paragraph("Validation", small_style),
-            ],
-        ]
-
-        for row_index in range(max_rows):
-            trigger_row = trigger_records[row_index] if row_index < len(trigger_records) else {}
-            computed_row = computed_records[row_index] if row_index < len(computed_records) else {}
-            execution_row = execution_records[row_index] if row_index < len(execution_records) else {}
-            table_data.append(
-                [
-                    p(trigger_row.get("Field", ""), 120),
-                    p(trigger_row.get("Value", ""), 190),
-                    p(computed_row.get("Field", ""), 120),
-                    p(computed_row.get("Value", ""), 190),
-                    p(execution_row.get("Field", ""), 120),
-                    p(execution_row.get("Value", ""), 220),
-                    p(execution_row.get("Expected", ""), 180),
-                    p(execution_row.get("Validation", ""), 80),
-                ]
-            )
-
-        snapshot_table = Table(
-            table_data,
-            colWidths=[70, 105, 70, 105, 70, 135, 120, 105],
-            repeatRows=2,
+        trigger_table = build_table_flowable(
+            ["Field", "Value"],
+            [[row.get("Field", ""), row.get("Value", "")] for row in trigger_records],
+            [58, 140],
         )
-        snapshot_table.setStyle(
+        computed_table = build_table_flowable(
+            ["Field", "Value"],
+            [[row.get("Field", ""), row.get("Value", "")] for row in computed_records],
+            [58, 140],
+        )
+        execution_headers = ["Field", "Value", "Expected", "Validation"]
+        execution_table = build_table_flowable(
+            execution_headers,
+            [
+                [
+                    row.get("Field", ""),
+                    row.get("Value", ""),
+                    row.get("Expected", ""),
+                    row.get("Validation", ""),
+                ]
+                for row in execution_records
+            ],
+            [52, 100, 93, 65],
+        )
+
+        section_heading_style = ParagraphStyle(
+            "DomainAuditSectionHeading",
+            parent=styles["Heading3"],
+            fontName=pdf_bold_font_name,
+            fontSize=10,
+            leading=12,
+            textColor=colors.HexColor("#111827"),
+            spaceAfter=4,
+        )
+
+        section_row = Table(
+            [[
+                KeepTogether([Paragraph("Trigger Event", section_heading_style), trigger_table]),
+                KeepTogether([Paragraph("Computed State", section_heading_style), computed_table]),
+                KeepTogether([Paragraph("Execution Payload", section_heading_style), execution_table]),
+            ]],
+            colWidths=[210, 210, 340],
+        )
+        section_row.setStyle(
             TableStyle(
                 [
-                    ("SPAN", (0, 0), (1, 0)),
-                    ("SPAN", (2, 0), (3, 0)),
-                    ("SPAN", (4, 0), (7, 0)),
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#111827")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#e5e7eb")),
-                    ("TEXTCOLOR", (0, 1), (-1, 1), colors.HexColor("#111827")),
-                    ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#9ca3af")),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("FONTNAME", (0, 0), (-1, 1), pdf_bold_font_name),
-                    ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-                    ("ROWBACKGROUNDS", (0, 2), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
                 ]
             )
         )
-        elements.append(snapshot_table)
+        elements.append(section_row)
 
     generated_at = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S %Z")
     issue_rows = [row for row in report_rows if row.get("audit_outcome") == "Issue"]
@@ -6180,7 +6171,7 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     else:
         elements.append(Paragraph("No issues were detected in this run.", body_style))
 
-    elements.extend([Spacer(1, 14), Paragraph("Full Audit Results", heading_style)])
+    elements.extend([Spacer(1, 14), Paragraph("Bulk Run Overview", heading_style)])
     add_table(
         elements,
         ["Template", "URL", "Outcome", "GA Fired", "Pageview", "Events", "GA IDs", "Comscore", "Chartbeat", "Issues"],
@@ -6223,6 +6214,10 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
         elements.append(Paragraph(f"URL Audit Detail {index}: {html.escape(str(row.get('template_name') or 'Template'))}", heading_style))
         elements.append(Paragraph(html.escape(str(row.get("sample_url") or "")), body_style))
         elements.append(Spacer(1, 6))
+        if row.get("issues"):
+            elements.append(Paragraph("Issues", subheading_style))
+            elements.append(Paragraph(html.escape(str(row.get("issues") or "")), body_style))
+            elements.append(Spacer(1, 6))
         add_table(
             elements,
             ["Outcome", "GA Fired", "Pageview", "Events", "Measurement ID", "Container ID", "Comscore", "Chartbeat"],
@@ -6252,7 +6247,13 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
 
         elements.append(Spacer(1, 8))
         elements.append(Paragraph("DataLayer Snapshot", heading_style))
-        add_datalayer_snapshot_grid(elements, detail_payload)
+        elements.append(
+            Paragraph(
+                "Primary audit view. This mirrors the in-app audit sections for Trigger Event, Computed State, and Execution Payload.",
+                body_style,
+            )
+        )
+        add_snapshot_sections(elements, detail_payload)
 
         elements.append(Spacer(1, 8))
         elements.append(Paragraph("Events", heading_style))
