@@ -668,6 +668,13 @@ def parse_expected_values(value: str) -> List[str]:
     return [token.strip() for token in str(value or "").split("|") if token.strip()]
 
 
+def parse_regex_patterns(value: str) -> List[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [token.strip() for token in re.split(r"[\n\r]+", text) if token.strip()]
+
+
 def validate_rule(rule: dict, actual: Any) -> Optional[str]:
     rule_type = str(rule.get("rule_type") or "").strip()
     expected = parse_expected_values(rule.get("expected_values"))
@@ -692,7 +699,7 @@ def validate_rule(rule: dict, actual: Any) -> Optional[str]:
         return None if any(normalize_compare_text(item) in actual_normalized for item in expected) else f"{rule.get('field_name')} expected to contain {expected}, got {actual_text}"
     if rule_type == "regex":
         invalid_patterns = []
-        for pattern in expected:
+        for pattern in parse_regex_patterns(rule.get("expected_values")):
             if not pattern:
                 continue
             try:
