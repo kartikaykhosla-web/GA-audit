@@ -3750,6 +3750,27 @@ def load_bulk_audit_jobs(domain_name: str = "", limit: int = 10) -> Tuple[List[d
         return [], str(exc)
 
 
+def cancel_bulk_audit_job(job_id: str) -> Tuple[bool, str]:
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+    if not str(job_id or "").strip():
+        return False, "Job ID is missing."
+    try:
+        supabase_request(
+            "PATCH",
+            SUPABASE_BULK_JOB_TABLE,
+            params={"job_id": f"eq.{job_id}"},
+            payload={
+                "status": "cancelled",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
+            prefer="return=minimal",
+        )
+        return True, "Bulk audit stop requested."
+    except Exception as exc:
+        return False, str(exc)
+
+
 def load_bulk_audit_results(job_id: str) -> Tuple[List[dict], str]:
     if not supabase_is_configured():
         return [], "Supabase is not configured yet."
@@ -7566,8 +7587,24 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     st.info(f"Job progress reached {progress_milestone}%.")
                 if selected_job.get("error_message"):
                     st.error(str(selected_job.get("error_message")))
-                if st.button("Refresh job status", key=f"refresh_bulk_job_{domain_state_key}"):
+                action_cols = st.columns([1, 1, 5])
+                if action_cols[0].button("Refresh job status", key=f"refresh_bulk_job_{domain_state_key}"):
                     st.rerun()
+                stop_clicked = action_cols[1].button(
+                    "Stop audit",
+                    key=f"stop_bulk_job_{selected_job_id}",
+                    disabled=job_status not in {"queued", "running"},
+                )
+                if stop_clicked:
+                    cancel_success, cancel_message = cancel_bulk_audit_job(selected_job_id)
+                    if cancel_success:
+                        st.session_state["latest_bulk_audit_job_id"] = selected_job_id
+                        st.warning("Audit stop requested. The worker will stop after the current URL finishes.")
+                        st.rerun()
+                    else:
+                        st.error(cancel_message)
+                if job_status == "cancelled":
+                    st.warning("This bulk audit was stopped before completion.")
 
                 result_records, results_error = load_bulk_audit_results(selected_job_id)
                 if results_error:

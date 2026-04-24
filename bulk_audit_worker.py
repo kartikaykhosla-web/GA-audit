@@ -131,6 +131,14 @@ def load_job(job_id: str) -> dict:
     return rows[0]
 
 
+def is_job_cancelled(job_id: str) -> bool:
+    try:
+        job = load_job(job_id)
+    except Exception:
+        return False
+    return str(job.get("status") or "").strip().lower() == "cancelled"
+
+
 def create_driver():
     options = Options()
     options.add_argument("--headless=new")
@@ -1321,11 +1329,26 @@ def main():
     wait_seconds = int(payload.get("wait_seconds") or 8)
     total = len(plan)
 
+    if str(job.get("status") or "").strip().lower() == "cancelled":
+        update_job(args.job_id, {"status": "cancelled", "completed_at": utc_now(), "total_count": total})
+        return
+
     update_job(args.job_id, {"status": "running", "started_at": utc_now(), "total_count": total})
     completed = 0
     failed = 0
     try:
         for plan_row in plan:
+            if is_job_cancelled(args.job_id):
+                update_job(
+                    args.job_id,
+                    {
+                        "status": "cancelled",
+                        "completed_at": utc_now(),
+                        "completed_count": completed,
+                        "failed_count": failed,
+                    },
+                )
+                return
             try:
                 result = audit_url(plan_row, wait_seconds)
             except Exception as exc:
