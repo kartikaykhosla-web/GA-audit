@@ -5666,20 +5666,27 @@ def build_domain_audit_plan(domain_templates: List[dict], limit: int = DOMAIN_AU
     return plan_rows
 
 
-def build_domain_audit_plan_from_templates(domain_templates: List[dict]) -> List[dict]:
+def build_domain_audit_plan_from_templates(domain_templates: List[dict], override_urls: Optional[Dict[str, str]] = None) -> List[dict]:
     plan_rows = []
+    override_urls = override_urls or {}
     for template in sorted(
         domain_templates or [],
         key=lambda item: str(item.get("template_name") or "").lower(),
     ):
-        sample_url, sample_error = choose_template_sample_url(template)
+        template_id = str(template.get("template_id") or "").strip()
+        override_raw = str(override_urls.get(template_id) or "").strip()
+        if override_raw:
+            _, sample_url, sample_error = normalize_single_url(override_raw)
+        else:
+            sample_url, sample_error = choose_template_sample_url(template)
         plan_rows.append(
             {
                 "template": template,
-                "template_id": str(template.get("template_id") or "").strip(),
+                "template_id": template_id,
                 "template_name": str(template.get("template_name") or "Unnamed template"),
                 "sample_url": sample_url,
                 "sample_error": sample_error,
+                "override_url": override_raw,
             }
         )
     return plan_rows
@@ -7403,13 +7410,14 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
             if not selected_domain_templates:
                 st.info("No active templates are available for this domain.")
             else:
-                header_cols = st.columns([0.45, 2.2, 2.8, 0.7])
-                for col, label in zip(header_cols, ["Run", "Template", "Reference URL / Pattern", "Rules"]):
+                header_cols = st.columns([0.45, 1.8, 2.4, 2.4, 0.6])
+                for col, label in zip(header_cols, ["Run", "Template", "Reference URL / Pattern", "Override URL", "Rules"]):
                     col.markdown(f"**{label}**")
 
+                override_urls: Dict[str, str] = {}
                 for index, template in enumerate(selected_domain_templates):
                     checkbox_key = checkbox_keys[index]
-                    row_cols = st.columns([0.45, 2.2, 2.8, 0.7])
+                    row_cols = st.columns([0.45, 1.8, 2.4, 2.4, 0.6])
                     is_selected = row_cols[0].checkbox(
                         "Select template",
                         key=checkbox_key,
@@ -7418,11 +7426,23 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     row_cols[1].write(str(template.get("template_name") or "Unnamed template"))
                     row_cols[2].write(str(template.get("url_pattern") or "No reference URL/pattern"))
                     template_id = str(template.get("template_id") or "").strip()
-                    row_cols[3].write(str(len(template_rules_by_template.get(template_id, []))))
+                    override_key = f"domain_audit_override_url_{domain_state_key}_{index}_{_slugify_identifier(template_id or str(index))}"
+                    override_value = row_cols[3].text_input(
+                        "Override URL",
+                        value=st.session_state.get(override_key, ""),
+                        key=override_key,
+                        label_visibility="collapsed",
+                        placeholder="Optional URL override for this run",
+                    )
+                    if override_value.strip():
+                        override_urls[template_id] = override_value.strip()
+                    row_cols[4].write(str(len(template_rules_by_template.get(template_id, []))))
                     if is_selected:
                         selected_templates.append(template)
 
-            audit_plan = build_domain_audit_plan_from_templates(selected_templates)
+            st.caption("If an override URL is filled for a template, that URL will be audited for this run. Otherwise the saved reference URL/pattern is used.")
+
+            audit_plan = build_domain_audit_plan_from_templates(selected_templates, override_urls=override_urls)
             st.caption(
                 f"{len(audit_plan)} template URL(s) selected for {selected_domain}. "
                 "GitHub Actions will process them sequentially."
@@ -7434,6 +7454,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                         {
                             "Template": row["template_name"],
                             "Sample URL": row["sample_url"] or "Not available",
+                            "Override URL": row.get("override_url") or "",
                             "Issue": row["sample_error"],
                         }
                         for row in audit_plan
