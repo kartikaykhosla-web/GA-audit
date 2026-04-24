@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 from seleniumwire import webdriver
+from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 
@@ -22,6 +23,30 @@ FIELD_NAME_ALIASES = {
     "publish_date": ["publish_date", "tvc_publish_date"],
     "update_date": ["update_date", "tvc_update_date"],
 }
+VIDEO_EXECUTION_FIELDS = {
+    "dynamic_video_embed_type",
+    "player_type",
+    "position_fold",
+    "section_name",
+    "video_orientation",
+    "video_percent",
+    "video_duration",
+    "video_title",
+}
+VIDEO_PLAY_SELECTORS = [
+    "video",
+    "button[aria-label*='play' i]",
+    "[role='button'][aria-label*='play' i]",
+    ".vjs-big-play-button",
+    ".jw-display-icon-container",
+    ".jw-icon-playback",
+    ".jw-button-container .jw-icon-playback",
+    ".ytp-large-play-button",
+    ".ytp-play-button",
+    "[class*='play'][role='button']",
+    "button[class*='play']",
+    "[data-testid*='play']",
+]
 
 
 def utc_now() -> str:
@@ -377,6 +402,118 @@ def normalize_event_name(name: str) -> str:
     return "page_view" if text in {"pageview", "page_view"} else text
 
 
+def template_requires_video_playback(rules: List[dict]) -> bool:
+    for rule in rules or []:
+        field_name = str(rule.get("field_name") or "").strip()
+        if not field_name:
+            continue
+        if str(rule.get("rule_scope") or "").strip().lower() == "event":
+            normalized_event = normalize_event_name(field_name).replace("_", "")
+            if normalized_event.endswith("videointeraction"):
+                return True
+        elif str(rule.get("rule_scope") or "").strip().lower() == "execution":
+            if normalize_dimension_name(field_name) in {
+                normalize_dimension_name(value) for value in VIDEO_EXECUTION_FIELDS
+            }:
+                return True
+    return False
+
+
+def _play_visible_videos_in_current_context(driver) -> bool:
+    try:
+        played = driver.execute_script(
+            """
+            const elements = Array.from(document.querySelectorAll("video"));
+            let started = false;
+            elements.forEach((video) => {
+              const rect = video.getBoundingClientRect();
+              if (!rect.width || !rect.height) return;
+              try {
+                video.muted = true;
+                video.defaultMuted = true;
+                video.playsInline = true;
+                const playResult = video.play();
+                if (playResult && typeof playResult.catch === "function") {
+                  playResult.catch(() => {});
+                }
+                started = true;
+              } catch (e) {}
+            });
+            return started;
+            """
+        )
+        return bool(played)
+    except Exception:
+        return False
+
+
+def _click_video_controls_in_current_context(driver) -> bool:
+    for selector in VIDEO_PLAY_SELECTORS:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        except Exception:
+            continue
+        for element in elements[:10]:
+            try:
+                if not element.is_displayed():
+                    continue
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
+                time.sleep(0.2)
+                driver.execute_script("arguments[0].click();", element)
+                return True
+            except Exception:
+                continue
+    return False
+
+
+def trigger_video_playback(driver) -> bool:
+    started = False
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        return False
+
+    for percent in (20, 40, 60, 80):
+        try:
+            driver.execute_script(
+                """
+                const scrollHeight = Math.max(
+                    document.body.scrollHeight || 0,
+                    document.documentElement.scrollHeight || 0
+                );
+                window.scrollTo(0, scrollHeight * arguments[0] / 100);
+                """,
+                percent,
+            )
+            time.sleep(0.6)
+        except Exception:
+            pass
+        started = _play_visible_videos_in_current_context(driver) or _click_video_controls_in_current_context(driver) or started
+        if started:
+            break
+
+    try:
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
+    except Exception:
+        frames = []
+
+    for frame in frames[:12]:
+        try:
+            driver.switch_to.default_content()
+            driver.switch_to.frame(frame)
+            frame_started = _play_visible_videos_in_current_context(driver) or _click_video_controls_in_current_context(driver)
+            started = started or frame_started
+        except Exception:
+            continue
+        finally:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+
+    return started
+
+
 def extract_network(driver) -> dict:
     ga_events: List[dict] = []
     comscore_hits: List[dict] = []
@@ -602,6 +739,51 @@ def resolve_field_value(field_name: str, execution_values: Dict[str, Any], ga_ev
     return ", ".join(event_values)
 
 
+def parse_percent_value(value: Any) -> Optional[float]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def has_video_progress_event(events: List[dict], minimum_percent: float = 25.0) -> bool:
+    for event in events or []:
+        if normalize_event_name(event.get("event_name") or "") != "video_interaction":
+            continue
+        params = event.get("params") or {}
+        if not isinstance(params, dict):
+            continue
+        video_percent = find_payload_value(params, "video_percent")
+        percent_value = parse_percent_value(video_percent)
+        if percent_value is not None and percent_value >= minimum_percent:
+            return True
+    return False
+
+
+def wait_for_video_progress(driver, timeout_seconds: int = 60, minimum_percent: float = 25.0) -> bool:
+    deadline = time.time() + max(1, int(timeout_seconds or 0))
+    while time.time() < deadline:
+        probe = get_probe_payload(driver)
+        network = extract_network(driver)
+        transport_network = extract_probe_transport(probe)
+        gtag_events = extract_probe_gtag_events(probe)
+        ga_events = merge_ga_events(
+            network["ga_events"],
+            transport_network["ga_events"],
+            gtag_events,
+        )
+        if has_video_progress_event(ga_events, minimum_percent=minimum_percent):
+            return True
+        time.sleep(2)
+    return False
+
+
 def select_primary_execution_event(ga_events: List[dict]) -> Optional[dict]:
     if not ga_events:
         return None
@@ -806,6 +988,7 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
 
     start = time.time()
     driver = create_driver()
+    requires_video_playback = template_requires_video_playback(rules)
     try:
         try:
             del driver.requests
@@ -849,7 +1032,18 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
                 time.sleep(0.8)
         except Exception:
             pass
-        time.sleep(max(1, int(wait_seconds or 8)))
+        base_wait_seconds = max(1, int(wait_seconds or 8))
+        time.sleep(min(3, base_wait_seconds))
+        if requires_video_playback:
+            try:
+                trigger_video_playback(driver)
+            except Exception:
+                pass
+            wait_for_video_progress(driver, timeout_seconds=max(base_wait_seconds, 60), minimum_percent=25.0)
+        else:
+            remaining_wait = max(0, base_wait_seconds - min(3, base_wait_seconds))
+            if remaining_wait:
+                time.sleep(remaining_wait)
         probe = get_probe_payload(driver)
         network = extract_network(driver)
         performance_network = extract_performance_log_network(driver)
