@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -512,6 +513,38 @@ def join_nonempty_unique(*values: str) -> str:
     return ", ".join(output) or "Not found"
 
 
+def normalize_compare_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).strip().lower()
+
+
+def split_actual_tokens(value: Any) -> List[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    tokens: List[str] = []
+    for piece in re.split(r"[|,\n\r]+", text):
+        cleaned = normalize_compare_text(piece)
+        if cleaned:
+            tokens.append(cleaned)
+    return tokens
+
+
+def select_primary_execution_event(ga_events: List[dict]) -> Optional[dict]:
+    if not ga_events:
+        return None
+    preferred_names = ("page_view", "pageview")
+    preferred_sources = ("seleniumwire", "performance_log", "probe_sendBeacon", "probe_fetch", "probe_xhr", "probe_image", "gtag")
+    for event_name in preferred_names:
+        for source in preferred_sources:
+            for event in ga_events:
+                if normalize_event_name(event.get("event_name") or "") == event_name and str(event.get("source") or "") == source:
+                    return event
+        for event in ga_events:
+            if normalize_event_name(event.get("event_name") or "") == event_name:
+                return event
+    return ga_events[0]
+
+
 def get_probe_payload(driver) -> dict:
     try:
         payload = driver.execute_script("return window.__gaAudit || {pushes: [], state: {}, gtag: []};")
@@ -542,6 +575,8 @@ def validate_rule(rule: dict, actual: Any) -> Optional[str]:
     rule_type = str(rule.get("rule_type") or "").strip()
     expected = parse_expected_values(rule.get("expected_values"))
     actual_text = "" if actual is None else str(actual).strip()
+    actual_normalized = normalize_compare_text(actual_text)
+    actual_tokens = split_actual_tokens(actual_text)
     if rule_type == "optional":
         return None
     if rule_type == "required":
@@ -549,14 +584,28 @@ def validate_rule(rule: dict, actual: Any) -> Optional[str]:
     if not actual_text:
         return f"{rule.get('field_name')} missing"
     if rule_type == "exact":
-        return None if any(actual_text == item for item in expected) else f"{rule.get('field_name')} expected {expected}, got {actual_text}"
+        expected_normalized = [normalize_compare_text(item) for item in expected]
+        matched = actual_normalized in expected_normalized or any(token in expected_normalized for token in actual_tokens)
+        return None if matched else f"{rule.get('field_name')} expected {expected}, got {actual_text}"
     if rule_type == "one_of":
-        return None if actual_text in expected else f"{rule.get('field_name')} expected one of {expected}, got {actual_text}"
+        expected_normalized = [normalize_compare_text(item) for item in expected]
+        matched = actual_normalized in expected_normalized or any(token in expected_normalized for token in actual_tokens)
+        return None if matched else f"{rule.get('field_name')} expected one of {expected}, got {actual_text}"
     if rule_type == "contains":
-        return None if any(item in actual_text for item in expected) else f"{rule.get('field_name')} expected to contain {expected}, got {actual_text}"
+        return None if any(normalize_compare_text(item) in actual_normalized for item in expected) else f"{rule.get('field_name')} expected to contain {expected}, got {actual_text}"
     if rule_type == "regex":
-        import re
-        return None if any(re.search(pattern, actual_text) for pattern in expected if pattern) else f"{rule.get('field_name')} did not match regex"
+        invalid_patterns = []
+        for pattern in expected:
+            if not pattern:
+                continue
+            try:
+                if re.search(pattern, actual_text):
+                    return None
+            except re.error:
+                invalid_patterns.append(pattern)
+        if invalid_patterns:
+            return f"{rule.get('field_name')} has invalid regex in template: {invalid_patterns[0]}"
+        return f"{rule.get('field_name')} did not match regex"
     return None
 
 
@@ -641,10 +690,9 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
             pageview_source = "Execution"
         else:
             pageview_source = "Observed"
-    latest_params = {}
-    for event in ga_events:
-        latest_params.update(event.get("params") or {})
-    execution_values = {**state, **latest_params}
+    primary_event = select_primary_execution_event(ga_events)
+    primary_params = dict((primary_event or {}).get("params") or {})
+    execution_values = {**state, **primary_params}
     measurement_id = join_nonempty_unique(network["measurement_id"], performance_network["measurement_id"], transport_network["measurement_id"])
     container_id = join_nonempty_unique(network["container_id"], performance_network["container_id"], transport_network["container_id"])
 
