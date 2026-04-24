@@ -726,8 +726,15 @@ def parse_regex_patterns(value: str) -> List[str]:
     return [token.strip() for token in re.split(r"[\n\r]+", text) if token.strip()]
 
 
-def is_valid_iso_datetime(value: str) -> bool:
+def normalize_datetime_candidate(value: str) -> str:
     text = str(value or "").strip()
+    text = text.strip("\"'()[]{}")
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def is_valid_iso_datetime(value: str) -> bool:
+    text = normalize_datetime_candidate(value)
     if not text:
         return False
     try:
@@ -772,18 +779,19 @@ def validate_rule(rule: dict, actual: Any) -> Optional[str]:
     if rule_type == "regex":
         invalid_patterns = []
         actual_candidates = [actual_text]
-        actual_candidates.extend([token.strip() for token in re.split(r"[,\n\r;]+", actual_text) if token.strip()])
+        actual_candidates.extend([token.strip() for token in re.split(r"[,\n\r;|]+", actual_text) if token.strip()])
+        normalized_candidates = [normalize_datetime_candidate(candidate) for candidate in actual_candidates if str(candidate).strip()]
         for pattern in parse_regex_patterns(rule.get("expected_values")):
             if not pattern:
                 continue
             try:
-                if any(re.search(pattern, candidate) for candidate in actual_candidates):
+                if any(re.search(pattern, candidate) for candidate in actual_candidates + normalized_candidates):
                     return None
             except re.error:
                 invalid_patterns.append(pattern)
         if invalid_patterns:
             return f"{field_name} has invalid regex in template: {invalid_patterns[0]}"
-        if normalized_field_name in {"publishdate", "updatedate"} and any(is_valid_iso_datetime(candidate) for candidate in actual_candidates):
+        if normalized_field_name in {"publishdate", "updatedate"} and any(is_valid_iso_datetime(candidate) for candidate in actual_candidates + normalized_candidates):
             return None
         return f"{field_name} did not match regex"
     return None
