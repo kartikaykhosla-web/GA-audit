@@ -33,6 +33,15 @@ VIDEO_EXECUTION_FIELDS = {
     "video_duration",
     "video_title",
 }
+VIDEO_INTERACTION_DEPENDENT_FIELDS = {
+    "player_type",
+    "position_fold",
+    "section_name",
+    "video_orientation",
+    "video_percent",
+    "video_duration",
+    "video_title",
+}
 VIDEO_PLAY_SELECTORS = [
     "video",
     "button[aria-label*='play' i]",
@@ -466,6 +475,30 @@ def _click_video_controls_in_current_context(driver) -> bool:
     return False
 
 
+def _click_video_text_targets_in_current_context(driver) -> bool:
+    xpath_candidates = [
+        "//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'view this video also')]",
+        "//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'featured video')]",
+    ]
+    for xpath in xpath_candidates:
+        try:
+            elements = driver.find_elements(By.XPATH, xpath)
+        except Exception:
+            continue
+        for element in elements[:10]:
+            try:
+                if not element.is_displayed():
+                    continue
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
+                time.sleep(0.2)
+                driver.execute_script("arguments[0].click();", element)
+                time.sleep(0.8)
+                return True
+            except Exception:
+                continue
+    return False
+
+
 def trigger_video_playback(driver) -> bool:
     started = False
     try:
@@ -488,7 +521,14 @@ def trigger_video_playback(driver) -> bool:
             time.sleep(0.6)
         except Exception:
             pass
-        started = _play_visible_videos_in_current_context(driver) or _click_video_controls_in_current_context(driver) or started
+        started = (
+            _play_visible_videos_in_current_context(driver)
+            or _click_video_controls_in_current_context(driver)
+            or _click_video_text_targets_in_current_context(driver)
+            or _play_visible_videos_in_current_context(driver)
+            or _click_video_controls_in_current_context(driver)
+            or started
+        )
         if started:
             break
 
@@ -501,7 +541,13 @@ def trigger_video_playback(driver) -> bool:
         try:
             driver.switch_to.default_content()
             driver.switch_to.frame(frame)
-            frame_started = _play_visible_videos_in_current_context(driver) or _click_video_controls_in_current_context(driver)
+            frame_started = (
+                _play_visible_videos_in_current_context(driver)
+                or _click_video_controls_in_current_context(driver)
+                or _click_video_text_targets_in_current_context(driver)
+                or _play_visible_videos_in_current_context(driver)
+                or _click_video_controls_in_current_context(driver)
+            )
             started = started or frame_started
         except Exception:
             continue
@@ -931,6 +977,12 @@ def validate_rule(rule: dict, actual: Any) -> Optional[str]:
     field_name = str(rule.get("field_name") or "").strip()
     normalized_field_name = normalize_dimension_name(field_name)
     expected = parse_expected_values(rule.get("expected_values"))
+    if normalized_field_name == "dynamicvideoembedtype":
+        normalized_expected = [normalize_compare_text(item) for item in expected]
+        if "youtube embed" in normalized_expected and "in-house video" not in normalized_expected:
+            expected.append("in-house video")
+        if "in-house video" in normalized_expected and "youtube embed" not in normalized_expected:
+            expected.append("youtube embed")
     actual_text = "" if actual is None else str(actual).strip()
     actual_normalized = normalize_compare_text(actual_text)
     actual_tokens = split_actual_tokens(actual_text)
@@ -1109,6 +1161,7 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
 
     execution_failures = []
     event_failures = []
+    video_interaction_present = "video_interaction" in event_set or "tvc_video_interaction" in event_set
     for rule in rules:
         scope = str(rule.get("rule_scope") or "").strip()
         field_name = str(rule.get("field_name") or "").strip()
@@ -1116,6 +1169,12 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
             if field_name not in event_set:
                 event_failures.append(f"Event {field_name} not fired")
         elif scope == "execution":
+            normalized_field_name = normalize_dimension_name(field_name)
+            if (
+                normalized_field_name in {normalize_dimension_name(value) for value in VIDEO_INTERACTION_DEPENDENT_FIELDS}
+                and not video_interaction_present
+            ):
+                continue
             failure = validate_rule(rule, resolve_field_value(field_name, execution_values, ga_events))
             if failure:
                 execution_failures.append(failure)
