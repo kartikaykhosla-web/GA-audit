@@ -19,6 +19,10 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 try:
+    from streamlit_autorefresh import st_autorefresh
+except Exception:
+    st_autorefresh = None
+try:
     import extra_streamlit_components as stx
 except Exception:
     stx = None
@@ -7497,6 +7501,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     trigger_success, trigger_message = trigger_bulk_audit_workflow(job_id)
                     if trigger_success:
                         st.session_state["latest_bulk_audit_job_id"] = job_id
+                        st.session_state["bulk_audit_force_latest_job_id"] = job_id
                         st.success(f"Bulk audit started in GitHub Actions. Job ID: {job_id}")
                     else:
                         st.error(trigger_message)
@@ -7511,6 +7516,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     for job in jobs
                 }
                 latest_job_id = st.session_state.get("latest_bulk_audit_job_id")
+                force_latest_job_id = st.session_state.get("bulk_audit_force_latest_job_id")
                 labels = list(job_options.keys())
                 default_index = 0
                 if latest_job_id:
@@ -7518,22 +7524,45 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                         if latest_job_id in label:
                             default_index = index
                             break
+                selected_job_key = f"domain_audit_job_select_{domain_state_key}"
+                if force_latest_job_id:
+                    for label in labels:
+                        if force_latest_job_id in label:
+                            st.session_state[selected_job_key] = label
+                            st.session_state["bulk_audit_force_latest_job_id"] = ""
+                            break
                 selected_job_label = st.selectbox(
                     "View job",
                     labels,
                     index=default_index,
-                    key=f"domain_audit_job_select_{domain_state_key}",
+                    key=selected_job_key,
                 )
                 selected_job = job_options[selected_job_label]
                 selected_job_id = str(selected_job.get("job_id") or "").strip()
                 job_total = int(selected_job.get("total_count") or 0)
                 job_completed = int(selected_job.get("completed_count") or 0)
+                job_status = str(selected_job.get("status") or "").strip().lower()
+                progress_percent = int((job_completed / job_total) * 100) if job_total else 0
+                progress_milestone = min(100, (progress_percent // 25) * 25) if progress_percent else 0
+                milestone_key = f"bulk_audit_progress_milestone_{selected_job_id}"
+                previous_milestone = int(st.session_state.get(milestone_key, 0) or 0)
+                if progress_milestone > previous_milestone:
+                    st.session_state[milestone_key] = progress_milestone
+                elif milestone_key not in st.session_state:
+                    st.session_state[milestone_key] = progress_milestone
+
+                if job_status in {"queued", "running"} and st_autorefresh:
+                    st.caption("Auto-refreshing job status while this audit is in progress.")
+                    st_autorefresh(interval=10000, key=f"bulk_audit_autorefresh_{selected_job_id}")
+
                 st.progress((job_completed / job_total) if job_total else 0)
                 metric_cols = st.columns(4)
                 metric_cols[0].metric("Status", str(selected_job.get("status") or ""))
                 metric_cols[1].metric("Completed", f"{job_completed}/{job_total}")
                 metric_cols[2].metric("Failed", int(selected_job.get("failed_count") or 0))
                 metric_cols[3].metric("Job ID", selected_job_id[-12:] if selected_job_id else "-")
+                if progress_milestone and progress_milestone > previous_milestone:
+                    st.info(f"Job progress reached {progress_milestone}%.")
                 if selected_job.get("error_message"):
                     st.error(str(selected_job.get("error_message")))
                 if st.button("Refresh job status", key=f"refresh_bulk_job_{domain_state_key}"):

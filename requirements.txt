@@ -9,3 +9,4 @@ blinker<1.8.0
 setuptools<81
 extra-streamlit-components
 reportlab
+streamlit-autorefresh
