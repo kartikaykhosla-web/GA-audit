@@ -517,6 +517,15 @@ def normalize_compare_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).strip().lower()
 
 
+def normalize_dimension_name(value: Any) -> str:
+    name = str(value or "").strip()
+    for prefix in ("tvc_", "user.", "ep.", "epn.", "epf.", "up.", "upn."):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    return name.replace("_", "").lower()
+
+
 def split_actual_tokens(value: Any) -> List[str]:
     text = str(value or "").strip()
     if not text:
@@ -527,6 +536,19 @@ def split_actual_tokens(value: Any) -> List[str]:
         if cleaned:
             tokens.append(cleaned)
     return tokens
+
+
+def find_payload_value(payload: Dict[str, Any], field_name: str) -> Any:
+    if not isinstance(payload, dict):
+        return None
+    target = str(field_name or "").strip()
+    if target in payload:
+        return payload.get(target)
+    target_norm = normalize_dimension_name(target)
+    for key, value in payload.items():
+        if normalize_dimension_name(key) == target_norm:
+            return value
+    return None
 
 
 def select_primary_execution_event(ga_events: List[dict]) -> Optional[dict]:
@@ -705,7 +727,7 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
             if field_name not in event_set:
                 event_failures.append(f"Event {field_name} not fired")
         elif scope == "execution":
-            failure = validate_rule(rule, execution_values.get(field_name))
+            failure = validate_rule(rule, find_payload_value(execution_values, field_name))
             if failure:
                 execution_failures.append(failure)
 
