@@ -427,6 +427,13 @@ def normalize_event_name(name: str) -> str:
     return "page_view" if text in {"pageview", "page_view"} else text
 
 
+def canonical_event_name(name: str) -> str:
+    text = normalize_event_name(str(name or "").strip().lower())
+    if text.startswith("tvc_"):
+        text = text[4:]
+    return text
+
+
 def template_requires_video_playback(rules: List[dict]) -> bool:
     for rule in rules or []:
         field_name = str(rule.get("field_name") or "").strip()
@@ -1283,15 +1290,26 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
 
     execution_failures = []
     event_failures = []
-    video_interaction_present = "video_interaction" in event_set or "tvc_video_interaction" in event_set
-    video_validation_expected = requires_video_playback and page_video_expected
+    canonical_event_set = {canonical_event_name(name) for name in event_set}
+    video_interaction_present = "video_interaction" in canonical_event_set
+    dynamic_video_embed_type_value = resolve_field_value("dynamic_video_embed_type", execution_values, ga_events)
+    video_execution_present = any(
+        resolve_field_value(field_name, execution_values, ga_events) not in (None, "")
+        for field_name in VIDEO_EXECUTION_FIELDS
+    )
+    video_validation_expected = requires_video_playback and (
+        page_video_expected
+        or bool(str(dynamic_video_embed_type_value or "").strip())
+        or video_execution_present
+    )
     for rule in rules:
         scope = str(rule.get("rule_scope") or "").strip()
         field_name = str(rule.get("field_name") or "").strip()
         if scope == "event":
-            if normalize_event_name(field_name) == "video_interaction" and not video_validation_expected:
+            canonical_rule_event = canonical_event_name(field_name)
+            if canonical_rule_event == "video_interaction" and not video_validation_expected:
                 continue
-            if field_name not in event_set:
+            if canonical_rule_event not in canonical_event_set:
                 event_failures.append(f"Event {field_name} not fired")
         elif scope == "execution":
             normalized_field_name = normalize_dimension_name(field_name)
