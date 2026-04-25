@@ -5954,7 +5954,7 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.platypus import KeepTogether, PageBreak, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.platypus import PageBreak, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
     def resolve_pdf_fonts() -> Tuple[str, str]:
         regular_candidates = [
@@ -6099,31 +6099,6 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
         trigger_records = detail_payload.get("trigger_rows") or []
         computed_records = detail_payload.get("computed_rows") or []
         execution_records = detail_payload.get("execution_rows") or []
-        trigger_table = build_table_flowable(
-            ["Field", "Value"],
-            [[row.get("Field", ""), row.get("Value", "")] for row in trigger_records],
-            [58, 140],
-        )
-        computed_table = build_table_flowable(
-            ["Field", "Value"],
-            [[row.get("Field", ""), row.get("Value", "")] for row in computed_records],
-            [58, 140],
-        )
-        execution_headers = ["Field", "Value", "Expected", "Validation"]
-        execution_table = build_table_flowable(
-            execution_headers,
-            [
-                [
-                    row.get("Field", ""),
-                    row.get("Value", ""),
-                    row.get("Expected", ""),
-                    row.get("Validation", ""),
-                ]
-                for row in execution_records
-            ],
-            [52, 100, 93, 65],
-        )
-
         section_heading_style = ParagraphStyle(
             "DomainAuditSectionHeading",
             parent=styles["Heading3"],
@@ -6133,27 +6108,42 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
             textColor=colors.HexColor("#111827"),
             spaceAfter=4,
         )
-
-        section_row = Table(
-            [[
-                KeepTogether([Paragraph("Trigger Event", section_heading_style), trigger_table]),
-                KeepTogether([Paragraph("Computed State", section_heading_style), computed_table]),
-                KeepTogether([Paragraph("Execution Payload", section_heading_style), execution_table]),
-            ]],
-            colWidths=[210, 210, 340],
-        )
-        section_row.setStyle(
-            TableStyle(
-                [
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-                    ("TOPPADDING", (0, 0), (-1, -1), 0),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-                ]
+        elements.append(Paragraph("Trigger Event", section_heading_style))
+        elements.append(
+            build_table_flowable(
+                ["Field", "Value"],
+                [[row.get("Field", ""), row.get("Value", "")] for row in trigger_records],
+                [120, 575],
             )
         )
-        elements.append(section_row)
+        elements.append(Spacer(1, 8))
+
+        elements.append(Paragraph("Computed State", section_heading_style))
+        elements.append(
+            build_table_flowable(
+                ["Field", "Value"],
+                [[row.get("Field", ""), row.get("Value", "")] for row in computed_records],
+                [120, 575],
+            )
+        )
+        elements.append(Spacer(1, 8))
+
+        elements.append(Paragraph("Execution Payload", section_heading_style))
+        elements.append(
+            build_table_flowable(
+                ["Field", "Value", "Expected", "Validation"],
+                [
+                    [
+                        row.get("Field", ""),
+                        row.get("Value", ""),
+                        row.get("Expected", ""),
+                        row.get("Validation", ""),
+                    ]
+                    for row in execution_records
+                ],
+                [110, 310, 180, 95],
+            )
+        )
 
     generated_at = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S %Z")
     issue_rows = [row for row in report_rows if row.get("audit_outcome") == "Issue"]

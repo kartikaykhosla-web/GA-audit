@@ -1027,6 +1027,29 @@ def parse_regex_patterns(value: str) -> List[str]:
     return [token.strip() for token in re.split(r"[\n\r]+", text) if token.strip()]
 
 
+def infer_page_video_expectation(page_source: str) -> bool:
+    source = str(page_source or "")
+    if not source:
+        return False
+
+    embed_count_match = re.search(r'"embedCount"\s*:\s*(\d+)', source)
+    if embed_count_match:
+        try:
+            if int(embed_count_match.group(1)) > 0:
+                return True
+        except ValueError:
+            pass
+
+    true_markers = [
+        r'"isVideoEmbed"\s*:\s*true',
+        r'"videoEmbed"\s*:\s*"(?!null)([^"]+)"',
+        r'"articleEmbedType"\s*:\s*"(?!null)([^"]+)"',
+        r'"articleVideoThumbnail"\s*:\s*"(?!null)([^"]+)"',
+        r'"articleMediaType"\s*:\s*"video"',
+    ]
+    return any(re.search(pattern, source, flags=re.IGNORECASE) for pattern in true_markers)
+
+
 def normalize_datetime_candidate(value: str) -> str:
     text = str(value or "").strip()
     text = text.strip("\"'()[]{}")
@@ -1114,6 +1137,7 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
     start = time.time()
     driver = create_driver()
     requires_video_playback = template_requires_video_playback(rules)
+    page_video_expected = False
     try:
         try:
             del driver.requests
@@ -1159,6 +1183,10 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
             pass
         base_wait_seconds = max(1, int(wait_seconds or 8))
         time.sleep(min(3, base_wait_seconds))
+        try:
+            page_video_expected = infer_page_video_expectation(driver.page_source)
+        except Exception:
+            page_video_expected = False
         if requires_video_playback:
             try:
                 trigger_video_playback(driver)
@@ -1235,14 +1263,22 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
     execution_failures = []
     event_failures = []
     video_interaction_present = "video_interaction" in event_set or "tvc_video_interaction" in event_set
+    video_validation_expected = requires_video_playback and page_video_expected
     for rule in rules:
         scope = str(rule.get("rule_scope") or "").strip()
         field_name = str(rule.get("field_name") or "").strip()
         if scope == "event":
+            if normalize_event_name(field_name) == "video_interaction" and not video_validation_expected:
+                continue
             if field_name not in event_set:
                 event_failures.append(f"Event {field_name} not fired")
         elif scope == "execution":
             normalized_field_name = normalize_dimension_name(field_name)
+            if (
+                normalized_field_name in {normalize_dimension_name(value) for value in VIDEO_EXECUTION_FIELDS}
+                and not video_validation_expected
+            ):
+                continue
             if (
                 normalized_field_name in {normalize_dimension_name(value) for value in VIDEO_INTERACTION_DEPENDENT_FIELDS}
                 and not video_interaction_present
