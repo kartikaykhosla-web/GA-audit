@@ -1187,7 +1187,7 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
             page_video_expected = infer_page_video_expectation(driver.page_source)
         except Exception:
             page_video_expected = False
-        if requires_video_playback:
+        if requires_video_playback and page_video_expected:
             try:
                 trigger_video_playback(driver)
             except Exception:
