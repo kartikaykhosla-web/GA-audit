@@ -444,6 +444,19 @@ def template_requires_video_playback(rules: List[dict]) -> bool:
     return False
 
 
+def template_requires_scroll_capture(rules: List[dict]) -> bool:
+    for rule in rules or []:
+        scope = str(rule.get("rule_scope") or "").strip().lower()
+        field_name = str(rule.get("field_name") or "").strip()
+        if not field_name:
+            continue
+        if scope == "event" and normalize_event_name(field_name) == "page_scroll":
+            return True
+        if scope == "execution" and normalize_dimension_name(field_name) == "scrollpercent":
+            return True
+    return False
+
+
 def _click_element(driver, element) -> bool:
     try:
         driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", element)
@@ -1137,6 +1150,7 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
     start = time.time()
     driver = create_driver()
     requires_video_playback = template_requires_video_playback(rules)
+    requires_scroll_capture = template_requires_scroll_capture(rules)
     page_video_expected = False
     try:
         try:
@@ -1149,6 +1163,7 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
             pass
         install_datalayer_probe(driver)
         driver.get(sample_url)
+        interaction_start = time.time()
         try:
             driver.execute_script(
                 """
@@ -1167,7 +1182,9 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         except Exception:
             pass
         try:
-            for percent in (0, 25, 50, 75, 100):
+            scroll_points = (0, 25, 50, 75, 100) if (requires_scroll_capture or requires_video_playback) else (0, 100)
+            scroll_pause = 0.8 if (requires_scroll_capture or requires_video_playback) else 0.2
+            for percent in scroll_points:
                 driver.execute_script(
                     """
                     const scrollHeight = Math.max(
@@ -1178,11 +1195,14 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
                     """,
                     percent,
                 )
-                time.sleep(0.8)
+                time.sleep(scroll_pause)
         except Exception:
             pass
         base_wait_seconds = max(1, int(wait_seconds or 8))
-        time.sleep(min(3, base_wait_seconds))
+        elapsed_after_load = time.time() - interaction_start
+        initial_settle = min(1.0, max(0.0, base_wait_seconds - elapsed_after_load))
+        if initial_settle:
+            time.sleep(initial_settle)
         try:
             page_video_expected = infer_page_video_expectation(driver.page_source)
         except Exception:
@@ -1194,7 +1214,8 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
                 pass
             wait_for_video_progress(driver, timeout_seconds=max(base_wait_seconds, 60), minimum_percent=25.0)
         else:
-            remaining_wait = max(0, base_wait_seconds - min(3, base_wait_seconds))
+            elapsed_after_load = time.time() - interaction_start
+            remaining_wait = max(0.0, base_wait_seconds - elapsed_after_load)
             if remaining_wait:
                 time.sleep(remaining_wait)
         probe = get_probe_payload(driver)
