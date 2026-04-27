@@ -431,7 +431,7 @@ def canonical_event_name(name: str) -> str:
     text = normalize_event_name(str(name or "").strip().lower())
     if text.startswith("tvc_"):
         text = text[4:]
-    return text
+    return text.replace("_", "")
 
 
 def template_requires_video_playback(rules: List[dict]) -> bool:
