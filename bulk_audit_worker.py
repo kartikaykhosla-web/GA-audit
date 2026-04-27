@@ -65,6 +65,72 @@ VIDEO_PLAY_SELECTORS = [
 ]
 
 
+def has_video_candidate_in_current_context(driver) -> bool:
+    selectors = [
+        "video",
+        "iframe[src*='youtube' i]",
+        "iframe[src*='jwplayer' i]",
+        "iframe[src*='vdo.ai' i]",
+        "iframe[src*='video' i]",
+        "[class*='video']",
+        "[class*='player']",
+        "[data-testid*='video']",
+    ]
+    for selector in selectors:
+        try:
+            if driver.find_elements(By.CSS_SELECTOR, selector):
+                return True
+        except Exception:
+            continue
+    try:
+        return bool(
+            driver.find_elements(
+                By.XPATH,
+                "//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'view this video also') or "
+                "contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'featured video')]",
+            )
+        )
+    except Exception:
+        return False
+
+
+def has_video_candidate_in_frames(driver, depth: int = 0, max_depth: int = 1) -> bool:
+    if depth > max_depth:
+        return False
+    try:
+        driver.switch_to.default_content()
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
+    except Exception:
+        return False
+    for frame_index, _frame in enumerate(frames[:10]):
+        try:
+            driver.switch_to.default_content()
+            frames = driver.find_elements(By.TAG_NAME, "iframe")
+            if frame_index >= len(frames):
+                continue
+            driver.switch_to.frame(frames[frame_index])
+            if has_video_candidate_in_current_context(driver):
+                return True
+            if depth + 1 <= max_depth and has_video_candidate_in_frames(driver, depth=depth + 1, max_depth=max_depth):
+                return True
+        except Exception:
+            continue
+        finally:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+    return False
+
+
+def page_has_video_candidate(driver) -> bool:
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        return False
+    return has_video_candidate_in_current_context(driver) or has_video_candidate_in_frames(driver)
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -625,14 +691,15 @@ def _attempt_video_start_in_frames(
     return attempted
 
 
-def trigger_video_playback(driver) -> bool:
+def trigger_video_playback(driver, aggressive: bool = True) -> bool:
     started = False
     try:
         driver.switch_to.default_content()
     except Exception:
         return False
 
-    for percent in (10, 25, 40, 55, 70, 85):
+    scroll_points = (10, 25, 40, 55, 70, 85) if aggressive else (25, 55, 80)
+    for percent in scroll_points:
         try:
             driver.execute_script(
                 """
@@ -644,11 +711,13 @@ def trigger_video_playback(driver) -> bool:
                 """,
                 percent,
             )
-            time.sleep(0.8)
+            time.sleep(0.8 if aggressive else 0.35)
         except Exception:
             pass
         started = _attempt_video_start_in_current_context(driver) or started
         started = _attempt_video_start_in_frames(driver) or started
+        if started and not aggressive:
+            break
 
     return started
 
@@ -1247,12 +1316,34 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
             page_video_expected = infer_page_video_expectation(driver.page_source)
         except Exception:
             page_video_expected = False
-        if requires_video_playback and page_video_expected:
+        dom_video_candidate = page_has_video_candidate(driver) if requires_video_playback else False
+        if requires_video_playback and (page_video_expected or dom_video_candidate):
             try:
-                trigger_video_playback(driver)
+                playback_attempted = trigger_video_playback(
+                    driver,
+                    aggressive=bool(page_video_expected),
+                )
             except Exception:
-                pass
-            wait_for_video_progress(driver, timeout_seconds=min(max(base_wait_seconds + 8, 12), 20), minimum_percent=25.0)
+                playback_attempted = False
+            if playback_attempted or page_video_expected:
+                wait_for_video_progress(driver, timeout_seconds=min(max(base_wait_seconds + 8, 10), 16), minimum_percent=25.0)
+            else:
+                elapsed_after_load = time.time() - interaction_start
+                remaining_wait = max(0.0, base_wait_seconds - elapsed_after_load)
+                if remaining_wait:
+                    time.sleep(min(remaining_wait, 2.0))
+        elif requires_video_playback:
+            try:
+                playback_attempted = trigger_video_playback(driver, aggressive=False)
+            except Exception:
+                playback_attempted = False
+            if playback_attempted:
+                wait_for_video_progress(driver, timeout_seconds=min(max(base_wait_seconds + 4, 8), 12), minimum_percent=25.0)
+            else:
+                elapsed_after_load = time.time() - interaction_start
+                remaining_wait = max(0.0, base_wait_seconds - elapsed_after_load)
+                if remaining_wait:
+                    time.sleep(min(remaining_wait, 1.5))
         else:
             elapsed_after_load = time.time() - interaction_start
             remaining_wait = max(0.0, base_wait_seconds - elapsed_after_load)
