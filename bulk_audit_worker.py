@@ -691,6 +691,106 @@ def _attempt_video_start_in_frames(
     return attempted
 
 
+def _seek_visible_videos_in_current_context(driver, target_percent: float = 26.0) -> bool:
+    try:
+        sought = driver.execute_script(
+            """
+            const targetPercent = Math.max(1, Math.min(99, Number(arguments[0]) || 26));
+            const videos = Array.from(document.querySelectorAll("video"));
+            let updated = false;
+            videos.forEach((video) => {
+              const rect = video.getBoundingClientRect();
+              if (!rect.width || !rect.height) return;
+              const duration = Number(video.duration || 0);
+              if (!Number.isFinite(duration) || duration <= 1) return;
+              const targetTime = Math.max(0.1, Math.min(duration - 0.25, duration * targetPercent / 100));
+              try {
+                video.muted = true;
+                video.defaultMuted = true;
+                video.playsInline = true;
+                video.playbackRate = Math.max(Number(video.playbackRate || 1), 8);
+              } catch (e) {}
+              try {
+                const playResult = video.play();
+                if (playResult && typeof playResult.catch === "function") {
+                  playResult.catch(() => {});
+                }
+              } catch (e) {}
+              try {
+                video.currentTime = targetTime;
+                ["seeking", "seeked", "timeupdate", "playing"].forEach((eventName) => {
+                  try {
+                    video.dispatchEvent(new Event(eventName, { bubbles: true }));
+                  } catch (e) {}
+                });
+                updated = true;
+              } catch (e) {}
+            });
+            return updated;
+            """,
+            target_percent,
+        )
+        return bool(sought)
+    except Exception:
+        return False
+
+
+def _seek_visible_videos_in_frames(
+    driver,
+    target_percent: float = 26.0,
+    frame_path: Optional[List[int]] = None,
+    depth: int = 0,
+    max_depth: int = 2,
+) -> bool:
+    if depth > max_depth:
+        return False
+    frame_path = list(frame_path or [])
+    updated = False
+    try:
+        _switch_to_frame_path(driver, frame_path)
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
+    except Exception:
+        frames = []
+
+    for frame_index, _frame in enumerate(frames[:12]):
+        try:
+            _switch_to_frame_path(driver, frame_path)
+            frames = driver.find_elements(By.TAG_NAME, "iframe")
+            if frame_index >= len(frames):
+                continue
+            driver.switch_to.frame(frames[frame_index])
+            updated = _seek_visible_videos_in_current_context(driver, target_percent=target_percent) or updated
+            if depth + 1 <= max_depth:
+                updated = _seek_visible_videos_in_frames(
+                    driver,
+                    target_percent=target_percent,
+                    frame_path=frame_path + [frame_index],
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                ) or updated
+        except Exception:
+            continue
+        finally:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+    return updated
+
+
+def seek_video_progress(driver, target_percent: float = 26.0) -> bool:
+    updated = False
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        return False
+    updated = _seek_visible_videos_in_current_context(driver, target_percent=target_percent) or updated
+    updated = _seek_visible_videos_in_frames(driver, target_percent=target_percent) or updated
+    if updated:
+        time.sleep(0.8)
+    return updated
+
+
 def trigger_video_playback(driver, aggressive: bool = True) -> bool:
     started = False
     try:
@@ -1325,8 +1425,14 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
                 )
             except Exception:
                 playback_attempted = False
-            if playback_attempted or page_video_expected:
-                wait_for_video_progress(driver, timeout_seconds=min(max(base_wait_seconds + 8, 10), 16), minimum_percent=25.0)
+            seek_attempted = False
+            if playback_attempted or page_video_expected or dom_video_candidate:
+                try:
+                    seek_attempted = seek_video_progress(driver, target_percent=26.0)
+                except Exception:
+                    seek_attempted = False
+            if playback_attempted or seek_attempted or page_video_expected:
+                wait_for_video_progress(driver, timeout_seconds=min(max(base_wait_seconds + 3, 6), 10), minimum_percent=25.0)
             else:
                 elapsed_after_load = time.time() - interaction_start
                 remaining_wait = max(0.0, base_wait_seconds - elapsed_after_load)
@@ -1337,8 +1443,14 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
                 playback_attempted = trigger_video_playback(driver, aggressive=False)
             except Exception:
                 playback_attempted = False
+            seek_attempted = False
             if playback_attempted:
-                wait_for_video_progress(driver, timeout_seconds=min(max(base_wait_seconds + 4, 8), 12), minimum_percent=25.0)
+                try:
+                    seek_attempted = seek_video_progress(driver, target_percent=26.0)
+                except Exception:
+                    seek_attempted = False
+            if playback_attempted or seek_attempted:
+                wait_for_video_progress(driver, timeout_seconds=min(max(base_wait_seconds + 2, 5), 8), minimum_percent=25.0)
             else:
                 elapsed_after_load = time.time() - interaction_start
                 remaining_wait = max(0.0, base_wait_seconds - elapsed_after_load)
