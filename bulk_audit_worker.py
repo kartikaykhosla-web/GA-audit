@@ -891,22 +891,47 @@ def parse_percent_value(value: Any) -> Optional[float]:
         return None
 
 
-def has_video_progress_event(events: List[dict], minimum_percent: float = 25.0) -> bool:
+def is_video_interaction_event(event: dict) -> bool:
+    if not isinstance(event, dict):
+        return False
+    if canonical_event_name(event.get("event_name") or "") == "video_interaction":
+        return True
+    params = event.get("params") or {}
+    if not isinstance(params, dict):
+        return False
+    tvc_event_name = find_payload_value(params, "tvc_event_name") or find_payload_value(params, "event_name")
+    if canonical_event_name(tvc_event_name or "") == "video_interaction":
+        return True
+    video_marker_count = 0
+    for field_name in VIDEO_INTERACTION_DEPENDENT_FIELDS:
+        if find_payload_value(params, field_name) not in (None, ""):
+            video_marker_count += 1
+    if video_marker_count >= 2 and find_payload_value(params, "dynamic_video_embed_type") not in (None, ""):
+        return True
+    return False
+
+
+def inspect_video_event_capture(events: List[dict], minimum_percent: float = 25.0) -> tuple[bool, bool]:
+    video_present = False
     for event in events or []:
-        if normalize_event_name(event.get("event_name") or "") != "video_interaction":
+        if not is_video_interaction_event(event):
             continue
+        video_present = True
         params = event.get("params") or {}
         if not isinstance(params, dict):
             continue
         video_percent = find_payload_value(params, "video_percent")
         percent_value = parse_percent_value(video_percent)
         if percent_value is not None and percent_value >= minimum_percent:
-            return True
-    return False
+            return True, True
+    return video_present, False
 
 
-def wait_for_video_progress(driver, timeout_seconds: int = 60, minimum_percent: float = 25.0) -> bool:
-    deadline = time.time() + max(1, int(timeout_seconds or 0))
+def wait_for_video_progress(driver, timeout_seconds: int = 20, minimum_percent: float = 25.0) -> bool:
+    timeout_seconds = max(4, int(timeout_seconds or 0))
+    deadline = time.time() + timeout_seconds
+    no_signal_deadline = time.time() + min(8, timeout_seconds)
+    signal_seen_at = None
     while time.time() < deadline:
         probe = get_probe_payload(driver)
         network = extract_network(driver)
@@ -917,9 +942,17 @@ def wait_for_video_progress(driver, timeout_seconds: int = 60, minimum_percent: 
             transport_network["ga_events"],
             gtag_events,
         )
-        if has_video_progress_event(ga_events, minimum_percent=minimum_percent):
+        video_present, progress_reached = inspect_video_event_capture(ga_events, minimum_percent=minimum_percent)
+        if progress_reached:
             return True
-        time.sleep(2)
+        if video_present:
+            if signal_seen_at is None:
+                signal_seen_at = time.time()
+            elif time.time() - signal_seen_at >= 4:
+                return True
+        elif time.time() >= no_signal_deadline:
+            return False
+        time.sleep(1.2)
     return False
 
 
@@ -1219,7 +1252,7 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
                 trigger_video_playback(driver)
             except Exception:
                 pass
-            wait_for_video_progress(driver, timeout_seconds=max(base_wait_seconds, 60), minimum_percent=25.0)
+            wait_for_video_progress(driver, timeout_seconds=min(max(base_wait_seconds + 8, 12), 20), minimum_percent=25.0)
         else:
             elapsed_after_load = time.time() - interaction_start
             remaining_wait = max(0.0, base_wait_seconds - elapsed_after_load)
@@ -1291,7 +1324,9 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
     execution_failures = []
     event_failures = []
     canonical_event_set = {canonical_event_name(name) for name in event_set}
-    video_interaction_present = "video_interaction" in canonical_event_set
+    video_interaction_present = "video_interaction" in canonical_event_set or any(
+        is_video_interaction_event(event) for event in ga_events
+    )
     dynamic_video_embed_type_value = resolve_field_value("dynamic_video_embed_type", execution_values, ga_events)
     video_execution_present = any(
         resolve_field_value(field_name, execution_values, ga_events) not in (None, "")
@@ -1308,6 +1343,10 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         if scope == "event":
             canonical_rule_event = canonical_event_name(field_name)
             if canonical_rule_event == "video_interaction" and not video_validation_expected:
+                continue
+            if canonical_rule_event == "video_interaction":
+                if not video_interaction_present:
+                    event_failures.append(f"Event {field_name} not fired")
                 continue
             if canonical_rule_event not in canonical_event_set:
                 event_failures.append(f"Event {field_name} not fired")
