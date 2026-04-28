@@ -2033,8 +2033,16 @@ def accept_common_consent(driver) -> List[Dict[str, Any]]:
 VIDEO_PLAY_SELECTORS = [
     "video",
     "button[aria-label*='play' i]",
+    "button[title*='play' i]",
+    "[aria-label*='video' i]",
+    "[data-testid*='video' i]",
     "[class*='play' i]",
     "[class*='video' i] button",
+    "[class*='video' i] [role='button']",
+    "[class*='video' i] img",
+    "img[src*='/videos/' i][src*='thumbnail' i]",
+    "img[src$='.gif' i]",
+    "[poster]",
     "[data-testid*='play' i]",
 ]
 
@@ -2250,7 +2258,8 @@ def trigger_video_playback(driver) -> bool:
     except Exception:
         return False
 
-    for percent in (20, 50, 80):
+    # Try the hero media near the top of the article before we scroll past it.
+    for percent in (0, 4, 10, 20, 35):
         try:
             driver.execute_script(
                 """
@@ -4359,12 +4368,12 @@ def build_companion_validation_templates(
     all_templates: List[dict],
     rules_by_template: Optional[Dict[str, List[dict]]] = None,
 ) -> List[dict]:
-    real_companions = find_companion_templates(base_template, all_templates, rules_by_template)
-    if real_companions:
-        return real_companions
-
     runtime_companion = build_runtime_video_companion_template(base_template, rules_by_template)
-    return [runtime_companion] if runtime_companion else []
+    if runtime_companion:
+        return [runtime_companion]
+
+    real_companions = find_companion_templates(base_template, all_templates, rules_by_template)
+    return real_companions
 
 
 def get_effective_template_rules(
@@ -6234,6 +6243,53 @@ def choose_template_sample_url(template: dict) -> Tuple[str, str]:
     return "", "No usable reference URL/pattern found for this template."
 
 
+def template_reference_matches_url(template: Optional[dict], normalized_url: str) -> bool:
+    if not template:
+        return False
+    url_text = str(normalized_url or "").strip().lower()
+    if not url_text:
+        return False
+
+    patterns = split_template_reference_patterns(template.get("url_pattern") or "")
+    if not patterns:
+        return True
+
+    for pattern in patterns:
+        raw_pattern = str(pattern or "").strip()
+        if not raw_pattern:
+            continue
+        _, normalized_pattern, pattern_error = normalize_single_url(raw_pattern)
+        candidate_pattern = normalized_pattern if not pattern_error else raw_pattern.strip()
+        candidate_pattern = candidate_pattern.lower()
+        if not candidate_pattern:
+            continue
+
+        has_wildcard = "*" in candidate_pattern
+        has_regex = bool(re.search(r"[\[\]\(\)\{\}\^\$]", candidate_pattern))
+
+        if has_wildcard:
+            wildcard_regex = "^" + re.escape(candidate_pattern).replace("\\*", ".*") + "$"
+            if re.match(wildcard_regex, url_text):
+                return True
+            continue
+
+        if has_regex:
+            try:
+                if re.search(candidate_pattern, url_text):
+                    return True
+            except re.error:
+                pass
+            cleaned_pattern = _pattern_to_candidate_url(candidate_pattern).lower()
+            if cleaned_pattern and cleaned_pattern in url_text:
+                return True
+            continue
+
+        if candidate_pattern == url_text:
+            return True
+
+    return False
+
+
 def template_search_blob(template: dict) -> str:
     return " ".join(
         [
@@ -7651,6 +7707,11 @@ This capture is split into three layers:
             st.error("Please select a template before running the audit.")
         elif input_error:
             st.error(input_error)
+        elif not template_reference_matches_url(selected_template, normalized_url):
+            st.error(
+                "The selected template does not match this URL. "
+                "Please choose a template whose reference URL/pattern fits the page you want to audit."
+            )
         else:
             if normalized_url != original_url:
                 st.info(f"Using normalized URL: `{normalized_url}`")
