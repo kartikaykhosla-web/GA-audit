@@ -427,6 +427,7 @@ def create_driver(
     chrome_options.add_argument("--disable-quic")
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--disable-background-networking")
+    chrome_options.add_argument("--autoplay-policy=no-user-gesture-required")
     chrome_options.add_argument("--disable-default-apps")
     chrome_options.add_argument("--disable-sync")
     chrome_options.add_argument("--metrics-recording-only")
@@ -441,6 +442,9 @@ def create_driver(
     chrome_options.add_argument("--allow-running-insecure-content")
     chrome_options.add_argument(
         "--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests"
+    )
+    chrome_options.add_argument(
+        "--disable-features=PreloadMediaEngagementData,MediaEngagementBypassAutoplayPolicies"
     )
     chrome_options.add_argument(
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -1842,7 +1846,7 @@ def sanitize_for_json(obj: Any) -> Any:
 # Scroll helper – stop before Taboola
 # -------------------------
 
-def scroll_before_taboola(driver, scroll_pause: float = 1.0, max_steps: int = 20) -> None:
+def scroll_before_taboola(driver, scroll_pause: float = 0.2, max_steps: int = 8) -> None:
     try:
         info = driver.execute_script(
             """
@@ -1987,7 +1991,7 @@ def _click_element(driver, element) -> bool:
         driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", element)
     except Exception:
         pass
-    time.sleep(0.2)
+    time.sleep(0.05)
     for click_attempt in (
         lambda: element.click(),
         lambda: driver.execute_script("arguments[0].click();", element),
@@ -2060,7 +2064,7 @@ def _click_video_text_targets_in_current_context(driver) -> bool:
                 if not element.is_displayed():
                     continue
                 if _click_element(driver, element):
-                    time.sleep(1.0)
+                    time.sleep(0.4)
                     return True
             except Exception:
                 continue
@@ -2069,19 +2073,18 @@ def _click_video_text_targets_in_current_context(driver) -> bool:
 
 def _attempt_video_start_in_current_context(driver) -> bool:
     attempted = False
-    for _ in range(2):
-        if _play_visible_videos_in_current_context(driver):
-            attempted = True
-            time.sleep(0.8)
-        if _click_video_controls_in_current_context(driver):
-            attempted = True
-            time.sleep(1.0)
-        if _click_video_text_targets_in_current_context(driver):
-            attempted = True
-            time.sleep(1.0)
-        if _play_visible_videos_in_current_context(driver):
-            attempted = True
-            time.sleep(0.8)
+    if _play_visible_videos_in_current_context(driver):
+        attempted = True
+        time.sleep(0.25)
+    if _click_video_controls_in_current_context(driver):
+        attempted = True
+        time.sleep(0.35)
+    if _click_video_text_targets_in_current_context(driver):
+        attempted = True
+        time.sleep(0.35)
+    if _play_visible_videos_in_current_context(driver):
+        attempted = True
+        time.sleep(0.25)
     return attempted
 
 
@@ -2194,7 +2197,7 @@ def trigger_video_playback(driver) -> bool:
     except Exception:
         return False
 
-    for percent in (15, 30, 45, 60, 75):
+    for percent in (20, 50, 80):
         try:
             driver.execute_script(
                 """
@@ -2206,7 +2209,7 @@ def trigger_video_playback(driver) -> bool:
                 """,
                 percent,
             )
-            time.sleep(0.8)
+            time.sleep(0.25)
         except Exception:
             pass
         started = _attempt_video_start_in_current_context(driver) or started
@@ -2223,7 +2226,7 @@ def seek_video_progress(driver, target_percent: float = 26.0) -> bool:
     updated = _seek_visible_videos_in_current_context(driver, target_percent=target_percent) or updated
     updated = _seek_visible_videos_in_frames(driver, target_percent=target_percent) or updated
     if updated:
-        time.sleep(0.8)
+        time.sleep(0.2)
     return updated
 
 
@@ -2740,7 +2743,6 @@ JAGRAN_STARTER_TEMPLATES = [
         "rules": [
             {"rule_scope": "event", "field_name": "page_view", "rule_type": "exact", "expected_values": "page_view"},
             {"rule_scope": "event", "field_name": "test_event", "rule_type": "exact", "expected_values": "test_event"},
-            {"rule_scope": "event", "field_name": "tvc_video_interaction", "rule_type": "exact", "expected_values": "tvc_video_interaction"},
             {"rule_scope": "execution", "field_name": "Language", "rule_type": "exact", "expected_values": "hindi"},
             {"rule_scope": "execution", "field_name": "page_type", "rule_type": "exact", "expected_values": "homepage"},
             {"rule_scope": "execution", "field_name": "tvc_event_name", "rule_type": "exact", "expected_values": "page_view"},
