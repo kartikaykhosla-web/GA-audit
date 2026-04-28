@@ -71,10 +71,7 @@ def has_video_candidate_in_current_context(driver) -> bool:
         "iframe[src*='youtube' i]",
         "iframe[src*='jwplayer' i]",
         "iframe[src*='vdo.ai' i]",
-        "iframe[src*='video' i]",
-        "[class*='video']",
-        "[class*='player']",
-        "[data-testid*='video']",
+        "iframe[src*='player' i]",
     ]
     for selector in selectors:
         try:
@@ -1252,6 +1249,21 @@ def parse_regex_patterns(value: str) -> List[str]:
 def infer_page_video_expectation(page_source: str) -> bool:
     source = str(page_source or "")
     if not source:
+        return False
+
+    # Recommendation/short-video widgets should not force article-video validation.
+    # This page family often ships a `shortVideo` blob even when the article itself
+    # does not contain an embedded "view this video also" or in-house video player.
+    if '"shortVideo"' in source and not any(
+        marker in source.lower()
+        for marker in (
+            "view this video also",
+            "featured video",
+            "dynamic_video_embed_type",
+            '"articlemediatype":"video"',
+            '"isvideoembed":true',
+        )
+    ):
         return False
 
     embed_count_match = re.search(r'"embedCount"\s*:\s*(\d+)', source)
