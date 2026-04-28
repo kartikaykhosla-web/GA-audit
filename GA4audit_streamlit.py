@@ -5713,17 +5713,41 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
         display_rows.append(row_copy)
 
     for rule in event_rules:
+        configured_event_names = parse_expected_values(rule.get("field_name"))
         configured_values = parse_expected_values(rule.get("expected_values"))
-        if not configured_values:
-            configured_values = [str(rule.get("field_name") or "").strip()]
+        if not configured_event_names:
+            configured_event_names = configured_values[:]
+        if not configured_event_names:
+            continue
 
         matched_names = []
-        for configured in configured_values:
+        for configured in configured_event_names:
             configured_norm = normalize_event_name(configured)
             if configured_norm in observed_by_name:
                 matched_names.append(configured_norm)
 
         matched = bool(matched_names)
+        expected_text = str(rule.get("expected_values") or "").strip() or " | ".join(configured_event_names)
+
+        if matched and configured_values:
+            configured_event_norms = {normalize_event_name(value) for value in configured_event_names}
+            expected_value_norms = {normalize_event_name(value) for value in configured_values}
+            validate_payload_values = bool(expected_value_norms - configured_event_norms)
+
+            if validate_payload_values:
+                payload_text_parts = []
+                for event_name in matched_names:
+                    matched_row = observed_by_name.get(event_name) or {}
+                    payload_text_parts.append(str(matched_row.get("key_values_seen") or ""))
+                    for detail in (matched_row.get("details") or []):
+                        payload_text_parts.append(str(detail.get("Field") or ""))
+                        payload_text_parts.append(str(detail.get("Value") or ""))
+                    for detail in (matched_row.get("technical_details") or []):
+                        payload_text_parts.append(str(detail.get("Field") or ""))
+                        payload_text_parts.append(str(detail.get("Value") or ""))
+                payload_text = " | ".join(part for part in payload_text_parts if part).lower()
+                matched = all(str(value).strip().lower() in payload_text for value in configured_values if str(value).strip())
+
         validation_label = VALIDATION_PASS_LABEL if matched else (
             VALIDATION_OPTIONAL_LABEL if str(rule.get("rule_type") or "").strip().lower() == "optional" else VALIDATION_FAIL_LABEL
         )
@@ -5734,19 +5758,19 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
                 for row in display_rows:
                     if normalize_event_name(row.get("event_name")) != event_name:
                         continue
-                    row["expected"] = " | ".join(configured_values)
+                    row["expected"] = expected_text
                     row["validation"] = validation_label
         else:
             display_rows.append(
                 {
-                    "event_name": " | ".join(configured_values),
+                    "event_name": " | ".join(configured_event_names),
                     "status": "Expected but not fired",
                     "times_fired": 0,
                     "capture_layer": "Not observed",
                     "key_values_seen": "",
                     "details": [],
                     "technical_details": [],
-                    "expected": " | ".join(configured_values),
+                    "expected": expected_text,
                     "validation": validation_label,
                 }
             )
