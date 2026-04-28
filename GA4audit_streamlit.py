@@ -1662,6 +1662,54 @@ def extract_collect_hits_from_performance_logs(
     return ga4_collects, ccm_pageviews, comscore_hits, chartbeat_hits
 
 
+def detect_tag_scripts_in_dom(driver) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    try:
+        page_source = str(driver.page_source or "")
+    except Exception:
+        page_source = ""
+
+    gtm_scripts: List[Dict[str, Any]] = []
+    gtag_scripts: List[Dict[str, Any]] = []
+
+    for match in GTM_SCRIPT_PATTERN.findall(page_source):
+        gtm_scripts.append(
+            {
+                "source": "dom",
+                "url": match,
+                "method": "GET",
+                "status": "Observed",
+                "response_status": "Observed",
+                "content_type": "script",
+                "headers": {},
+                "request_headers": {},
+                "response_headers": {},
+                "request_body": "",
+                "response_body": "",
+                "decoded_events": [],
+            }
+        )
+
+    for match in GTAG_SCRIPT_PATTERN.findall(page_source):
+        gtag_scripts.append(
+            {
+                "source": "dom",
+                "url": match,
+                "method": "GET",
+                "status": "Observed",
+                "response_status": "Observed",
+                "content_type": "script",
+                "headers": {},
+                "request_headers": {},
+                "response_headers": {},
+                "request_body": "",
+                "response_body": "",
+                "decoded_events": [],
+            }
+        )
+
+    return gtm_scripts, gtag_scripts
+
+
 def _merge_hit_record(base_hit: Dict[str, Any], new_hit: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(base_hit)
     for field in (
@@ -1716,7 +1764,7 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
     comscore_hits: List[Dict[str, Any]] = []
     chartbeat_hits: List[Dict[str, Any]] = []
 
-    for request in driver.requests:
+    for request in getattr(driver, "requests", []) or []:
         url = getattr(request, "url", "")
         if not url:
             continue
@@ -1747,6 +1795,11 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
     ccm_pageviews = merge_network_hits(ccm_pageviews, perf_ccm_pageviews)
     comscore_hits = merge_network_hits(comscore_hits, perf_comscore_hits)
     chartbeat_hits = merge_network_hits(chartbeat_hits, perf_chartbeat_hits)
+
+    if not gtm_scripts and not gtag_scripts:
+        dom_gtm_scripts, dom_gtag_scripts = detect_tag_scripts_in_dom(driver)
+        gtm_scripts = dom_gtm_scripts
+        gtag_scripts = dom_gtag_scripts
 
     return {
         "gtm_present": bool(gtm_scripts),
@@ -2415,7 +2468,7 @@ def audit_single_url(
 
     # HTTP hint
     try:
-        resp = requests.get(url, timeout=8)
+        resp = requests.get(url, timeout=4)
         result["http_status_hint"] = resp.status_code
     except Exception as e:
         result["http_status_hint"] = f"Error: {e}"
@@ -2463,9 +2516,10 @@ def audit_single_url(
     except Exception:
         pass
 
-    # Scroll the page (Taboola-safe) then extra scrolls to trigger scroll-depth when needed.
-    scroll_before_taboola(driver)
+    # Scroll only when this audit path actually needs interaction-driven signals.
     try:
+        if requires_scroll_capture or requires_video_playback:
+            scroll_before_taboola(driver)
         scroll_points = (0, 25, 50, 75, 100) if (requires_scroll_capture or requires_video_playback) else (0, 100)
         scroll_pause = 0.8 if (requires_scroll_capture or requires_video_playback) else 0.2
         for p in scroll_points:
@@ -7611,7 +7665,8 @@ This capture is split into three layers:
 
             status_box.write(f"Auditing {normalized_url} (1/1)")
             try:
-                driver = create_driver(headless=True)
+                # Streamlit Cloud is much more stable on the lighter Selenium path.
+                driver = create_driver(headless=True, capture_network=False)
                 try:
                     results.append(
                         audit_single_url(
@@ -8400,7 +8455,7 @@ with tab_compare:
         if not prod_url or not stage_url:
             st.error("Enter both URLs.")
         else:
-            driver = create_driver(headless=True)
+            driver = create_driver(headless=True, capture_network=False)
             try:
                 prod = audit_single_url(driver, prod_url, wait_cmp)
                 stage = audit_single_url(driver, stage_url, wait_cmp)
