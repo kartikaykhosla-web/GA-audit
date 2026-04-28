@@ -3872,6 +3872,9 @@ def is_video_related_rule(rule: dict) -> bool:
 
 
 def is_video_interaction_template(template: dict, rules_by_template: Optional[Dict[str, List[dict]]] = None) -> bool:
+    if template.get("_runtime_companion"):
+        return True
+
     template_name = _normalize_template_name_key(template.get("template_name") or "")
     if "video interaction" in template_name:
         return True
@@ -3882,14 +3885,12 @@ def is_video_interaction_template(template: dict, rules_by_template: Optional[Di
         expected_values = _normalize_template_name_key(rule.get("expected_values") or "")
         if rule_scope == "event" and "video_interaction" in f"{field_name} {expected_values}":
             return True
-        if rule_scope == "execution" and field_name in VIDEO_INTERACTION_FIELD_NAMES:
-            return True
     return False
 
 
 def is_article_detail_template(template: dict, rules_by_template: Optional[Dict[str, List[dict]]] = None) -> bool:
     template_name = _normalize_template_name_key(template.get("template_name") or "")
-    return "article detail" in template_name and not is_video_interaction_template(template, rules_by_template)
+    return "article detail" in template_name and "video interaction" not in template_name
 
 
 def find_companion_templates(
