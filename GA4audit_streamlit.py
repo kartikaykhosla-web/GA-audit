@@ -3977,11 +3977,7 @@ def get_effective_template_rules(
     if not template_rules_list:
         return []
 
-    if is_article_detail_template(template, rules_by_template) and build_companion_validation_templates(
-        template,
-        all_templates or [],
-        rules_by_template,
-    ):
+    if is_article_detail_template(template, rules_by_template):
         return [rule for rule in template_rules_list if not is_video_related_rule(rule)]
 
     return template_rules_list
@@ -7186,31 +7182,23 @@ This capture is split into three layers:
         placeholder="https://www.example.com/article-1 or www.example.com/article-1",
     )
 
-    template_search_text = st.text_input(
-        "Template search",
-        placeholder="Search by template name, domain, measurement ID, or container ID",
-        key="audit_template_search",
-    )
-
-    filtered_active_templates = list(active_templates)
-    search_query = str(template_search_text or "").strip().lower()
-    if search_query:
-        filtered_active_templates = [
-            template
-            for template in active_templates
-            if search_query in build_template_option_label(template).lower()
-        ]
-
     selected_template = None
-    if not filtered_active_templates:
-        st.warning("No templates match the current search.")
+    if not active_templates:
+        st.warning("No active templates are available.")
     else:
-        template_options = [None, *filtered_active_templates]
+        template_options = [
+            None,
+            *sorted(
+                active_templates,
+                key=lambda template: build_template_option_label(template).lower(),
+            ),
+        ]
         selected_template = st.selectbox(
             "Template *",
             options=template_options,
             format_func=lambda template: "Select a template" if template is None else build_template_option_label(template),
         )
+        st.caption("Open the dropdown and start typing to search within the template list.")
 
     wait_seconds = st.slider(
         "Wait time after page load (seconds)",
