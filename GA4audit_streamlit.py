@@ -1970,6 +1970,264 @@ def accept_common_consent(driver) -> List[Dict[str, Any]]:
 
 
 # -------------------------
+# Video playback helpers
+# -------------------------
+
+VIDEO_PLAY_SELECTORS = [
+    "video",
+    "button[aria-label*='play' i]",
+    "[class*='play' i]",
+    "[class*='video' i] button",
+    "[data-testid*='play' i]",
+]
+
+
+def _click_element(driver, element) -> bool:
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", element)
+    except Exception:
+        pass
+    time.sleep(0.2)
+    for click_attempt in (
+        lambda: element.click(),
+        lambda: driver.execute_script("arguments[0].click();", element),
+    ):
+        try:
+            click_attempt()
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _play_visible_videos_in_current_context(driver) -> bool:
+    try:
+        played = driver.execute_script(
+            """
+            const elements = Array.from(document.querySelectorAll("video"));
+            let started = false;
+            elements.forEach((video) => {
+              const rect = video.getBoundingClientRect();
+              if (!rect.width || !rect.height) return;
+              try {
+                video.muted = true;
+                video.defaultMuted = true;
+                video.playsInline = true;
+                const playResult = video.play();
+                if (playResult && typeof playResult.catch === "function") {
+                  playResult.catch(() => {});
+                }
+                started = true;
+              } catch (e) {}
+            });
+            return started;
+            """
+        )
+        return bool(played)
+    except Exception:
+        return False
+
+
+def _click_video_controls_in_current_context(driver) -> bool:
+    for selector in VIDEO_PLAY_SELECTORS:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        except Exception:
+            continue
+        for element in elements[:10]:
+            try:
+                if not element.is_displayed():
+                    continue
+                if _click_element(driver, element):
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _click_video_text_targets_in_current_context(driver) -> bool:
+    xpath_candidates = [
+        "//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'view this video also')]",
+        "//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'featured video')]",
+    ]
+    for xpath in xpath_candidates:
+        try:
+            elements = driver.find_elements(By.XPATH, xpath)
+        except Exception:
+            continue
+        for element in elements[:10]:
+            try:
+                if not element.is_displayed():
+                    continue
+                if _click_element(driver, element):
+                    time.sleep(1.0)
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _attempt_video_start_in_current_context(driver) -> bool:
+    attempted = False
+    for _ in range(2):
+        if _play_visible_videos_in_current_context(driver):
+            attempted = True
+            time.sleep(0.8)
+        if _click_video_controls_in_current_context(driver):
+            attempted = True
+            time.sleep(1.0)
+        if _click_video_text_targets_in_current_context(driver):
+            attempted = True
+            time.sleep(1.0)
+        if _play_visible_videos_in_current_context(driver):
+            attempted = True
+            time.sleep(0.8)
+    return attempted
+
+
+def _attempt_video_start_in_frames(driver, depth: int = 0, max_depth: int = 1) -> bool:
+    if depth > max_depth:
+        return False
+    attempted = False
+    try:
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
+    except Exception:
+        return False
+
+    for frame_index, frame in enumerate(frames[:10]):
+        try:
+            driver.switch_to.default_content()
+            frames = driver.find_elements(By.TAG_NAME, "iframe")
+            if frame_index >= len(frames):
+                continue
+            driver.switch_to.frame(frames[frame_index])
+            attempted = _attempt_video_start_in_current_context(driver) or attempted
+            if depth + 1 <= max_depth:
+                attempted = _attempt_video_start_in_frames(driver, depth=depth + 1, max_depth=max_depth) or attempted
+        except Exception:
+            continue
+        finally:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+    return attempted
+
+
+def _seek_visible_videos_in_current_context(driver, target_percent: float = 26.0) -> bool:
+    try:
+        sought = driver.execute_script(
+            """
+            const targetPercent = Math.max(1, Math.min(99, Number(arguments[0]) || 26));
+            const videos = Array.from(document.querySelectorAll("video"));
+            let updated = false;
+            videos.forEach((video) => {
+              const rect = video.getBoundingClientRect();
+              if (!rect.width || !rect.height) return;
+              const duration = Number(video.duration || 0);
+              if (!Number.isFinite(duration) || duration <= 1) return;
+              const targetTime = Math.max(0.1, Math.min(duration - 0.25, duration * targetPercent / 100));
+              try {
+                video.muted = true;
+                video.defaultMuted = true;
+                video.playsInline = true;
+                video.playbackRate = Math.max(Number(video.playbackRate || 1), 8);
+              } catch (e) {}
+              try {
+                const playResult = video.play();
+                if (playResult && typeof playResult.catch === "function") {
+                  playResult.catch(() => {});
+                }
+              } catch (e) {}
+              try {
+                video.currentTime = targetTime;
+                ["seeking", "seeked", "timeupdate", "playing"].forEach((eventName) => {
+                  try {
+                    video.dispatchEvent(new Event(eventName, { bubbles: true }));
+                  } catch (e) {}
+                });
+                updated = true;
+              } catch (e) {}
+            });
+            return updated;
+            """,
+            target_percent,
+        )
+        return bool(sought)
+    except Exception:
+        return False
+
+
+def _seek_visible_videos_in_frames(driver, target_percent: float = 26.0, depth: int = 0, max_depth: int = 1) -> bool:
+    if depth > max_depth:
+        return False
+    updated = False
+    try:
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
+    except Exception:
+        return False
+
+    for frame_index, frame in enumerate(frames[:10]):
+        try:
+            driver.switch_to.default_content()
+            frames = driver.find_elements(By.TAG_NAME, "iframe")
+            if frame_index >= len(frames):
+                continue
+            driver.switch_to.frame(frames[frame_index])
+            updated = _seek_visible_videos_in_current_context(driver, target_percent=target_percent) or updated
+            if depth + 1 <= max_depth:
+                updated = _seek_visible_videos_in_frames(driver, target_percent=target_percent, depth=depth + 1, max_depth=max_depth) or updated
+        except Exception:
+            continue
+        finally:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+    return updated
+
+
+def trigger_video_playback(driver) -> bool:
+    started = False
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        return False
+
+    for percent in (15, 30, 45, 60, 75):
+        try:
+            driver.execute_script(
+                """
+                const scrollHeight = Math.max(
+                    document.body.scrollHeight || 0,
+                    document.documentElement.scrollHeight || 0
+                );
+                window.scrollTo(0, scrollHeight * arguments[0] / 100);
+                """,
+                percent,
+            )
+            time.sleep(0.8)
+        except Exception:
+            pass
+        started = _attempt_video_start_in_current_context(driver) or started
+        started = _attempt_video_start_in_frames(driver) or started
+    return started
+
+
+def seek_video_progress(driver, target_percent: float = 26.0) -> bool:
+    updated = False
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        return False
+    updated = _seek_visible_videos_in_current_context(driver, target_percent=target_percent) or updated
+    updated = _seek_visible_videos_in_frames(driver, target_percent=target_percent) or updated
+    if updated:
+        time.sleep(0.8)
+    return updated
+
+
+# -------------------------
 # Flattening & scorecard
 # -------------------------
 
@@ -2172,6 +2430,15 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8, compact: bool = Fa
                 p,
             )
             time.sleep(0.6)
+    except Exception:
+        pass
+
+    # Try to trigger embedded video playback so video_interaction can be captured on article pages.
+    try:
+        video_started = trigger_video_playback(driver)
+        if video_started:
+            seek_video_progress(driver, target_percent=26.0)
+            time.sleep(2.0)
     except Exception:
         pass
 
@@ -3888,6 +4155,25 @@ def is_video_interaction_template(template: dict, rules_by_template: Optional[Di
     return False
 
 
+def template_targets_article_detail_context(
+    template: dict,
+    rules_by_template: Optional[Dict[str, List[dict]]] = None,
+) -> bool:
+    template_name = _normalize_template_name_key(template.get("template_name") or "")
+    if "article detail" in template_name:
+        return True
+
+    for rule in get_rules_for_validation_template(template, rules_by_template):
+        rule_scope = str(rule.get("rule_scope") or "").strip().lower()
+        field_name = normalize_dimension_name(rule.get("field_name") or "")
+        expected_values = _normalize_template_name_key(rule.get("expected_values") or "")
+        if rule_scope == "execution" and field_name == "pagetype" and "article detail" in expected_values:
+            return True
+        if rule_scope == "execution" and field_name == "dynamicvideoembedtype":
+            return True
+    return False
+
+
 def is_article_detail_template(template: dict, rules_by_template: Optional[Dict[str, List[dict]]] = None) -> bool:
     template_name = _normalize_template_name_key(template.get("template_name") or "")
     return "article detail" in template_name and "video interaction" not in template_name
@@ -3916,6 +4202,8 @@ def find_companion_templates(
         if get_template_domain_label(candidate) != base_domain:
             continue
         if not is_video_interaction_template(candidate, rules_by_template):
+            continue
+        if not template_targets_article_detail_context(candidate, rules_by_template):
             continue
 
         candidate_measurement_id = str(candidate.get("measurement_id") or "").strip()
@@ -4978,6 +5266,15 @@ def normalize_event_name(value) -> str:
     return str(value or "").strip().lower().replace("_", "")
 
 
+def canonical_event_name(value) -> str:
+    text = normalize_event_name(value)
+    if text.startswith("tvc"):
+        stripped = text[3:]
+        if stripped.startswith("videointeraction") or stripped.startswith("pageview") or stripped.startswith("pagescroll"):
+            return stripped
+    return text
+
+
 def normalize_dimension_name(value) -> str:
     name = str(value or "").strip()
     for prefix in ("tvc_", "user.", "ep.", "epn.", "epf.", "up.", "upn."):
@@ -5699,7 +5996,7 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
         return pd.DataFrame(event_rows)
 
     observed_by_name = {
-        normalize_event_name(row.get("event_name")): row
+        canonical_event_name(row.get("event_name")): row
         for row in (event_rows or [])
         if str(row.get("event_name") or "").strip()
     }
@@ -5722,7 +6019,7 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
 
         matched_names = []
         for configured in configured_event_names:
-            configured_norm = normalize_event_name(configured)
+            configured_norm = canonical_event_name(configured)
             if configured_norm in observed_by_name:
                 matched_names.append(configured_norm)
 
@@ -5730,8 +6027,8 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
         expected_text = str(rule.get("expected_values") or "").strip() or " | ".join(configured_event_names)
 
         if matched and configured_values:
-            configured_event_norms = {normalize_event_name(value) for value in configured_event_names}
-            expected_value_norms = {normalize_event_name(value) for value in configured_values}
+            configured_event_norms = {canonical_event_name(value) for value in configured_event_names}
+            expected_value_norms = {canonical_event_name(value) for value in configured_values}
             validate_payload_values = bool(expected_value_norms - configured_event_norms)
 
             if validate_payload_values:
@@ -5756,7 +6053,7 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
             for event_name in matched_names:
                 handled_event_names.add(event_name)
                 for row in display_rows:
-                    if normalize_event_name(row.get("event_name")) != event_name:
+                    if canonical_event_name(row.get("event_name")) != event_name:
                         continue
                     row["expected"] = expected_text
                     row["validation"] = validation_label
