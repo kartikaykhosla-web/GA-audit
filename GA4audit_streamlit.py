@@ -3703,12 +3703,7 @@ def create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict]
     compact_plan = []
     for row in compact_domain_audit_plan(plan_rows):
         template = dict(row.get("template") or {})
-        template_id = str(template.get("template_id") or "").strip()
-        rules = [
-            rule
-            for rule in template_rules
-            if str(rule.get("template_id") or "").strip() == template_id
-        ]
+        rules = get_rules_for_validation_template(template, template_rules_by_template)
         compact_plan.append(
             {
                 **row,
@@ -3837,6 +3832,19 @@ def get_rules_for_template(template_id: str, rules_by_template: Optional[Dict[st
     ]
 
 
+def get_rules_for_validation_template(
+    template: Optional[dict],
+    rules_by_template: Optional[Dict[str, List[dict]]] = None,
+) -> List[dict]:
+    if not template:
+        return []
+    runtime_rules = template.get("_runtime_rules")
+    if isinstance(runtime_rules, list):
+        return list(runtime_rules)
+    template_id = str(template.get("template_id") or "").strip()
+    return get_rules_for_template(template_id, rules_by_template)
+
+
 VIDEO_INTERACTION_FIELD_NAMES = {
     "player_type",
     "position_fold",
@@ -3868,12 +3876,13 @@ def is_video_interaction_template(template: dict, rules_by_template: Optional[Di
     if "video interaction" in template_name:
         return True
 
-    template_id = str(template.get("template_id") or "").strip()
-    for rule in get_rules_for_template(template_id, rules_by_template):
+    for rule in get_rules_for_validation_template(template, rules_by_template):
         rule_scope = str(rule.get("rule_scope") or "").strip().lower()
         field_name = _normalize_template_name_key(rule.get("field_name") or "")
         expected_values = _normalize_template_name_key(rule.get("expected_values") or "")
         if rule_scope == "event" and "video_interaction" in f"{field_name} {expected_values}":
+            return True
+        if rule_scope == "execution" and field_name in VIDEO_INTERACTION_FIELD_NAMES:
             return True
     return False
 
@@ -3922,17 +3931,53 @@ def find_companion_templates(
     )
 
 
+def build_runtime_video_companion_template(
+    base_template: dict,
+    rules_by_template: Optional[Dict[str, List[dict]]] = None,
+) -> Optional[dict]:
+    if not is_article_detail_template(base_template, rules_by_template):
+        return None
+
+    template_rules_list = get_rules_for_validation_template(base_template, rules_by_template)
+    video_rules = [rule for rule in template_rules_list if is_video_related_rule(rule)]
+    if not video_rules:
+        return None
+
+    template_name = str(base_template.get("template_name") or "Unnamed template").strip()
+    companion_template = dict(base_template)
+    companion_template["template_id"] = f"{str(base_template.get('template_id') or '').strip()}__video_interaction"
+    if "video interaction" not in _normalize_template_name_key(template_name):
+        companion_template["template_name"] = f"{template_name} - video interaction"
+    else:
+        companion_template["template_name"] = template_name
+    companion_template["_runtime_rules"] = video_rules
+    companion_template["_runtime_companion"] = True
+    return companion_template
+
+
+def build_companion_validation_templates(
+    base_template: dict,
+    all_templates: List[dict],
+    rules_by_template: Optional[Dict[str, List[dict]]] = None,
+) -> List[dict]:
+    real_companions = find_companion_templates(base_template, all_templates, rules_by_template)
+    if real_companions:
+        return real_companions
+
+    runtime_companion = build_runtime_video_companion_template(base_template, rules_by_template)
+    return [runtime_companion] if runtime_companion else []
+
+
 def get_effective_template_rules(
     template: dict,
     all_templates: Optional[List[dict]] = None,
     rules_by_template: Optional[Dict[str, List[dict]]] = None,
 ) -> List[dict]:
-    template_id = str(template.get("template_id") or "").strip()
-    template_rules_list = get_rules_for_template(template_id, rules_by_template)
+    template_rules_list = get_rules_for_validation_template(template, rules_by_template)
     if not template_rules_list:
         return []
 
-    if is_article_detail_template(template, rules_by_template) and find_companion_templates(
+    if is_article_detail_template(template, rules_by_template) and build_companion_validation_templates(
         template,
         all_templates or [],
         rules_by_template,
@@ -3959,7 +4004,7 @@ def expand_templates_with_companions(
 
     for template in selected_templates or []:
         append_template(template)
-        for companion_template in find_companion_templates(template, all_templates, rules_by_template):
+        for companion_template in build_companion_validation_templates(template, all_templates, rules_by_template):
             append_template(companion_template)
 
     return expanded_templates
@@ -5878,7 +5923,7 @@ def build_domain_audit_plan_from_templates(
             sample_url, sample_error = choose_template_sample_url(template)
         append_plan_row(template, sample_url, sample_error, override_raw)
 
-        for companion_template in find_companion_templates(template, all_templates or [], rules_by_template):
+        for companion_template in build_companion_validation_templates(template, all_templates or [], rules_by_template):
             append_plan_row(
                 companion_template,
                 sample_url,
@@ -7265,7 +7310,7 @@ This capture is split into three layers:
                             active_templates,
                             template_rules_by_template,
                         )
-                        companion_validation_templates = find_companion_templates(
+                        companion_validation_templates = build_companion_validation_templates(
                             selected_template,
                             active_templates,
                             template_rules_by_template,
@@ -7423,8 +7468,8 @@ This capture is split into three layers:
                         )
                         for companion_template in companion_validation_templates:
                             companion_template_name = str(companion_template.get("template_name") or "Unnamed template")
-                            companion_rules = get_rules_for_template(
-                                str(companion_template.get("template_id") or "").strip(),
+                            companion_rules = get_rules_for_validation_template(
+                                companion_template,
                                 template_rules_by_template,
                             )
                             with st.container(border=True):
@@ -7720,7 +7765,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
             auto_included_templates = [
                 companion_template
                 for selected_template in selected_templates
-                for companion_template in find_companion_templates(
+                for companion_template in build_companion_validation_templates(
                     selected_template,
                     active_templates,
                     template_rules_by_template,
