@@ -2525,23 +2525,25 @@ def audit_single_url(
     except Exception:
         pass
 
+    # Keep a single post-load interaction budget so scroll/playback time does not stack
+    # on top of the configured wait.
+    interaction_start = time.time()
+
     # Scroll only when this audit path actually needs interaction-driven signals.
     try:
         if requires_scroll_capture or requires_video_playback:
-            scroll_before_taboola(driver)
-        scroll_points = (0, 25, 50, 75, 100) if (requires_scroll_capture or requires_video_playback) else (0, 100)
-        scroll_pause = 0.8 if (requires_scroll_capture or requires_video_playback) else 0.2
-        for p in scroll_points:
-            driver.execute_script(
-                "window.scrollTo(0, document.body.scrollHeight * arguments[0] / 100);",
-                p,
-            )
-            time.sleep(scroll_pause)
+            scroll_before_taboola(driver, scroll_pause=0.08, max_steps=4)
+            scroll_points = (0, 25, 50, 75, 100)
+            scroll_pause = 0.35
+            for p in scroll_points:
+                driver.execute_script(
+                    "window.scrollTo(0, document.body.scrollHeight * arguments[0] / 100);",
+                    p,
+                )
+                time.sleep(scroll_pause)
     except Exception:
         pass
 
-    # Keep the post-load wait as a fixed budget instead of stacking extra waits.
-    interaction_start = time.time()
     if requires_video_playback:
         try:
             video_started = trigger_video_playback(driver)
@@ -2552,9 +2554,9 @@ def audit_single_url(
                 seek_video_progress(driver, target_percent=26.0)
             except Exception:
                 pass
-            time.sleep(2.0)
+            time.sleep(0.8)
         else:
-            time.sleep(min(max(1, int(wait_seconds or 8)), 1.0))
+            time.sleep(0.4)
 
     remaining_wait = max(0.0, max(1, int(wait_seconds or 8)) - (time.time() - interaction_start))
     if remaining_wait:
