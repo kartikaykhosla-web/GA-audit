@@ -3837,6 +3837,32 @@ def get_rules_for_template(template_id: str, rules_by_template: Optional[Dict[st
     ]
 
 
+VIDEO_INTERACTION_FIELD_NAMES = {
+    "player_type",
+    "position_fold",
+    "section_name",
+    "video_orientation",
+    "video_percent",
+    "video_duration",
+    "video_title",
+    "scroll_percent",
+}
+
+
+def is_video_related_rule(rule: dict) -> bool:
+    rule_scope = str(rule.get("rule_scope") or "").strip().lower()
+    field_name = _normalize_template_name_key(rule.get("field_name") or "")
+    expected_values = _normalize_template_name_key(rule.get("expected_values") or "")
+
+    if rule_scope == "event" and "video_interaction" in f"{field_name} {expected_values}":
+        return True
+
+    if rule_scope == "execution" and field_name in VIDEO_INTERACTION_FIELD_NAMES:
+        return True
+
+    return False
+
+
 def is_video_interaction_template(template: dict, rules_by_template: Optional[Dict[str, List[dict]]] = None) -> bool:
     template_name = _normalize_template_name_key(template.get("template_name") or "")
     if "video interaction" in template_name:
@@ -3894,6 +3920,26 @@ def find_companion_templates(
         companion_templates,
         key=lambda template: str(template.get("template_name") or "").lower(),
     )
+
+
+def get_effective_template_rules(
+    template: dict,
+    all_templates: Optional[List[dict]] = None,
+    rules_by_template: Optional[Dict[str, List[dict]]] = None,
+) -> List[dict]:
+    template_id = str(template.get("template_id") or "").strip()
+    template_rules_list = get_rules_for_template(template_id, rules_by_template)
+    if not template_rules_list:
+        return []
+
+    if is_article_detail_template(template, rules_by_template) and find_companion_templates(
+        template,
+        all_templates or [],
+        rules_by_template,
+    ):
+        return [rule for rule in template_rules_list if not is_video_related_rule(rule)]
+
+    return template_rules_list
 
 
 def expand_templates_with_companions(
@@ -6026,11 +6072,11 @@ def build_domain_audit_report_row(
             "detail_payload": {},
         }
 
-    selected_template_rules = [
-        rule
-        for rule in template_rules
-        if str(rule.get("template_id") or "").strip() == str(template.get("template_id") or "").strip()
-    ]
+    selected_template_rules = get_effective_template_rules(
+        template,
+        active_templates,
+        template_rules_by_template,
+    )
     validation_summary = summarize_validation_failures(result, template, selected_template_rules)
     detail_payload = (
         build_domain_audit_detail_payload(result, selected_template_rules)
@@ -7214,8 +7260,9 @@ This capture is split into three layers:
                     selected_template_rules = []
                     companion_validation_templates = []
                     if selected_template:
-                        selected_template_rules = get_rules_for_template(
-                            str(selected_template.get("template_id") or "").strip(),
+                        selected_template_rules = get_effective_template_rules(
+                            selected_template,
+                            active_templates,
                             template_rules_by_template,
                         )
                         companion_validation_templates = find_companion_templates(
