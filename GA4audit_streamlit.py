@@ -7702,6 +7702,7 @@ This capture is split into three layers:
         disabled=not str(url_text or "").strip() or selected_template is None,
     ):
         original_url, normalized_url, input_error = normalize_single_url(url_text)
+        companion_audit_results: Dict[str, Dict[str, Any]] = {}
 
         if selected_template is None:
             st.error("Please select a template before running the audit.")
@@ -7719,12 +7720,20 @@ This capture is split into three layers:
             results = []
             progress = st.progress(0)
             status_box = st.empty()
-            selected_template_full_rules = get_rules_for_validation_template(
+            selected_template_rules = get_effective_template_rules(
+                selected_template,
+                active_templates,
+                template_rules_by_template,
+            )
+            runtime_companion_template = build_runtime_video_companion_template(
                 selected_template,
                 template_rules_by_template,
             )
+            companion_validation_templates = [runtime_companion_template] if runtime_companion_template else []
+            total_audit_passes = 1 + len(companion_validation_templates)
+            completed_audit_passes = 0
 
-            status_box.write(f"Auditing {normalized_url} (1/1)")
+            status_box.write(f"Auditing {normalized_url} (1/{total_audit_passes})")
             try:
                 # Streamlit Cloud is much more stable on the lighter Selenium path.
                 driver = create_driver(headless=True, capture_network=False)
@@ -7734,11 +7743,40 @@ This capture is split into three layers:
                             driver,
                             normalized_url,
                             wait_seconds,
-                            template_rules=selected_template_full_rules,
+                            template_rules=selected_template_rules,
                         )
                     )
                 finally:
                     driver.quit()
+                completed_audit_passes += 1
+                progress.progress(completed_audit_passes / total_audit_passes)
+
+                for companion_index, companion_template in enumerate(companion_validation_templates, start=2):
+                    companion_template_name = str(companion_template.get("template_name") or "Unnamed template")
+                    companion_rules = get_rules_for_validation_template(
+                        companion_template,
+                        template_rules_by_template,
+                    )
+                    if not companion_rules:
+                        continue
+                    status_box.write(
+                        f"Auditing {normalized_url} ({companion_index}/{total_audit_passes}) - {companion_template_name}"
+                    )
+                    companion_driver = create_driver(headless=True, capture_network=False)
+                    try:
+                        companion_result = audit_single_url(
+                            companion_driver,
+                            normalized_url,
+                            max(4, min(wait_seconds, 6)),
+                            template_rules=companion_rules,
+                        )
+                        companion_template_id = str(companion_template.get("template_id") or "").strip()
+                        if companion_template_id:
+                            companion_audit_results[companion_template_id] = companion_result
+                    finally:
+                        companion_driver.quit()
+                    completed_audit_passes += 1
+                    progress.progress(completed_audit_passes / total_audit_passes)
             except Exception as exc:
                 st.error(f"Error auditing {normalized_url}")
                 st.exception(exc)
@@ -7795,19 +7833,6 @@ This capture is split into three layers:
                 if len(results) == 1:
                     result = results[0]
                     audit_summary = build_audit_focus_summary(result)
-                    selected_template_rules = []
-                    companion_validation_templates = []
-                    if selected_template:
-                        selected_template_rules = get_effective_template_rules(
-                            selected_template,
-                            active_templates,
-                            template_rules_by_template,
-                        )
-                        companion_validation_templates = build_companion_validation_templates(
-                            selected_template,
-                            active_templates,
-                            template_rules_by_template,
-                        )
 
                     log_written = False
                     log_error = ""
@@ -7965,6 +7990,10 @@ This capture is split into three layers:
                                 companion_template,
                                 template_rules_by_template,
                             )
+                            companion_template_id = str(companion_template.get("template_id") or "").strip()
+                            companion_result = companion_audit_results.get(companion_template_id)
+                            companion_snapshot = build_datalayer_snapshot_export(companion_result) if companion_result else snapshot
+                            companion_audit_summary = build_audit_focus_summary(companion_result) if companion_result else audit_summary
                             with st.container(border=True):
                                 st.markdown(f"#### {companion_template_name}")
                                 if not companion_rules:
@@ -7972,11 +8001,11 @@ This capture is split into three layers:
                                     continue
 
                                 companion_execution_df, _ = build_execution_validation_rows(
-                                    snapshot,
+                                    companion_snapshot,
                                     companion_rules,
                                 )
                                 companion_event_df = build_event_validation_rows(
-                                    audit_summary["event_rows"],
+                                    companion_audit_summary["event_rows"],
                                     companion_rules,
                                 )
 
