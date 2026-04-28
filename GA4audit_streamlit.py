@@ -3824,6 +3824,101 @@ def _normalize_template_name_key(value: str) -> str:
     return str(value or "").strip().lower()
 
 
+def get_rules_for_template(template_id: str, rules_by_template: Optional[Dict[str, List[dict]]] = None) -> List[dict]:
+    template_id_text = str(template_id or "").strip()
+    if not template_id_text:
+        return []
+    if rules_by_template is not None:
+        return list(rules_by_template.get(template_id_text, []))
+    return [
+        rule
+        for rule in template_rules
+        if str(rule.get("template_id") or "").strip() == template_id_text
+    ]
+
+
+def is_video_interaction_template(template: dict, rules_by_template: Optional[Dict[str, List[dict]]] = None) -> bool:
+    template_name = _normalize_template_name_key(template.get("template_name") or "")
+    if "video interaction" in template_name:
+        return True
+
+    template_id = str(template.get("template_id") or "").strip()
+    for rule in get_rules_for_template(template_id, rules_by_template):
+        rule_scope = str(rule.get("rule_scope") or "").strip().lower()
+        field_name = _normalize_template_name_key(rule.get("field_name") or "")
+        expected_values = _normalize_template_name_key(rule.get("expected_values") or "")
+        if rule_scope == "event" and "video_interaction" in f"{field_name} {expected_values}":
+            return True
+    return False
+
+
+def is_article_detail_template(template: dict, rules_by_template: Optional[Dict[str, List[dict]]] = None) -> bool:
+    template_name = _normalize_template_name_key(template.get("template_name") or "")
+    return "article detail" in template_name and not is_video_interaction_template(template, rules_by_template)
+
+
+def find_companion_templates(
+    base_template: dict,
+    all_templates: List[dict],
+    rules_by_template: Optional[Dict[str, List[dict]]] = None,
+) -> List[dict]:
+    if not is_article_detail_template(base_template, rules_by_template):
+        return []
+
+    base_template_id = str(base_template.get("template_id") or "").strip()
+    base_domain = get_template_domain_label(base_template)
+    base_measurement_id = str(base_template.get("measurement_id") or "").strip()
+    base_container_id = str(base_template.get("container_id") or "").strip()
+
+    companion_templates = []
+    for candidate in all_templates or []:
+        if not candidate or not candidate.get("active"):
+            continue
+        candidate_id = str(candidate.get("template_id") or "").strip()
+        if not candidate_id or candidate_id == base_template_id:
+            continue
+        if get_template_domain_label(candidate) != base_domain:
+            continue
+        if not is_video_interaction_template(candidate, rules_by_template):
+            continue
+
+        candidate_measurement_id = str(candidate.get("measurement_id") or "").strip()
+        candidate_container_id = str(candidate.get("container_id") or "").strip()
+        measurement_matches = not base_measurement_id or not candidate_measurement_id or base_measurement_id == candidate_measurement_id
+        container_matches = not base_container_id or not candidate_container_id or base_container_id == candidate_container_id
+        if not (measurement_matches and container_matches):
+            continue
+        companion_templates.append(candidate)
+
+    return sorted(
+        companion_templates,
+        key=lambda template: str(template.get("template_name") or "").lower(),
+    )
+
+
+def expand_templates_with_companions(
+    selected_templates: List[dict],
+    all_templates: List[dict],
+    rules_by_template: Optional[Dict[str, List[dict]]] = None,
+) -> List[dict]:
+    expanded_templates = []
+    seen_template_ids = set()
+
+    def append_template(template: dict):
+        template_id = str(template.get("template_id") or "").strip()
+        if not template_id or template_id in seen_template_ids:
+            return
+        seen_template_ids.add(template_id)
+        expanded_templates.append(template)
+
+    for template in selected_templates or []:
+        append_template(template)
+        for companion_template in find_companion_templates(template, all_templates, rules_by_template):
+            append_template(companion_template)
+
+    return expanded_templates
+
+
 def _normalize_rule_signature(rule_scope: str, field_name: str, rule_type: str, expected_values: str) -> Tuple[str, str, str, str]:
     return (
         str(rule_scope or "").strip().lower(),
@@ -5691,9 +5786,40 @@ def build_domain_audit_plan(domain_templates: List[dict], limit: int = DOMAIN_AU
     return plan_rows
 
 
-def build_domain_audit_plan_from_templates(domain_templates: List[dict], override_urls: Optional[Dict[str, str]] = None) -> List[dict]:
+def build_domain_audit_plan_from_templates(
+    domain_templates: List[dict],
+    override_urls: Optional[Dict[str, str]] = None,
+    all_templates: Optional[List[dict]] = None,
+    rules_by_template: Optional[Dict[str, List[dict]]] = None,
+) -> List[dict]:
     plan_rows = []
     override_urls = override_urls or {}
+    seen_template_ids = set()
+
+    def append_plan_row(
+        plan_template: dict,
+        sample_url: str,
+        sample_error: str,
+        override_raw: str,
+        parent_template_id: str = "",
+    ):
+        template_id = str(plan_template.get("template_id") or "").strip()
+        if not template_id or template_id in seen_template_ids:
+            return
+        seen_template_ids.add(template_id)
+        plan_rows.append(
+            {
+                "template": plan_template,
+                "template_id": template_id,
+                "template_name": str(plan_template.get("template_name") or "Unnamed template"),
+                "sample_url": sample_url,
+                "sample_error": sample_error,
+                "override_url": override_raw,
+                "parent_template_id": parent_template_id,
+                "is_companion_template": bool(parent_template_id),
+            }
+        )
+
     for template in sorted(
         domain_templates or [],
         key=lambda item: str(item.get("template_name") or "").lower(),
@@ -5704,16 +5830,16 @@ def build_domain_audit_plan_from_templates(domain_templates: List[dict], overrid
             _, sample_url, sample_error = normalize_single_url(override_raw)
         else:
             sample_url, sample_error = choose_template_sample_url(template)
-        plan_rows.append(
-            {
-                "template": template,
-                "template_id": template_id,
-                "template_name": str(template.get("template_name") or "Unnamed template"),
-                "sample_url": sample_url,
-                "sample_error": sample_error,
-                "override_url": override_raw,
-            }
-        )
+        append_plan_row(template, sample_url, sample_error, override_raw)
+
+        for companion_template in find_companion_templates(template, all_templates or [], rules_by_template):
+            append_plan_row(
+                companion_template,
+                sample_url,
+                sample_error,
+                override_raw,
+                parent_template_id=template_id,
+            )
     return plan_rows
 
 
@@ -7086,13 +7212,17 @@ This capture is split into three layers:
                     result = results[0]
                     audit_summary = build_audit_focus_summary(result)
                     selected_template_rules = []
+                    companion_validation_templates = []
                     if selected_template:
-                        selected_template_rules = [
-                            rule
-                            for rule in template_rules
-                            if str(rule.get("template_id") or "").strip()
-                            == str(selected_template.get("template_id") or "").strip()
-                        ]
+                        selected_template_rules = get_rules_for_template(
+                            str(selected_template.get("template_id") or "").strip(),
+                            template_rules_by_template,
+                        )
+                        companion_validation_templates = find_companion_templates(
+                            selected_template,
+                            active_templates,
+                            template_rules_by_template,
+                        )
 
                     log_written = False
                     log_error = ""
@@ -7141,6 +7271,14 @@ This capture is split into three layers:
                         )
                         if not selected_template_rules:
                             st.info("This template has no rules yet. Add execution-field or event rules in Template Manager.")
+                        elif companion_validation_templates:
+                            companion_names = ", ".join(
+                                str(template.get("template_name") or "Unnamed template")
+                                for template in companion_validation_templates
+                            )
+                            st.caption(
+                                f"Companion validation auto-included for this audit: **{companion_names}**"
+                            )
 
                     st.markdown("### DataLayer Snapshot")
                     st.caption(
@@ -7230,6 +7368,82 @@ This capture is split into three layers:
                             )
                         else:
                             st.dataframe(event_display_df, use_container_width=True, hide_index=True)
+
+                    if companion_validation_templates:
+                        st.markdown("### Additional Template Validations")
+                        st.caption(
+                            "Base article detail checks stay separate from companion validations like video interaction."
+                        )
+                        for companion_template in companion_validation_templates:
+                            companion_template_name = str(companion_template.get("template_name") or "Unnamed template")
+                            companion_rules = get_rules_for_template(
+                                str(companion_template.get("template_id") or "").strip(),
+                                template_rules_by_template,
+                            )
+                            with st.container(border=True):
+                                st.markdown(f"#### {companion_template_name}")
+                                if not companion_rules:
+                                    st.info("This companion template has no rules yet.")
+                                    continue
+
+                                companion_execution_df, _ = build_execution_validation_rows(
+                                    snapshot,
+                                    companion_rules,
+                                )
+                                companion_event_df = build_event_validation_rows(
+                                    audit_summary["event_rows"],
+                                    companion_rules,
+                                )
+
+                                companion_col1, companion_col2 = st.columns(2)
+                                with companion_col1:
+                                    st.markdown("**Execution checks**")
+                                    if companion_execution_df.empty:
+                                        st.info("No execution checks are configured for this companion template.")
+                                    elif "Validation" in companion_execution_df.columns:
+                                        st.dataframe(
+                                            style_validation_table(companion_execution_df, "Validation"),
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
+                                    else:
+                                        st.dataframe(
+                                            companion_execution_df,
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
+                                with companion_col2:
+                                    st.markdown("**Event checks**")
+                                    if companion_event_df.empty:
+                                        st.info("No event checks are configured for this companion template.")
+                                    else:
+                                        companion_event_columns = ["event_name", "status", "times_fired", "capture_layer"]
+                                        if "expected" in companion_event_df.columns:
+                                            companion_event_columns.append("expected")
+                                        if "validation" in companion_event_df.columns:
+                                            companion_event_columns.append("validation")
+                                        companion_event_display_df = companion_event_df[companion_event_columns].rename(
+                                            columns={
+                                                "event_name": "Event",
+                                                "status": "Status",
+                                                "times_fired": "Times Fired",
+                                                "capture_layer": "Seen In",
+                                                "expected": "Expected",
+                                                "validation": "Validation",
+                                            }
+                                        )
+                                        if "Validation" in companion_event_display_df.columns:
+                                            st.dataframe(
+                                                style_validation_table(companion_event_display_df, "Validation"),
+                                                use_container_width=True,
+                                                hide_index=True,
+                                            )
+                                        else:
+                                            st.dataframe(
+                                                companion_event_display_df,
+                                                use_container_width=True,
+                                                hide_index=True,
+                                            )
 
                     st.markdown("### Comscore")
                     if not audit_summary["comscore_present"]:
@@ -7456,9 +7670,39 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     if is_selected:
                         selected_templates.append(template)
 
-            st.caption("If an override URL is filled for a template, that URL will be audited for this run. Otherwise the saved reference URL/pattern is used.")
+            auto_included_templates = [
+                companion_template
+                for selected_template in selected_templates
+                for companion_template in find_companion_templates(
+                    selected_template,
+                    active_templates,
+                    template_rules_by_template,
+                )
+            ]
+            auto_included_templates = sorted(
+                {
+                    str(template.get("template_id") or "").strip(): template
+                    for template in auto_included_templates
+                }.values(),
+                key=lambda template: str(template.get("template_name") or "").lower(),
+            )
 
-            audit_plan = build_domain_audit_plan_from_templates(selected_templates, override_urls=override_urls)
+            st.caption("If an override URL is filled for a template, that URL will be audited for this run. Otherwise the saved reference URL/pattern is used.")
+            if auto_included_templates:
+                auto_included_names = ", ".join(
+                    str(template.get("template_name") or "Unnamed template")
+                    for template in auto_included_templates
+                )
+                st.caption(
+                    f"Companion templates auto-included for this run: **{auto_included_names}**"
+                )
+
+            audit_plan = build_domain_audit_plan_from_templates(
+                selected_templates,
+                override_urls=override_urls,
+                all_templates=active_templates,
+                rules_by_template=template_rules_by_template,
+            )
             st.caption(
                 f"{len(audit_plan)} template URL(s) selected for {selected_domain}. "
                 "GitHub Actions will process them sequentially."
@@ -7468,6 +7712,9 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                 plan_preview_df = pd.DataFrame(
                     [
                         {
+                            "Validation Path": "Companion"
+                            if row.get("is_companion_template")
+                            else "Primary",
                             "Template": row["template_name"],
                             "Sample URL": row["sample_url"] or "Not available",
                             "Override URL": row.get("override_url") or "",
