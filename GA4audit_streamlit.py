@@ -2227,6 +2227,37 @@ def seek_video_progress(driver, target_percent: float = 26.0) -> bool:
     return updated
 
 
+def single_audit_requires_video_playback(rules: Optional[List[dict]]) -> bool:
+    video_fields = {
+        normalize_dimension_name(value) for value in VIDEO_INTERACTION_FIELD_NAMES
+    }
+    for rule in rules or []:
+        rule_scope = str(rule.get("rule_scope") or "").strip().lower()
+        field_name = str(rule.get("field_name") or "").strip()
+        if not field_name:
+            continue
+        if rule_scope == "event":
+            if canonical_event_name(field_name) == "videointeraction":
+                return True
+        elif rule_scope == "execution":
+            if normalize_dimension_name(field_name) in video_fields:
+                return True
+    return False
+
+
+def single_audit_requires_scroll_capture(rules: Optional[List[dict]]) -> bool:
+    for rule in rules or []:
+        rule_scope = str(rule.get("rule_scope") or "").strip().lower()
+        field_name = str(rule.get("field_name") or "").strip()
+        if not field_name:
+            continue
+        if rule_scope == "event" and canonical_event_name(field_name) == "pagescroll":
+            return True
+        if rule_scope == "execution" and normalize_dimension_name(field_name) == "scrollpercent":
+            return True
+    return False
+
+
 # -------------------------
 # Flattening & scorecard
 # -------------------------
@@ -2312,10 +2343,18 @@ def _format_hits_sample(hits: List[Dict[str, Any]]) -> str:
 # Core auditor
 # -------------------------
 
-def audit_single_url(driver, url: str, wait_seconds: int = 8, compact: bool = False) -> Dict[str, Any]:
+def audit_single_url(
+    driver,
+    url: str,
+    wait_seconds: int = 8,
+    compact: bool = False,
+    template_rules: Optional[List[dict]] = None,
+) -> Dict[str, Any]:
     print(f"\n🔍 Auditing: {url}")
 
     audit_start = time.time()
+    requires_video_playback = single_audit_requires_video_playback(template_rules)
+    requires_scroll_capture = single_audit_requires_scroll_capture(template_rules)
 
     result: Dict[str, Any] = {
         "page_url": url,
@@ -2421,29 +2460,39 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8, compact: bool = Fa
     except Exception:
         pass
 
-    # Scroll the page (Taboola-safe) then extra scrolls to trigger scroll-depth
+    # Scroll the page (Taboola-safe) then extra scrolls to trigger scroll-depth when needed.
     scroll_before_taboola(driver)
     try:
-        for p in range(0, 71, 10):
+        scroll_points = (0, 25, 50, 75, 100) if (requires_scroll_capture or requires_video_playback) else (0, 100)
+        scroll_pause = 0.8 if (requires_scroll_capture or requires_video_playback) else 0.2
+        for p in scroll_points:
             driver.execute_script(
                 "window.scrollTo(0, document.body.scrollHeight * arguments[0] / 100);",
                 p,
             )
-            time.sleep(0.6)
+            time.sleep(scroll_pause)
     except Exception:
         pass
 
-    # Try to trigger embedded video playback so video_interaction can be captured on article pages.
-    try:
-        video_started = trigger_video_playback(driver)
+    # Keep the post-load wait as a fixed budget instead of stacking extra waits.
+    interaction_start = time.time()
+    if requires_video_playback:
+        try:
+            video_started = trigger_video_playback(driver)
+        except Exception:
+            video_started = False
         if video_started:
-            seek_video_progress(driver, target_percent=26.0)
+            try:
+                seek_video_progress(driver, target_percent=26.0)
+            except Exception:
+                pass
             time.sleep(2.0)
-    except Exception:
-        pass
+        else:
+            time.sleep(min(max(1, int(wait_seconds or 8)), 1.0))
 
-    # Wait a bit more for GA4/dataLayer to finish firing
-    time.sleep(wait_seconds)
+    remaining_wait = max(0.0, max(1, int(wait_seconds or 8)) - (time.time() - interaction_start))
+    if remaining_wait:
+        time.sleep(remaining_wait)
 
     # Title
     try:
@@ -4200,6 +4249,11 @@ def find_companion_templates(
         if not candidate_id or candidate_id == base_template_id:
             continue
         if get_template_domain_label(candidate) != base_domain:
+            continue
+        candidate_name = _normalize_template_name_key(candidate.get("template_name") or "")
+        if not candidate.get("_runtime_companion") and "video interaction" not in candidate_name:
+            continue
+        if not candidate.get("_runtime_companion") and "article detail" not in candidate_name:
             continue
         if not is_video_interaction_template(candidate, rules_by_template):
             continue
@@ -7548,12 +7602,23 @@ This capture is split into three layers:
             results = []
             progress = st.progress(0)
             status_box = st.empty()
+            selected_template_full_rules = get_rules_for_validation_template(
+                selected_template,
+                template_rules_by_template,
+            )
 
             status_box.write(f"Auditing {normalized_url} (1/1)")
             try:
                 driver = create_driver(headless=True)
                 try:
-                    results.append(audit_single_url(driver, normalized_url, wait_seconds))
+                    results.append(
+                        audit_single_url(
+                            driver,
+                            normalized_url,
+                            wait_seconds,
+                            template_rules=selected_template_full_rules,
+                        )
+                    )
                 finally:
                     driver.quit()
             except Exception as exc:
