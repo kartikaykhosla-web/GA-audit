@@ -2447,12 +2447,14 @@ def audit_single_url(
     wait_seconds: int = 8,
     compact: bool = False,
     template_rules: Optional[List[dict]] = None,
+    force_video_playback: bool = False,
+    force_scroll_capture: bool = False,
 ) -> Dict[str, Any]:
     print(f"\n🔍 Auditing: {url}")
 
     audit_start = time.time()
-    requires_video_playback = single_audit_requires_video_playback(template_rules)
-    requires_scroll_capture = single_audit_requires_scroll_capture(template_rules)
+    requires_video_playback = force_video_playback or single_audit_requires_video_playback(template_rules)
+    requires_scroll_capture = force_scroll_capture or single_audit_requires_scroll_capture(template_rules)
 
     result: Dict[str, Any] = {
         "page_url": url,
@@ -7771,7 +7773,18 @@ This capture is split into three layers:
                 template_rules_by_template,
             )
             companion_validation_templates = [runtime_companion_template] if runtime_companion_template else []
-            total_audit_passes = 1 + len(companion_validation_templates)
+            companion_rules_map = {
+                str(template.get("template_id") or "").strip(): get_rules_for_validation_template(
+                    template,
+                    template_rules_by_template,
+                )
+                for template in companion_validation_templates
+            }
+            combined_interaction_rules: List[dict] = list(selected_template_rules)
+            for companion_rules in companion_rules_map.values():
+                if companion_rules:
+                    combined_interaction_rules.extend(companion_rules)
+            total_audit_passes = 1
             completed_audit_passes = 0
 
             status_box.write(f"Auditing {normalized_url} (1/{total_audit_passes})")
@@ -7779,45 +7792,23 @@ This capture is split into three layers:
                 # Streamlit Cloud is much more stable on the lighter Selenium path.
                 driver = create_driver(headless=True, capture_network=False)
                 try:
-                    results.append(
-                        audit_single_url(
-                            driver,
-                            normalized_url,
-                            wait_seconds,
-                            template_rules=selected_template_rules,
-                        )
+                    primary_result = audit_single_url(
+                        driver,
+                        normalized_url,
+                        wait_seconds,
+                        template_rules=selected_template_rules,
+                        force_video_playback=single_audit_requires_video_playback(combined_interaction_rules),
+                        force_scroll_capture=single_audit_requires_scroll_capture(combined_interaction_rules),
                     )
+                    results.append(primary_result)
                 finally:
                     driver.quit()
                 completed_audit_passes += 1
                 progress.progress(completed_audit_passes / total_audit_passes)
-
-                for companion_index, companion_template in enumerate(companion_validation_templates, start=2):
-                    companion_template_name = str(companion_template.get("template_name") or "Unnamed template")
-                    companion_rules = get_rules_for_validation_template(
-                        companion_template,
-                        template_rules_by_template,
-                    )
-                    if not companion_rules:
-                        continue
-                    status_box.write(
-                        f"Auditing {normalized_url} ({companion_index}/{total_audit_passes}) - {companion_template_name}"
-                    )
-                    companion_driver = create_driver(headless=True, capture_network=False)
-                    try:
-                        companion_result = audit_single_url(
-                            companion_driver,
-                            normalized_url,
-                            max(4, min(wait_seconds, 6)),
-                            template_rules=companion_rules,
-                        )
-                        companion_template_id = str(companion_template.get("template_id") or "").strip()
-                        if companion_template_id:
-                            companion_audit_results[companion_template_id] = companion_result
-                    finally:
-                        companion_driver.quit()
-                    completed_audit_passes += 1
-                    progress.progress(completed_audit_passes / total_audit_passes)
+                for companion_template in companion_validation_templates:
+                    companion_template_id = str(companion_template.get("template_id") or "").strip()
+                    if companion_template_id:
+                        companion_audit_results[companion_template_id] = primary_result
             except Exception as exc:
                 st.error(f"Error auditing {normalized_url}")
                 st.exception(exc)
