@@ -9,6 +9,7 @@ import base64
 import shutil
 import subprocess
 import uuid
+import functools
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Tuple, Optional, Set
 from urllib.parse import urlparse, parse_qs, urlunparse, unquote_plus
@@ -35,6 +36,34 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 
 # Shared GA4 mapping helpers
+
+
+@functools.lru_cache(maxsize=1)
+def _resolve_chrome_paths() -> Tuple[str, str]:
+    """Resolve browser and driver paths once per app process."""
+    binary_candidates = [
+        os.environ.get("CHROME_BINARY"),
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    ]
+    selected_binary = next(
+        (candidate for candidate in binary_candidates if candidate and os.path.exists(candidate)),
+        "",
+    )
+
+    driver_candidates = [
+        os.environ.get("CHROMEDRIVER_PATH"),
+        "/usr/bin/chromedriver",
+        shutil.which("chromedriver"),
+    ]
+    selected_driver = next(
+        (candidate for candidate in driver_candidates if candidate and os.path.exists(candidate)),
+        "",
+    )
+
+    return selected_binary, selected_driver
 
 def safe_json(obj):
     try:
@@ -417,7 +446,7 @@ def create_driver(
     performance_logs: bool = True,
     capture_network: bool = True,
 ):
-    selected_binary = ""
+    selected_binary, chromedriver_path = _resolve_chrome_paths()
 
     def _build_chrome_options(safe_mode: bool = False):
         chrome_options = Options()
@@ -433,7 +462,6 @@ def create_driver(
             "--disable-gpu",
             "--disable-quic",
             "--disable-extensions",
-            "--disable-background-networking",
             "--autoplay-policy=no-user-gesture-required",
             "--disable-default-apps",
             "--disable-sync",
@@ -456,22 +484,7 @@ def create_driver(
             chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
         return chrome_options
 
-    chrome_binary = os.environ.get("CHROME_BINARY")
-    binary_candidates = [
-        chrome_binary,
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/usr/bin/google-chrome",
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    ]
-    browser_cmd = ""
-    for candidate in binary_candidates:
-        if candidate and os.path.exists(candidate):
-            selected_binary = candidate
-            browser_cmd = candidate
-            break
-    if not browser_cmd:
-        browser_cmd = chrome_binary or ""
+    browser_cmd = selected_binary or os.environ.get("CHROME_BINARY") or ""
 
     def _major_version(text: str) -> str:
         match = re.search(r"(\d+)\.", text or "")
@@ -492,38 +505,6 @@ def create_driver(
         except Exception:
             return ""
 
-    browser_version = _read_version(browser_cmd)
-    browser_major = _major_version(browser_version)
-
-    def _locate_cached_chromedriver(target_major: str) -> str:
-        cache_root = os.path.expanduser("~/.cache/selenium/chromedriver")
-        candidates = []
-        for path in glob.glob(os.path.join(cache_root, "**", "chromedriver"), recursive=True):
-            version_text = _read_version(path)
-            major = _major_version(version_text)
-            score = 0
-            if target_major and major == target_major:
-                score = 2
-            elif not target_major:
-                score = 1
-            else:
-                continue
-            try:
-                mtime = os.path.getmtime(path)
-            except OSError:
-                mtime = 0
-            candidates.append((score, mtime, path))
-        if not candidates:
-            return ""
-        candidates.sort(reverse=True)
-        return candidates[0][2]
-
-    chromedriver_path = os.environ.get("CHROMEDRIVER_PATH") or _locate_cached_chromedriver(browser_major)
-    if not chromedriver_path:
-        for candidate in ("/usr/bin/chromedriver", shutil.which("chromedriver")):
-            if candidate and os.path.exists(candidate):
-                chromedriver_path = candidate
-                break
     service = Service(executable_path=chromedriver_path) if chromedriver_path else None
     seleniumwire_options = {
         "request_storage": "memory",
@@ -561,7 +542,7 @@ def create_driver(
         except Exception:
             pass
         try:
-            driver.set_page_load_timeout(15)
+            driver.set_page_load_timeout(25)
         except Exception:
             pass
         return driver
@@ -576,6 +557,7 @@ def create_driver(
         return _launch_driver(_build_chrome_options(safe_mode=True))
     except Exception as exc:
         startup_errors.append(f"Fallback launch failed: {exc}")
+        browser_version = _read_version(browser_cmd)
         driver_version = _read_version(chromedriver_path or shutil.which("chromedriver") or "")
         resolved_driver = chromedriver_path or shutil.which("chromedriver")
 
@@ -4370,6 +4352,8 @@ def is_video_interaction_template(template: dict, rules_by_template: Optional[Di
         field_name = _normalize_template_name_key(rule.get("field_name") or "")
         expected_values = _normalize_template_name_key(rule.get("expected_values") or "")
         if rule_scope == "event" and "video_interaction" in f"{field_name} {expected_values}":
+            return True
+        if rule_scope == "execution" and field_name in VIDEO_INTERACTION_FIELD_NAMES:
             return True
     return False
 
