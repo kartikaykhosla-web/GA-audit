@@ -418,6 +418,7 @@ def create_driver(
     capture_network: bool = True,
 ):
     chrome_options = Options()
+    chrome_options.page_load_strategy = "eager"
     if headless:
         chrome_options.add_argument("--headless=new")
 
@@ -433,6 +434,13 @@ def create_driver(
     chrome_options.add_argument("--metrics-recording-only")
     chrome_options.add_argument("--no-first-run")
     chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_experimental_option(
+        "prefs",
+        {
+            "profile.managed_default_content_settings.images": 2,
+            "profile.default_content_setting_values.notifications": 2,
+        },
+    )
 
     # Anti-bot / more human-like
     chrome_options.add_argument("--disable-blink-features")
@@ -555,6 +563,10 @@ def create_driver(
         try:
             driver.execute_cdp_cmd("Network.enable", {})
             driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
+        except Exception:
+            pass
+        try:
+            driver.set_page_load_timeout(15)
         except Exception:
             pass
         return driver
@@ -2552,7 +2564,7 @@ def audit_single_url(
 
     # HTTP hint
     try:
-        resp = requests.get(url, timeout=2)
+        resp = requests.get(url, timeout=1)
         result["http_status_hint"] = resp.status_code
     except Exception as e:
         result["http_status_hint"] = f"Error: {e}"
