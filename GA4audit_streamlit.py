@@ -417,11 +417,15 @@ def create_driver(
     performance_logs: bool = True,
     capture_network: bool = True,
 ):
+    selected_binary = ""
+
     def _build_chrome_options(safe_mode: bool = False):
         chrome_options = Options()
         chrome_options.page_load_strategy = "eager"
         if headless:
             chrome_options.add_argument("--headless=new")
+        if selected_binary:
+            chrome_options.binary_location = selected_binary
 
         base_args = [
             "--no-sandbox",
@@ -490,7 +494,7 @@ def create_driver(
     browser_cmd = ""
     for candidate in binary_candidates:
         if candidate and os.path.exists(candidate):
-            chrome_options.binary_location = candidate
+            selected_binary = candidate
             browser_cmd = candidate
             break
     if not browser_cmd:
