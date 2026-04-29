@@ -2356,6 +2356,46 @@ def single_audit_requires_scroll_capture(rules: Optional[List[dict]]) -> bool:
     return False
 
 
+def _single_audit_observed_event_names(driver) -> set[str]:
+    event_names: set[str] = set()
+    preload_state = extract_preload_state(driver)
+    for event in normalize_gtag_calls(preload_state.get("gtagCalls", []) or []):
+        event_name = canonical_event_name(event.get("event_name"))
+        if event_name:
+            event_names.add(event_name)
+    _, transport_events = normalize_transport_hits(preload_state)
+    for event in transport_events:
+        event_name = canonical_event_name(event.get("event_name"))
+        if event_name:
+            event_names.add(event_name)
+    return event_names
+
+
+def single_audit_signals_ready(
+    driver,
+    requires_scroll_capture: bool,
+    requires_video_playback: bool,
+) -> bool:
+    dl_list, _ = extract_datalayer(driver)
+    observed_event_names = _single_audit_observed_event_names(driver)
+
+    pageview_ready = bool(find_pageview_event(dl_list)) or "pageview" in observed_event_names
+    if not pageview_ready:
+        return False
+
+    if requires_scroll_capture:
+        scroll_ready = "pagescroll" in observed_event_names or "scroll" in observed_event_names
+        if not scroll_ready:
+            return False
+
+    if requires_video_playback:
+        video_ready = "videointeraction" in observed_event_names
+        if not video_ready:
+            return False
+
+    return True
+
+
 # -------------------------
 # Flattening & scorecard
 # -------------------------
@@ -2512,7 +2552,7 @@ def audit_single_url(
 
     # HTTP hint
     try:
-        resp = requests.get(url, timeout=4)
+        resp = requests.get(url, timeout=2)
         result["http_status_hint"] = resp.status_code
     except Exception as e:
         result["http_status_hint"] = f"Error: {e}"
@@ -2595,7 +2635,11 @@ def audit_single_url(
 
     remaining_wait = max(0.0, max(1, int(wait_seconds or 8)) - (time.time() - interaction_start))
     if remaining_wait:
-        time.sleep(remaining_wait)
+        deadline = time.time() + remaining_wait
+        while time.time() < deadline:
+            if single_audit_signals_ready(driver, requires_scroll_capture, requires_video_playback):
+                break
+            time.sleep(0.25)
 
     # Title
     try:
