@@ -2151,7 +2151,7 @@ def _click_video_text_targets_in_current_context(driver) -> bool:
                 if not element.is_displayed():
                     continue
                 if _click_element(driver, element):
-                    time.sleep(0.4)
+                    time.sleep(0.12)
                     return True
             except Exception:
                 continue
@@ -2169,7 +2169,7 @@ def _click_article_hero_video_in_current_context(driver) -> bool:
                 if not element.is_displayed():
                     continue
                 if _click_element(driver, element):
-                    time.sleep(0.5)
+                    time.sleep(0.15)
                     return True
             except Exception:
                 continue
@@ -2180,22 +2180,22 @@ def _attempt_video_start_in_current_context(driver) -> bool:
     attempted = False
     if _click_article_hero_video_in_current_context(driver):
         attempted = True
-        time.sleep(0.6)
+        time.sleep(0.15)
     if _play_visible_videos_in_current_context(driver):
         attempted = True
-        time.sleep(0.25)
+        time.sleep(0.05)
     if _click_video_controls_in_current_context(driver):
         attempted = True
-        time.sleep(0.35)
+        time.sleep(0.08)
     if _click_video_text_targets_in_current_context(driver):
         attempted = True
-        time.sleep(0.35)
+        time.sleep(0.08)
     if _click_video_controls_in_current_context(driver):
         attempted = True
-        time.sleep(0.35)
+        time.sleep(0.08)
     if _play_visible_videos_in_current_context(driver):
         attempted = True
-        time.sleep(0.25)
+        time.sleep(0.05)
     return attempted
 
 
@@ -2309,7 +2309,7 @@ def trigger_video_playback(driver) -> bool:
         return False
 
     # Try the hero media near the top of the article before we scroll past it.
-    for percent in (0, 4, 10, 20, 35):
+    for percent in (0, 8, 18):
         try:
             driver.execute_script(
                 """
@@ -2321,7 +2321,7 @@ def trigger_video_playback(driver) -> bool:
                 """,
                 percent,
             )
-            time.sleep(0.25)
+            time.sleep(0.08)
         except Exception:
             pass
         started = _attempt_video_start_in_current_context(driver) or started
@@ -2338,7 +2338,7 @@ def seek_video_progress(driver, target_percent: float = 26.0) -> bool:
     updated = _seek_visible_videos_in_current_context(driver, target_percent=target_percent) or updated
     updated = _seek_visible_videos_in_frames(driver, target_percent=target_percent) or updated
     if updated:
-        time.sleep(0.2)
+        time.sleep(0.08)
     return updated
 
 
@@ -2569,7 +2569,7 @@ def audit_single_url(
 
     # HTTP hint
     try:
-        resp = requests.get(url, timeout=1)
+        resp = requests.get(url, timeout=0.5)
         result["http_status_hint"] = resp.status_code
     except Exception as e:
         result["http_status_hint"] = f"Error: {e}"
@@ -2622,20 +2622,6 @@ def audit_single_url(
     interaction_start = time.time()
 
     # Scroll only when this audit path actually needs interaction-driven signals.
-    try:
-        if requires_scroll_capture or requires_video_playback:
-            scroll_before_taboola(driver, scroll_pause=0.08, max_steps=4)
-            scroll_points = (0, 25, 50, 75, 100)
-            scroll_pause = 0.35
-            for p in scroll_points:
-                driver.execute_script(
-                    "window.scrollTo(0, document.body.scrollHeight * arguments[0] / 100);",
-                    p,
-                )
-                time.sleep(scroll_pause)
-    except Exception:
-        pass
-
     if requires_video_playback:
         try:
             video_started = trigger_video_playback(driver)
@@ -2646,17 +2632,38 @@ def audit_single_url(
                 seek_video_progress(driver, target_percent=26.0)
             except Exception:
                 pass
-            time.sleep(0.8)
+            time.sleep(0.15)
         else:
-            time.sleep(0.4)
+            time.sleep(0.08)
 
-    remaining_wait = max(0.0, max(1, int(wait_seconds or 8)) - (time.time() - interaction_start))
+    try:
+        if requires_scroll_capture:
+            scroll_points = (0, 25, 50, 75, 100)
+            scroll_pause = 0.12
+            for p in scroll_points:
+                driver.execute_script(
+                    "window.scrollTo(0, document.body.scrollHeight * arguments[0] / 100);",
+                    p,
+                )
+                time.sleep(scroll_pause)
+    except Exception:
+        pass
+
+    configured_wait = max(1, int(wait_seconds or 8))
+    if requires_video_playback:
+        effective_wait_budget = min(configured_wait, 3)
+    elif requires_scroll_capture:
+        effective_wait_budget = min(configured_wait, 2)
+    else:
+        effective_wait_budget = min(configured_wait, 1)
+
+    remaining_wait = max(0.0, effective_wait_budget - (time.time() - interaction_start))
     if remaining_wait:
         deadline = time.time() + remaining_wait
         while time.time() < deadline:
             if single_audit_signals_ready(driver, requires_scroll_capture, requires_video_playback):
                 break
-            time.sleep(0.25)
+            time.sleep(0.15)
 
     # Title
     try:
