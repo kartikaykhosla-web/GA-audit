@@ -423,7 +423,7 @@ def create_driver(
         chrome_options = Options()
         chrome_options.page_load_strategy = "eager"
         if headless:
-            chrome_options.add_argument("--headless=new")
+            chrome_options.add_argument("--headless" if safe_mode else "--headless=new")
         if selected_binary:
             chrome_options.binary_location = selected_binary
 
@@ -431,7 +431,6 @@ def create_driver(
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-gpu",
-            "--disable-software-rasterizer",
             "--disable-quic",
             "--disable-extensions",
             "--disable-background-networking",
@@ -441,43 +440,17 @@ def create_driver(
             "--metrics-recording-only",
             "--no-first-run",
             "--window-size=1920,1080",
-            "--remote-debugging-pipe",
         ]
         if safe_mode:
             base_args.extend(
                 [
                     "--no-zygote",
+                    "--disable-software-rasterizer",
                     "--disable-features=VizDisplayCompositor",
                 ]
             )
         for arg in base_args:
             chrome_options.add_argument(arg)
-
-        if not safe_mode:
-            chrome_options.add_experimental_option(
-                "prefs",
-                {
-                    "profile.managed_default_content_settings.images": 2,
-                    "profile.default_content_setting_values.notifications": 2,
-                },
-            )
-
-            # Anti-bot / more human-like
-            chrome_options.add_argument("--disable-blink-features")
-            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-            chrome_options.add_argument("--disable-infobars")
-            chrome_options.add_argument("--disable-web-security")
-            chrome_options.add_argument("--allow-running-insecure-content")
-            chrome_options.add_argument(
-                "--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests"
-            )
-            chrome_options.add_argument(
-                "--disable-features=PreloadMediaEngagementData,MediaEngagementBypassAutoplayPolicies"
-            )
-            chrome_options.add_argument(
-                "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-            )
 
         if performance_logs:
             chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
