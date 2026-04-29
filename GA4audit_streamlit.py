@@ -2046,6 +2046,15 @@ VIDEO_PLAY_SELECTORS = [
     "[data-testid*='play' i]",
 ]
 
+ARTICLE_HERO_VIDEO_SELECTORS = [
+    ".ArticleDetail_relatedvideo__wvgRP img",
+    ".ArticleDetail_relatedvideo__wvgRP .article",
+    ".ArticleDetail_relatedvideo__wvgRP i.videoImage",
+    ".relatedvideo img",
+    ".relatedvideo .article",
+    "i.videoImage",
+]
+
 
 def _click_element(driver, element) -> bool:
     try:
@@ -2132,8 +2141,29 @@ def _click_video_text_targets_in_current_context(driver) -> bool:
     return False
 
 
+def _click_article_hero_video_in_current_context(driver) -> bool:
+    for selector in ARTICLE_HERO_VIDEO_SELECTORS:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        except Exception:
+            continue
+        for element in elements[:8]:
+            try:
+                if not element.is_displayed():
+                    continue
+                if _click_element(driver, element):
+                    time.sleep(0.5)
+                    return True
+            except Exception:
+                continue
+    return False
+
+
 def _attempt_video_start_in_current_context(driver) -> bool:
     attempted = False
+    if _click_article_hero_video_in_current_context(driver):
+        attempted = True
+        time.sleep(0.6)
     if _play_visible_videos_in_current_context(driver):
         attempted = True
         time.sleep(0.25)
@@ -2141,6 +2171,9 @@ def _attempt_video_start_in_current_context(driver) -> bool:
         attempted = True
         time.sleep(0.35)
     if _click_video_text_targets_in_current_context(driver):
+        attempted = True
+        time.sleep(0.35)
+    if _click_video_controls_in_current_context(driver):
         attempted = True
         time.sleep(0.35)
     if _play_visible_videos_in_current_context(driver):
@@ -6031,7 +6064,12 @@ def evaluate_value_rule(rule_type: str, expected_values_text: str, actual_value:
     return False, VALIDATION_FAIL_LABEL
 
 
-def build_execution_validation_rows(snapshot: dict, template_rules: List[dict]):
+def build_execution_validation_rows(
+    snapshot: dict,
+    template_rules: List[dict],
+    *,
+    include_unmatched_fields: bool = True,
+):
     execution_payload = snapshot.get("execution_payload") or {}
     execution_df = snapshot.get("execution_df", pd.DataFrame(columns=["Field", "Value"]))
 
@@ -6087,18 +6125,19 @@ def build_execution_validation_rows(snapshot: dict, template_rules: List[dict]):
             }
         )
 
-    for _, row in execution_df.iterrows():
-        field = str(row.get("Field") or "").strip()
-        if field in used_fields:
-            continue
-        value_rows.append(
-            {
-                "Field": field,
-                "Value": row.get("Value") or "",
-                "Expected": "",
-                "Validation": "",
-            }
-        )
+    if include_unmatched_fields:
+        for _, row in execution_df.iterrows():
+            field = str(row.get("Field") or "").strip()
+            if field in used_fields:
+                continue
+            value_rows.append(
+                {
+                    "Field": field,
+                    "Value": row.get("Value") or "",
+                    "Expected": "",
+                    "Validation": "",
+                }
+            )
 
     display_df = pd.DataFrame(value_rows)
     if not display_df.empty:
@@ -8002,19 +8041,32 @@ This capture is split into three layers:
                                     st.info("This companion template has no rules yet.")
                                     continue
 
-                                companion_execution_df, _ = build_execution_validation_rows(
-                                    companion_snapshot,
-                                    companion_rules,
-                                )
                                 companion_event_df = build_event_validation_rows(
                                     companion_audit_summary["event_rows"],
                                     companion_rules,
+                                )
+                                companion_has_matched_event = False
+                                if isinstance(companion_event_df, pd.DataFrame) and not companion_event_df.empty:
+                                    companion_has_matched_event = bool(
+                                        (
+                                            companion_event_df.get("validation") == VALIDATION_PASS_LABEL
+                                        ).any()
+                                    ) if "validation" in companion_event_df.columns else False
+
+                                companion_execution_df, _ = build_execution_validation_rows(
+                                    companion_snapshot,
+                                    companion_rules,
+                                    include_unmatched_fields=companion_has_matched_event,
                                 )
 
                                 companion_col1, companion_col2 = st.columns(2)
                                 with companion_col1:
                                     st.markdown("**Execution checks**")
-                                    if companion_execution_df.empty:
+                                    if not companion_has_matched_event:
+                                        st.info(
+                                            "No matching video interaction event was captured in this run, so video-field execution values are unavailable."
+                                        )
+                                    elif companion_execution_df.empty:
                                         st.info("No execution checks are configured for this companion template.")
                                     elif "Validation" in companion_execution_df.columns:
                                         st.dataframe(
