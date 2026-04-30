@@ -4324,8 +4324,14 @@ VIDEO_INTERACTION_FIELD_NAMES = {
     "scroll_percent",
 }
 VIDEO_INTERACTION_FIELD_NORMALIZED = {
-    normalize_dimension_name(field_name)
-    for field_name in VIDEO_INTERACTION_FIELD_NAMES
+    "playertype",
+    "positionfold",
+    "sectionname",
+    "videoorientation",
+    "videopercent",
+    "videoduration",
+    "videotitle",
+    "scrollpercent",
 }
 SCROLL_EVENT_FIELD_NORMALIZED = {
     "scrollpercent",
