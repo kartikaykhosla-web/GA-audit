@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import uuid
 import functools
+import signal
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Tuple, Optional, Set
 from urllib.parse import urlparse, parse_qs, urlunparse, unquote_plus
@@ -82,6 +83,30 @@ def _safe_json_load(value, fallback):
         except Exception:
             return fallback
     return value if isinstance(value, type(fallback)) else fallback
+
+
+class AuditTimeoutError(RuntimeError):
+    pass
+
+
+def run_with_timeout(func, seconds: int, label: str):
+    """Run a blocking function with a hard wall-clock timeout on Unix."""
+    timeout_seconds = max(1, int(seconds or 0))
+    if timeout_seconds <= 0 or not hasattr(signal, "SIGALRM"):
+        return func()
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _handle_timeout(signum, frame):
+        raise AuditTimeoutError(f"{label} after {timeout_seconds} seconds.")
+
+    try:
+        signal.signal(signal.SIGALRM, _handle_timeout)
+        signal.alarm(timeout_seconds)
+        return func()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def normalize_single_url(raw_value: str):
@@ -7994,25 +8019,51 @@ This capture is split into three layers:
                 template_rules_by_template,
             )
             combined_interaction_rules: List[dict] = list(selected_template_rules)
+            requires_video_playback = single_audit_requires_video_playback(combined_interaction_rules)
+            requires_scroll_capture = single_audit_requires_scroll_capture(combined_interaction_rules)
             total_audit_passes = 1
             completed_audit_passes = 0
 
-            status_box.write(f"Auditing {normalized_url} (1/{total_audit_passes})")
+            status_box.write("Launching browser...")
             try:
                 # Streamlit Cloud is much more stable on the lighter Selenium path.
-                driver = create_driver(headless=True, capture_network=False)
+                driver = run_with_timeout(
+                    lambda: create_driver(headless=True, capture_network=False),
+                    25,
+                    "Browser startup timed out",
+                )
                 try:
-                    primary_result = audit_single_url(
-                        driver,
-                        normalized_url,
-                        wait_seconds,
-                        template_rules=selected_template_rules,
-                        force_video_playback=single_audit_requires_video_playback(combined_interaction_rules),
-                        force_scroll_capture=single_audit_requires_scroll_capture(combined_interaction_rules),
+                    progress.progress(0.2)
+                    status_box.write(f"Auditing {normalized_url} (1/{total_audit_passes})")
+                    audit_timeout_seconds = 45 if requires_video_playback else 30 if requires_scroll_capture else 25
+                    primary_result = run_with_timeout(
+                        lambda: audit_single_url(
+                            driver,
+                            normalized_url,
+                            wait_seconds,
+                            template_rules=selected_template_rules,
+                            force_video_playback=requires_video_playback,
+                            force_scroll_capture=requires_scroll_capture,
+                        ),
+                        audit_timeout_seconds,
+                        "Audit timed out",
                     )
                     results.append(primary_result)
                 finally:
-                    driver.quit()
+                    status_box.write("Closing browser...")
+                    try:
+                        run_with_timeout(
+                            lambda: driver.quit(),
+                            8,
+                            "Browser shutdown timed out",
+                        )
+                    except Exception:
+                        try:
+                            service_process = getattr(getattr(driver, "service", None), "process", None)
+                            if service_process:
+                                service_process.kill()
+                        except Exception:
+                            pass
                 completed_audit_passes += 1
                 progress.progress(completed_audit_passes / total_audit_passes)
             except Exception as exc:
