@@ -6289,6 +6289,38 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
     return pd.DataFrame(display_rows)
 
 
+def companion_template_has_matched_event(companion_event_df: pd.DataFrame, companion_rules: List[dict]) -> bool:
+    if not isinstance(companion_event_df, pd.DataFrame) or companion_event_df.empty:
+        return False
+
+    configured_event_names: Set[str] = set()
+    for rule in companion_rules or []:
+        if str(rule.get("rule_scope") or "").strip().lower() != "event":
+            continue
+        for value in parse_expected_values(rule.get("field_name")):
+            normalized = canonical_event_name(value)
+            if normalized:
+                configured_event_names.add(normalized)
+        for value in parse_expected_values(rule.get("expected_values")):
+            normalized = canonical_event_name(value)
+            if normalized:
+                configured_event_names.add(normalized)
+
+    if not configured_event_names:
+        return False
+
+    if "validation" not in companion_event_df.columns:
+        return False
+
+    for _, row in companion_event_df.iterrows():
+        if str(row.get("validation") or "").strip() != VALIDATION_PASS_LABEL:
+            continue
+        event_name = canonical_event_name(row.get("event_name"))
+        if event_name in configured_event_names:
+            return True
+    return False
+
+
 DOMAIN_AUDIT_TEMPLATE_LIMIT = 3
 DOMAIN_AUDIT_BATCH_DEFAULT = 1
 
@@ -8088,13 +8120,10 @@ This capture is split into three layers:
                                     companion_audit_summary["event_rows"],
                                     companion_rules,
                                 )
-                                companion_has_matched_event = False
-                                if isinstance(companion_event_df, pd.DataFrame) and not companion_event_df.empty:
-                                    companion_has_matched_event = bool(
-                                        (
-                                            companion_event_df.get("validation") == VALIDATION_PASS_LABEL
-                                        ).any()
-                                    ) if "validation" in companion_event_df.columns else False
+                                companion_has_matched_event = companion_template_has_matched_event(
+                                    companion_event_df,
+                                    companion_rules,
+                                )
 
                                 companion_execution_df, _ = build_execution_validation_rows(
                                     companion_snapshot,
