@@ -4378,6 +4378,77 @@ SCROLL_EVENT_FIELD_NORMALIZED = {
 }
 
 
+def build_default_article_detail_video_rules(template: Optional[dict]) -> List[dict]:
+    template_id = str((template or {}).get("template_id") or "").strip()
+    base_rule_id = f"{template_id or 'article_detail'}__video_default"
+    return [
+        {
+            "rule_id": f"{base_rule_id}_event",
+            "template_id": template_id,
+            "rule_scope": "event",
+            "field_name": "video_interaction",
+            "rule_type": "exact",
+            "expected_values": "video_interaction",
+        },
+        {
+            "rule_id": f"{base_rule_id}_dynamic_video_embed_type",
+            "template_id": template_id,
+            "rule_scope": "execution",
+            "field_name": "dynamic_video_embed_type",
+            "rule_type": "one_of",
+            "expected_values": "view this video also|in-house video|youtube embed",
+        },
+        {
+            "rule_id": f"{base_rule_id}_player_type",
+            "template_id": template_id,
+            "rule_scope": "execution",
+            "field_name": "player_type",
+            "rule_type": "one_of",
+            "expected_values": "automatic|manual",
+        },
+        {
+            "rule_id": f"{base_rule_id}_position_fold",
+            "template_id": template_id,
+            "rule_scope": "execution",
+            "field_name": "position_fold",
+            "rule_type": "one_of",
+            "expected_values": "25|50|75|100",
+        },
+        {
+            "rule_id": f"{base_rule_id}_scroll_percent",
+            "template_id": template_id,
+            "rule_scope": "execution",
+            "field_name": "scroll_percent",
+            "rule_type": "one_of",
+            "expected_values": "0%|25%|50%|75%|100%",
+        },
+        {
+            "rule_id": f"{base_rule_id}_section_name",
+            "template_id": template_id,
+            "rule_scope": "execution",
+            "field_name": "section_name",
+            "rule_type": "required",
+            "expected_values": "",
+        },
+        {
+            "rule_id": f"{base_rule_id}_video_orientation",
+            "template_id": template_id,
+            "rule_scope": "execution",
+            "field_name": "video_orientation",
+            "rule_type": "one_of",
+            "expected_values": "horizontal|vertical",
+        },
+        {
+            "rule_id": f"{base_rule_id}_video_percent",
+            "template_id": template_id,
+            "rule_scope": "execution",
+            "field_name": "video_percent",
+            "rule_type": "exact",
+            "expected_values": "25%",
+        },
+    ]
+
+
 def is_video_related_rule(rule: dict) -> bool:
     rule_scope = str(rule.get("rule_scope") or "").strip().lower()
     field_name = _normalize_template_name_key(rule.get("field_name") or "")
@@ -4551,7 +4622,7 @@ def derive_video_rules_from_article_detail_template(
         if video_rules:
             return video_rules
 
-    return []
+    return build_default_article_detail_video_rules(video_template)
 
 
 def build_companion_validation_templates(
@@ -4595,6 +4666,7 @@ def get_single_audit_template_rules(
             video_rules = [rule for rule in template_rules_list if is_video_related_rule(rule)]
             if video_rules:
                 return video_rules
+            return build_default_article_detail_video_rules(template)
         return template_rules_list
 
     if is_video_interaction_template(template, rules_by_template):
@@ -8049,7 +8121,22 @@ This capture is split into three layers:
                 active_templates,
                 template_rules_by_template,
             )
+            companion_validation_templates = build_companion_validation_templates(
+                selected_template,
+                active_templates,
+                template_rules_by_template,
+            )
+            companion_rule_sets = [
+                get_single_audit_template_rules(
+                    companion_template,
+                    active_templates,
+                    template_rules_by_template,
+                )
+                for companion_template in companion_validation_templates
+            ]
             combined_interaction_rules: List[dict] = list(selected_template_rules)
+            for companion_rules in companion_rule_sets:
+                combined_interaction_rules.extend(companion_rules or [])
             requires_video_playback = single_audit_requires_video_playback(combined_interaction_rules)
             requires_scroll_capture = single_audit_requires_scroll_capture(combined_interaction_rules)
             total_audit_passes = 1
@@ -8190,6 +8277,14 @@ This capture is split into three layers:
                         )
                         if not selected_template_rules:
                             st.info("This template has no rules yet. Add execution-field or event rules in Template Manager.")
+                        elif companion_validation_templates:
+                            companion_names = ", ".join(
+                                str(template.get("template_name") or "Unnamed template")
+                                for template in companion_validation_templates
+                            )
+                            st.caption(
+                                f"Companion validation auto-included for this audit: **{companion_names}**"
+                            )
 
                     st.markdown("### DataLayer Snapshot")
                     st.caption(
@@ -8279,6 +8374,83 @@ This capture is split into three layers:
                             )
                         else:
                             st.dataframe(event_display_df, use_container_width=True, hide_index=True)
+
+                    if companion_validation_templates:
+                        st.markdown("### Additional Template Validations")
+                        st.caption(
+                            "Base article detail checks stay separate from companion validations like video interaction."
+                        )
+                        for companion_template, companion_rules in zip(companion_validation_templates, companion_rule_sets):
+                            companion_template_name = str(companion_template.get("template_name") or "Unnamed template")
+                            with st.container(border=True):
+                                st.markdown(f"#### {companion_template_name}")
+                                if not companion_rules:
+                                    st.info("This companion template has no rules yet.")
+                                    continue
+
+                                companion_event_df = build_event_validation_rows(
+                                    audit_summary["event_rows"],
+                                    companion_rules,
+                                )
+                                matched_companion_event = companion_template_has_matched_event(
+                                    companion_event_df,
+                                    companion_rules,
+                                )
+                                companion_exec_col, companion_event_col = st.columns(2)
+                                with companion_exec_col:
+                                    st.markdown("##### Execution checks")
+                                    if matched_companion_event:
+                                        companion_execution_df, _ = build_execution_validation_rows(
+                                            snapshot,
+                                            companion_rules,
+                                        )
+                                        if companion_execution_df.empty:
+                                            st.info("No execution values matched this companion validation.")
+                                        else:
+                                            st.dataframe(
+                                                style_validation_table(companion_execution_df, "Validation"),
+                                                use_container_width=True,
+                                                hide_index=True,
+                                            )
+                                    else:
+                                        st.info(
+                                            "No matching video interaction event was captured in this run, so video-field execution values are unavailable."
+                                        )
+
+                                with companion_event_col:
+                                    st.markdown("##### Event checks")
+                                    if companion_event_df.empty:
+                                        st.info("No event rules were defined for this companion validation.")
+                                    else:
+                                        companion_event_display_columns = [
+                                            "event_name",
+                                            "status",
+                                            "times_fired",
+                                            "capture_layer",
+                                        ]
+                                        if "expected" in companion_event_df.columns:
+                                            companion_event_display_columns.append("expected")
+                                        if "validation" in companion_event_df.columns:
+                                            companion_event_display_columns.append("validation")
+                                        companion_event_display_df = companion_event_df[
+                                            companion_event_display_columns
+                                        ].rename(
+                                            columns={
+                                                "event_name": "Event",
+                                                "status": "Status",
+                                                "times_fired": "Times Fired",
+                                                "capture_layer": "Seen In",
+                                                "expected": "Expected",
+                                                "validation": "Validation",
+                                            }
+                                        )
+                                        st.dataframe(
+                                            style_validation_table(companion_event_display_df, "Validation")
+                                            if "Validation" in companion_event_display_df.columns
+                                            else companion_event_display_df,
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
 
                     st.markdown("### Comscore")
                     if not audit_summary["comscore_present"]:
