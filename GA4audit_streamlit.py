@@ -7988,10 +7988,15 @@ This capture is split into three layers:
     if not active_templates:
         st.warning("No active templates are available.")
     else:
+        single_audit_templates = [
+            template
+            for template in active_templates
+            if not is_video_interaction_template(template, template_rules_by_template)
+        ]
         template_options = [
             None,
             *sorted(
-                active_templates,
+                single_audit_templates,
                 key=lambda template: build_template_option_label(template).lower(),
             ),
         ]
@@ -8000,7 +8005,11 @@ This capture is split into three layers:
             options=template_options,
             format_func=lambda template: "Select a template" if template is None else build_template_option_label(template),
         )
-        st.caption("Open the dropdown and start typing to search within the template list.")
+        st.caption(
+            "Open the dropdown and start typing to search within the template list. "
+            "Video-interaction companion templates are hidden here; select the base template "
+            "(for example `article detail`) and the app will handle companion validations itself."
+        )
 
     wait_seconds = st.slider(
         "Wait time after page load (seconds)",
