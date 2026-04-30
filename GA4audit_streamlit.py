@@ -11,6 +11,8 @@ import subprocess
 import uuid
 import functools
 import signal
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Tuple, Optional, Set
 from urllib.parse import urlparse, parse_qs, urlunparse, unquote_plus
@@ -90,10 +92,23 @@ class AuditTimeoutError(RuntimeError):
 
 
 def run_with_timeout(func, seconds: int, label: str):
-    """Run a blocking function with a hard wall-clock timeout on Unix."""
+    """Run a blocking function with a hard wall-clock timeout."""
     timeout_seconds = max(1, int(seconds or 0))
-    if timeout_seconds <= 0 or not hasattr(signal, "SIGALRM"):
+    if timeout_seconds <= 0:
         return func()
+
+    # Streamlit app code often runs outside the interpreter main thread.
+    # signal/alarm is invalid there, so fall back to a worker thread timeout.
+    if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "SIGALRM"):
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(func)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError as exc:
+            future.cancel()
+            raise AuditTimeoutError(f"{label} after {timeout_seconds} seconds.") from exc
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     previous_handler = signal.getsignal(signal.SIGALRM)
 
