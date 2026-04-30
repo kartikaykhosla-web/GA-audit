@@ -496,19 +496,35 @@ def create_driver(
         if selected_binary:
             chrome_options.binary_location = selected_binary
 
-        base_args = [
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--disable-quic",
-            "--disable-extensions",
-            "--autoplay-policy=no-user-gesture-required",
-            "--disable-default-apps",
-            "--disable-sync",
-            "--metrics-recording-only",
-            "--no-first-run",
-            "--window-size=1920,1080",
-        ]
+        # Single-audit runs on Streamlit Cloud are the most fragile path in this app.
+        # Keep that browser launch minimal and deterministic instead of carrying the
+        # broader bulk-audit/network-capture startup profile.
+        if capture_network:
+            base_args = [
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-quic",
+                "--disable-extensions",
+                "--disable-default-apps",
+                "--disable-sync",
+                "--metrics-recording-only",
+                "--no-first-run",
+                "--window-size=1920,1080",
+            ]
+        else:
+            base_args = [
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-default-apps",
+                "--disable-sync",
+                "--no-first-run",
+                "--window-size=1440,900",
+                "--disable-background-timer-throttling",
+                "--disable-renderer-backgrounding",
+            ]
         if safe_mode:
             base_args.extend(
                 [
@@ -519,6 +535,18 @@ def create_driver(
             )
         for arg in base_args:
             chrome_options.add_argument(arg)
+
+        if not capture_network:
+            try:
+                chrome_options.add_experimental_option(
+                    "prefs",
+                    {
+                        "profile.default_content_setting_values.images": 2,
+                        "profile.default_content_setting_values.notifications": 2,
+                    },
+                )
+            except Exception:
+                pass
 
         if performance_logs:
             chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
@@ -576,48 +604,49 @@ def create_driver(
                 driver.scopes = NETWORK_CAPTURE_SCOPES
             except Exception:
                 pass
+        if capture_network or performance_logs:
+            try:
+                driver.execute_cdp_cmd("Network.enable", {})
+                driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
+            except Exception:
+                pass
         try:
-            driver.execute_cdp_cmd("Network.enable", {})
-            driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
-        except Exception:
-            pass
-        try:
-            driver.set_page_load_timeout(25)
+            driver.set_page_load_timeout(25 if capture_network else 12)
         except Exception:
             pass
         return driver
 
     startup_errors = []
-    try:
-        return _launch_driver(_build_chrome_options(safe_mode=False))
-    except Exception as exc:
-        startup_errors.append(f"Primary launch failed: {exc}")
+    launch_attempts = [False] if not capture_network else [False, True]
 
-    try:
-        return _launch_driver(_build_chrome_options(safe_mode=True))
-    except Exception as exc:
-        startup_errors.append(f"Fallback launch failed: {exc}")
-        browser_version = _read_version(browser_cmd)
-        driver_version = _read_version(chromedriver_path or shutil.which("chromedriver") or "")
-        resolved_driver = chromedriver_path or shutil.which("chromedriver")
+    for safe_mode in launch_attempts:
+        try:
+            return _launch_driver(_build_chrome_options(safe_mode=safe_mode))
+        except Exception as exc:
+            label = "Fallback launch failed" if safe_mode else "Primary launch failed"
+            startup_errors.append(f"{label}: {exc}")
 
-        details = []
-        if browser_version:
-            details.append(f"Chrome: {browser_version}")
-        if driver_version:
-            details.append(f"ChromeDriver: {driver_version}")
-        if resolved_driver:
-            details.append(f"Driver path: {resolved_driver}")
+    browser_version = _read_version(browser_cmd)
+    driver_version = _read_version(chromedriver_path or shutil.which("chromedriver") or "")
+    resolved_driver = chromedriver_path or shutil.which("chromedriver")
 
-        message = "\n".join(startup_errors)
-        if details:
-            message = f"{message}\n" + "\n".join(details)
-        if "only supports Chrome version" in message:
-            message += (
-                "\nSet CHROMEDRIVER_PATH to a matching driver or update the "
-                "installed chromedriver to the same major version as Chrome."
-            )
-        raise RuntimeError(message) from exc
+    details = []
+    if browser_version:
+        details.append(f"Chrome: {browser_version}")
+    if driver_version:
+        details.append(f"ChromeDriver: {driver_version}")
+    if resolved_driver:
+        details.append(f"Driver path: {resolved_driver}")
+
+    message = "\n".join(startup_errors)
+    if details:
+        message = f"{message}\n" + "\n".join(details)
+    if "only supports Chrome version" in message:
+        message += (
+            "\nSet CHROMEDRIVER_PATH to a matching driver or update the "
+            "installed chromedriver to the same major version as Chrome."
+        )
+    raise RuntimeError(message)
 
 
 def extract_datalayer(driver) -> Tuple[list, Optional[str]]:
@@ -8063,10 +8092,7 @@ This capture is split into three layers:
         single_audit_templates = [
             template
             for template in active_templates
-            if not (
-                is_video_interaction_template(template, template_rules_by_template)
-                and not is_article_detail_template(template, template_rules_by_template)
-            )
+            if "video interaction" not in _normalize_template_name_key(template.get("template_name") or "")
         ]
         template_options = [
             None,
@@ -8134,11 +8160,15 @@ This capture is split into three layers:
                 )
                 for companion_template in companion_validation_templates
             ]
-            combined_interaction_rules: List[dict] = list(selected_template_rules)
-            for companion_rules in companion_rule_sets:
-                combined_interaction_rules.extend(companion_rules or [])
-            requires_video_playback = single_audit_requires_video_playback(combined_interaction_rules)
-            requires_scroll_capture = single_audit_requires_scroll_capture(combined_interaction_rules)
+            selected_template_name_key = _normalize_template_name_key(
+                selected_template.get("template_name") or ""
+            )
+            direct_video_template_selected = "video interaction" in selected_template_name_key
+            requires_video_playback = (
+                direct_video_template_selected
+                and single_audit_requires_video_playback(selected_template_rules)
+            )
+            requires_scroll_capture = single_audit_requires_scroll_capture(selected_template_rules)
             total_audit_passes = 1
             completed_audit_passes = 0
 
@@ -8147,7 +8177,11 @@ This capture is split into three layers:
                 # Keep the single-audit path direct and lightweight. The timeout wrappers
                 # introduced extra thread/process churn on Streamlit Cloud and ended up
                 # making Chrome startup less reliable than the original fast path.
-                driver = create_driver(headless=True, capture_network=False)
+                driver = create_driver(
+                    headless=True,
+                    performance_logs=False,
+                    capture_network=False,
+                )
                 try:
                     progress.progress(0.2)
                     status_box.write(f"Auditing {normalized_url} (1/{total_audit_passes})")
@@ -8155,6 +8189,7 @@ This capture is split into three layers:
                         driver,
                         normalized_url,
                         wait_seconds,
+                        compact=True,
                         template_rules=selected_template_rules,
                         force_video_playback=requires_video_playback,
                         force_scroll_capture=requires_scroll_capture,
