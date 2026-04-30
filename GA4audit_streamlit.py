@@ -4323,6 +4323,13 @@ VIDEO_INTERACTION_FIELD_NAMES = {
     "video_title",
     "scroll_percent",
 }
+VIDEO_INTERACTION_FIELD_NORMALIZED = {
+    normalize_dimension_name(field_name)
+    for field_name in VIDEO_INTERACTION_FIELD_NAMES
+}
+SCROLL_EVENT_FIELD_NORMALIZED = {
+    "scrollpercent",
+}
 
 
 def is_video_related_rule(rule: dict) -> bool:
@@ -4452,6 +4459,55 @@ def build_runtime_video_companion_template(
     return companion_template
 
 
+def derive_video_rules_from_article_detail_template(
+    video_template: dict,
+    all_templates: Optional[List[dict]] = None,
+    rules_by_template: Optional[Dict[str, List[dict]]] = None,
+) -> List[dict]:
+    video_template_rules = get_rules_for_validation_template(video_template, rules_by_template)
+    if video_template_rules:
+        return video_template_rules
+
+    if not is_video_interaction_template(video_template, rules_by_template):
+        return []
+
+    base_domain = get_template_domain_label(video_template)
+    base_measurement_id = str(video_template.get("measurement_id") or "").strip()
+    base_container_id = str(video_template.get("container_id") or "").strip()
+
+    candidates: List[dict] = []
+    for candidate in all_templates or []:
+        if not candidate or not candidate.get("active"):
+            continue
+        if not is_article_detail_template(candidate, rules_by_template):
+            continue
+        if get_template_domain_label(candidate) != base_domain:
+            continue
+
+        candidate_measurement_id = str(candidate.get("measurement_id") or "").strip()
+        candidate_container_id = str(candidate.get("container_id") or "").strip()
+        measurement_matches = (
+            not base_measurement_id
+            or not candidate_measurement_id
+            or base_measurement_id == candidate_measurement_id
+        )
+        container_matches = (
+            not base_container_id
+            or not candidate_container_id
+            or base_container_id == candidate_container_id
+        )
+        if measurement_matches and container_matches:
+            candidates.append(candidate)
+
+    for candidate in candidates:
+        candidate_rules = get_rules_for_validation_template(candidate, rules_by_template)
+        video_rules = [rule for rule in candidate_rules if is_video_related_rule(rule)]
+        if video_rules:
+            return video_rules
+
+    return []
+
+
 def build_companion_validation_templates(
     base_template: dict,
     all_templates: List[dict],
@@ -4478,6 +4534,27 @@ def get_effective_template_rules(
         return [rule for rule in template_rules_list if not is_video_related_rule(rule)]
 
     return template_rules_list
+
+
+def get_single_audit_template_rules(
+    template: dict,
+    all_templates: Optional[List[dict]] = None,
+    rules_by_template: Optional[Dict[str, List[dict]]] = None,
+) -> List[dict]:
+    template_rules_list = get_rules_for_validation_template(template, rules_by_template)
+    if template_rules_list:
+        if is_article_detail_template(template, rules_by_template):
+            return template_rules_list
+        return template_rules_list
+
+    if is_video_interaction_template(template, rules_by_template):
+        return derive_video_rules_from_article_detail_template(
+            template,
+            all_templates,
+            rules_by_template,
+        )
+
+    return []
 
 
 def expand_templates_with_companions(
@@ -5665,6 +5742,49 @@ def snapshot_ga4_payload(event):
     return payload
 
 
+def merge_payload_field_values(existing_value, new_value):
+    if new_value in (None, ""):
+        return existing_value
+    if existing_value in (None, ""):
+        return new_value
+
+    existing_values = existing_value if isinstance(existing_value, list) else [existing_value]
+    new_values = new_value if isinstance(new_value, list) else [new_value]
+    merged_values = list(existing_values)
+    for item in new_values:
+        if item not in merged_values:
+            merged_values.append(item)
+
+    if len(merged_values) == 1:
+        return merged_values[0]
+    return merged_values
+
+
+def build_event_payload_lookup(execution_events, network_events):
+    payload_lookup: Dict[str, dict] = {}
+
+    for events in (execution_events or [], network_events or []):
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            event_key = canonical_event_name(event.get("event_name"))
+            if not event_key:
+                continue
+
+            payload = snapshot_ga4_payload(event)
+            if not payload:
+                continue
+
+            group_payload = payload_lookup.setdefault(event_key, {})
+            for key, value in payload.items():
+                if key not in group_payload:
+                    group_payload[key] = value
+                else:
+                    group_payload[key] = merge_payload_field_values(group_payload.get(key), value)
+
+    return payload_lookup
+
+
 def include_snapshot_field(key: str) -> bool:
     key_text = str(key or "").strip()
     if not key_text:
@@ -5756,6 +5876,7 @@ def build_datalayer_snapshot_export(result: dict):
 
     execution_payload = snapshot_ga4_payload(matched_execution)
     network_payload = snapshot_ga4_payload(matched_network)
+    event_payloads = build_event_payload_lookup(execution_events, network_events)
     ordered_keys = build_snapshot_ordered_keys(
         selected_event,
         computed_state,
@@ -5788,6 +5909,7 @@ def build_datalayer_snapshot_export(result: dict):
         "computed_state": computed_state,
         "execution_payload": execution_payload,
         "network_payload": network_payload,
+        "event_payloads": event_payloads,
         "trigger_df": trigger_df,
         "computed_df": computed_df,
         "execution_df": execution_df,
@@ -6073,6 +6195,21 @@ def find_payload_value(payload: dict, field_name: str):
     return "", ""
 
 
+def select_payload_for_execution_rule(snapshot: dict, rule: dict) -> dict:
+    execution_payload = snapshot.get("execution_payload") or {}
+    event_payloads = snapshot.get("event_payloads") or {}
+    field_name = str(rule.get("field_name") or "").strip()
+    normalized_field_name = normalize_dimension_name(field_name)
+
+    if normalized_field_name in SCROLL_EVENT_FIELD_NORMALIZED:
+        return event_payloads.get("pagescroll") or event_payloads.get("scroll") or execution_payload
+
+    if normalized_field_name in VIDEO_INTERACTION_FIELD_NORMALIZED:
+        return event_payloads.get("videointeraction") or execution_payload
+
+    return execution_payload
+
+
 def evaluate_value_rule(rule_type: str, expected_values_text: str, actual_value: str):
     rule = str(rule_type or "").strip().lower()
     actual_text = str(actual_value or "").strip()
@@ -6124,7 +6261,6 @@ def build_execution_validation_rows(
     *,
     include_unmatched_fields: bool = True,
 ):
-    execution_payload = snapshot.get("execution_payload") or {}
     execution_df = snapshot.get("execution_df", pd.DataFrame(columns=["Field", "Value"]))
 
     field_rules = [
@@ -6145,7 +6281,8 @@ def build_execution_validation_rows(
         if not field_name:
             continue
 
-        actual_key, actual_value = find_payload_value(execution_payload, field_name)
+        payload_for_rule = select_payload_for_execution_rule(snapshot, rule)
+        actual_key, actual_value = find_payload_value(payload_for_rule, field_name)
         used_fields.add(actual_key or field_name)
         matched, validation_label = evaluate_value_rule(
             rule.get("rule_type"),
@@ -7829,8 +7966,6 @@ This capture is split into three layers:
         disabled=not str(url_text or "").strip() or selected_template is None,
     ):
         original_url, normalized_url, input_error = normalize_single_url(url_text)
-        companion_audit_results: Dict[str, Dict[str, Any]] = {}
-
         if selected_template is None:
             st.error("Please select a template before running the audit.")
         elif input_error:
@@ -7847,27 +7982,12 @@ This capture is split into three layers:
             results = []
             progress = st.progress(0)
             status_box = st.empty()
-            selected_template_rules = get_effective_template_rules(
+            selected_template_rules = get_single_audit_template_rules(
                 selected_template,
                 active_templates,
                 template_rules_by_template,
             )
-            runtime_companion_template = build_runtime_video_companion_template(
-                selected_template,
-                template_rules_by_template,
-            )
-            companion_validation_templates = [runtime_companion_template] if runtime_companion_template else []
-            companion_rules_map = {
-                str(template.get("template_id") or "").strip(): get_rules_for_validation_template(
-                    template,
-                    template_rules_by_template,
-                )
-                for template in companion_validation_templates
-            }
             combined_interaction_rules: List[dict] = list(selected_template_rules)
-            for companion_rules in companion_rules_map.values():
-                if companion_rules:
-                    combined_interaction_rules.extend(companion_rules)
             total_audit_passes = 1
             completed_audit_passes = 0
 
@@ -7889,10 +8009,6 @@ This capture is split into three layers:
                     driver.quit()
                 completed_audit_passes += 1
                 progress.progress(completed_audit_passes / total_audit_passes)
-                for companion_template in companion_validation_templates:
-                    companion_template_id = str(companion_template.get("template_id") or "").strip()
-                    if companion_template_id:
-                        companion_audit_results[companion_template_id] = primary_result
             except Exception as exc:
                 st.error(f"Error auditing {normalized_url}")
                 st.exception(exc)
@@ -7997,14 +8113,6 @@ This capture is split into three layers:
                         )
                         if not selected_template_rules:
                             st.info("This template has no rules yet. Add execution-field or event rules in Template Manager.")
-                        elif companion_validation_templates:
-                            companion_names = ", ".join(
-                                str(template.get("template_name") or "Unnamed template")
-                                for template in companion_validation_templates
-                            )
-                            st.caption(
-                                f"Companion validation auto-included for this audit: **{companion_names}**"
-                            )
 
                     st.markdown("### DataLayer Snapshot")
                     st.caption(
@@ -8094,96 +8202,6 @@ This capture is split into three layers:
                             )
                         else:
                             st.dataframe(event_display_df, use_container_width=True, hide_index=True)
-
-                    if companion_validation_templates:
-                        st.markdown("### Additional Template Validations")
-                        st.caption(
-                            "Base article detail checks stay separate from companion validations like video interaction."
-                        )
-                        for companion_template in companion_validation_templates:
-                            companion_template_name = str(companion_template.get("template_name") or "Unnamed template")
-                            companion_rules = get_rules_for_validation_template(
-                                companion_template,
-                                template_rules_by_template,
-                            )
-                            companion_template_id = str(companion_template.get("template_id") or "").strip()
-                            companion_result = companion_audit_results.get(companion_template_id)
-                            companion_snapshot = build_datalayer_snapshot_export(companion_result) if companion_result else snapshot
-                            companion_audit_summary = build_audit_focus_summary(companion_result) if companion_result else audit_summary
-                            with st.container(border=True):
-                                st.markdown(f"#### {companion_template_name}")
-                                if not companion_rules:
-                                    st.info("This companion template has no rules yet.")
-                                    continue
-
-                                companion_event_df = build_event_validation_rows(
-                                    companion_audit_summary["event_rows"],
-                                    companion_rules,
-                                )
-                                companion_has_matched_event = companion_template_has_matched_event(
-                                    companion_event_df,
-                                    companion_rules,
-                                )
-
-                                companion_execution_df, _ = build_execution_validation_rows(
-                                    companion_snapshot,
-                                    companion_rules,
-                                    include_unmatched_fields=companion_has_matched_event,
-                                )
-
-                                companion_col1, companion_col2 = st.columns(2)
-                                with companion_col1:
-                                    st.markdown("**Execution checks**")
-                                    if not companion_has_matched_event:
-                                        st.info(
-                                            "No matching video interaction event was captured in this run, so video-field execution values are unavailable."
-                                        )
-                                    elif companion_execution_df.empty:
-                                        st.info("No execution checks are configured for this companion template.")
-                                    elif "Validation" in companion_execution_df.columns:
-                                        st.dataframe(
-                                            style_validation_table(companion_execution_df, "Validation"),
-                                            use_container_width=True,
-                                            hide_index=True,
-                                        )
-                                    else:
-                                        st.dataframe(
-                                            companion_execution_df,
-                                            use_container_width=True,
-                                            hide_index=True,
-                                        )
-                                with companion_col2:
-                                    st.markdown("**Event checks**")
-                                    if companion_event_df.empty:
-                                        st.info("No event checks are configured for this companion template.")
-                                    else:
-                                        companion_event_columns = ["event_name", "status", "times_fired", "capture_layer"]
-                                        if "expected" in companion_event_df.columns:
-                                            companion_event_columns.append("expected")
-                                        if "validation" in companion_event_df.columns:
-                                            companion_event_columns.append("validation")
-                                        companion_event_display_df = companion_event_df[companion_event_columns].rename(
-                                            columns={
-                                                "event_name": "Event",
-                                                "status": "Status",
-                                                "times_fired": "Times Fired",
-                                                "capture_layer": "Seen In",
-                                                "expected": "Expected",
-                                                "validation": "Validation",
-                                            }
-                                        )
-                                        if "Validation" in companion_event_display_df.columns:
-                                            st.dataframe(
-                                                style_validation_table(companion_event_display_df, "Validation"),
-                                                use_container_width=True,
-                                                hide_index=True,
-                                            )
-                                        else:
-                                            st.dataframe(
-                                                companion_event_display_df,
-                                                use_container_width=True,
-                                                hide_index=True,
-                                            )
 
                     st.markdown("### Comscore")
                     if not audit_summary["comscore_present"]:
