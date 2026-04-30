@@ -4590,7 +4590,11 @@ def get_single_audit_template_rules(
     template_rules_list = get_rules_for_validation_template(template, rules_by_template)
     if template_rules_list:
         if is_article_detail_template(template, rules_by_template):
-            return template_rules_list
+            return [rule for rule in template_rules_list if not is_video_related_rule(rule)]
+        if is_video_interaction_template(template, rules_by_template):
+            video_rules = [rule for rule in template_rules_list if is_video_related_rule(rule)]
+            if video_rules:
+                return video_rules
         return template_rules_list
 
     if is_video_interaction_template(template, rules_by_template):
