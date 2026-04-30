@@ -7991,7 +7991,10 @@ This capture is split into three layers:
         single_audit_templates = [
             template
             for template in active_templates
-            if not is_video_interaction_template(template, template_rules_by_template)
+            if not (
+                is_video_interaction_template(template, template_rules_by_template)
+                and not is_article_detail_template(template, template_rules_by_template)
+            )
         ]
         template_options = [
             None,
