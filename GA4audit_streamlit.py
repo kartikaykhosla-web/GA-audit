@@ -8045,37 +8045,26 @@ This capture is split into three layers:
 
             status_box.write("Launching browser...")
             try:
-                # Streamlit Cloud is much more stable on the lighter Selenium path.
-                driver = run_with_timeout(
-                    lambda: create_driver(headless=True, capture_network=False),
-                    25,
-                    "Browser startup timed out",
-                )
+                # Keep the single-audit path direct and lightweight. The timeout wrappers
+                # introduced extra thread/process churn on Streamlit Cloud and ended up
+                # making Chrome startup less reliable than the original fast path.
+                driver = create_driver(headless=True, capture_network=False)
                 try:
                     progress.progress(0.2)
                     status_box.write(f"Auditing {normalized_url} (1/{total_audit_passes})")
-                    audit_timeout_seconds = 45 if requires_video_playback else 30 if requires_scroll_capture else 25
-                    primary_result = run_with_timeout(
-                        lambda: audit_single_url(
-                            driver,
-                            normalized_url,
-                            wait_seconds,
-                            template_rules=selected_template_rules,
-                            force_video_playback=requires_video_playback,
-                            force_scroll_capture=requires_scroll_capture,
-                        ),
-                        audit_timeout_seconds,
-                        "Audit timed out",
+                    primary_result = audit_single_url(
+                        driver,
+                        normalized_url,
+                        wait_seconds,
+                        template_rules=selected_template_rules,
+                        force_video_playback=requires_video_playback,
+                        force_scroll_capture=requires_scroll_capture,
                     )
                     results.append(primary_result)
                 finally:
                     status_box.write("Closing browser...")
                     try:
-                        run_with_timeout(
-                            lambda: driver.quit(),
-                            8,
-                            "Browser shutdown timed out",
-                        )
+                        driver.quit()
                     except Exception:
                         try:
                             service_process = getattr(getattr(driver, "service", None), "process", None)
