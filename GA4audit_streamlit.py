@@ -8160,15 +8160,20 @@ This capture is split into three layers:
                 )
                 for companion_template in companion_validation_templates
             ]
-            selected_template_name_key = _normalize_template_name_key(
-                selected_template.get("template_name") or ""
-            )
-            direct_video_template_selected = "video interaction" in selected_template_name_key
             requires_video_playback = (
-                direct_video_template_selected
-                and single_audit_requires_video_playback(selected_template_rules)
+                single_audit_requires_video_playback(selected_template_rules)
+                or any(
+                    single_audit_requires_video_playback(rule_set)
+                    for rule_set in companion_rule_sets
+                )
             )
-            requires_scroll_capture = single_audit_requires_scroll_capture(selected_template_rules)
+            requires_scroll_capture = (
+                single_audit_requires_scroll_capture(selected_template_rules)
+                or any(
+                    single_audit_requires_scroll_capture(rule_set)
+                    for rule_set in companion_rule_sets
+                )
+            )
             total_audit_passes = 1
             completed_audit_passes = 0
 
@@ -8179,7 +8184,7 @@ This capture is split into three layers:
                 # making Chrome startup less reliable than the original fast path.
                 driver = create_driver(
                     headless=True,
-                    performance_logs=False,
+                    performance_logs=True,
                     capture_network=False,
                 )
                 try:
@@ -8189,7 +8194,7 @@ This capture is split into three layers:
                         driver,
                         normalized_url,
                         wait_seconds,
-                        compact=True,
+                        compact=False,
                         template_rules=selected_template_rules,
                         force_video_playback=requires_video_playback,
                         force_scroll_capture=requires_scroll_capture,
