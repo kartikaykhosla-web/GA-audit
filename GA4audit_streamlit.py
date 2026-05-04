@@ -8185,7 +8185,7 @@ This capture is split into three layers:
                 driver = create_driver(
                     headless=True,
                     performance_logs=True,
-                    capture_network=False,
+                    capture_network=True,
                 )
                 try:
                     progress.progress(0.2)
