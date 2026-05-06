@@ -651,7 +651,10 @@ def create_driver(
 
 def extract_datalayer(driver) -> Tuple[list, Optional[str]]:
     try:
-        dl = driver.execute_script("return window.dataLayer || []")
+        dl = driver.execute_script(
+            "try { return JSON.parse(JSON.stringify(window.dataLayer || [])); } "
+            "catch (error) { return window.dataLayer || []; }"
+        )
         if not isinstance(dl, list):
             dl = [dl]
         return dl, None
@@ -737,6 +740,7 @@ GA4_PRELOAD_SCRIPT = r"""
 (function () {
     try {
         var state = window.__ga4AuditState = window.__ga4AuditState || {
+            initialDataLayer: [],
             dataLayerPushes: [],
             gtagCalls: [],
             transportHits: []
@@ -809,6 +813,20 @@ GA4_PRELOAD_SCRIPT = r"""
             } catch (error) {}
         }
 
+        function snapshotInitialDataLayer(list) {
+            try {
+                if (!list || !list.length || state.initialDataLayer.length) {
+                    return;
+                }
+                for (var i = 0; i < list.length; i++) {
+                    if (list[i] && typeof list[i] === "object") {
+                        state.initialDataLayer.push(safeClone(list[i]));
+                    }
+                }
+                trim(state.initialDataLayer);
+            } catch (error) {}
+        }
+
         function isGaUrl(url) {
             return typeof url === "string" && /(google-analytics\.com\/(g|j|r)\/collect|analytics\.google\.com\/g\/collect|google\.com\/ccm\/collect)/i.test(url);
         }
@@ -864,6 +882,7 @@ GA4_PRELOAD_SCRIPT = r"""
             if (!list) {
                 list = [];
             }
+            snapshotInitialDataLayer(list);
             if (list.__ga4AuditWrappedPush) {
                 return list;
             }
@@ -880,6 +899,7 @@ GA4_PRELOAD_SCRIPT = r"""
             return list;
         }
 
+        snapshotInitialDataLayer(window.dataLayer || []);
         var currentDataLayer = wrapDataLayer(window.dataLayer || []);
         Object.defineProperty(window, "dataLayer", {
             configurable: true,
@@ -888,6 +908,7 @@ GA4_PRELOAD_SCRIPT = r"""
                 return currentDataLayer;
             },
             set: function (value) {
+                snapshotInitialDataLayer(value || []);
                 currentDataLayer = wrapDataLayer(value || []);
             }
         });
@@ -1109,6 +1130,24 @@ def extract_preload_state(driver) -> Dict[str, Any]:
         return state if isinstance(state, dict) else {}
     except Exception:
         return {}
+
+
+def reconstruct_datalayer_from_preload(preload_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    reconstructed: List[Dict[str, Any]] = []
+    for entry in preload_state.get("initialDataLayer", []) or []:
+        if isinstance(entry, dict):
+            reconstructed.append(entry)
+
+    for push_entry in preload_state.get("dataLayerPushes", []) or []:
+        if not isinstance(push_entry, dict):
+            continue
+        args = push_entry.get("args", [])
+        if not isinstance(args, list):
+            continue
+        for arg in args:
+            if isinstance(arg, dict):
+                reconstructed.append(arg)
+    return reconstructed
 
 
 def normalize_gtag_calls(gtag_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -2727,10 +2766,22 @@ def audit_single_url(
     if dl_error:
         result["datalayer_error"] = dl_error
 
+    preload_state = extract_preload_state(driver)
+    preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
+
     result["datalayer_found"] = len(dl_list) > 0
     result["datalayer_length"] = len(dl_list)
 
     pageview_event = find_pageview_event(dl_list)
+    if (not dl_list or pageview_event is None) and preload_datalayer:
+        dl_list = preload_datalayer
+        pageview_event = find_pageview_event(dl_list)
+        result["datalayer_found"] = len(dl_list) > 0
+        result["datalayer_length"] = len(dl_list)
+        if not result.get("datalayer_error"):
+            result["datalayer_error"] = (
+                "Live window.dataLayer was unavailable; rebuilt snapshot from preload-captured data."
+            )
     result["pageview_event_found"] = pageview_event is not None
 
     if pageview_event is not None:
@@ -2769,7 +2820,6 @@ def audit_single_url(
         except Exception as e:
             result["scroll_event_json"] = f"Error serializing scroll event: {e}"
 
-    preload_state = extract_preload_state(driver)
     gtag_calls = preload_state.get("gtagCalls", []) or []
     gtag_events = normalize_gtag_calls(gtag_calls)
     result["ga4_gtag_calls_json"] = "" if compact else safe_json(gtag_calls)
