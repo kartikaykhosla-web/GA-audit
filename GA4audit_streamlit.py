@@ -496,35 +496,19 @@ def create_driver(
         if selected_binary:
             chrome_options.binary_location = selected_binary
 
-        # Single-audit runs on Streamlit Cloud are the most fragile path in this app.
-        # Keep that browser launch minimal and deterministic instead of carrying the
-        # broader bulk-audit/network-capture startup profile.
-        if capture_network:
-            base_args = [
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-quic",
-                "--disable-extensions",
-                "--disable-default-apps",
-                "--disable-sync",
-                "--metrics-recording-only",
-                "--no-first-run",
-                "--window-size=1920,1080",
-            ]
-        else:
-            base_args = [
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-extensions",
-                "--disable-default-apps",
-                "--disable-sync",
-                "--no-first-run",
-                "--window-size=1440,900",
-                "--disable-background-timer-throttling",
-                "--disable-renderer-backgrounding",
-            ]
+        base_args = [
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-quic",
+            "--disable-extensions",
+            "--autoplay-policy=no-user-gesture-required",
+            "--disable-default-apps",
+            "--disable-sync",
+            "--metrics-recording-only",
+            "--no-first-run",
+            "--window-size=1920,1080",
+        ]
         if safe_mode:
             base_args.extend(
                 [
@@ -535,18 +519,6 @@ def create_driver(
             )
         for arg in base_args:
             chrome_options.add_argument(arg)
-
-        if not capture_network:
-            try:
-                chrome_options.add_experimental_option(
-                    "prefs",
-                    {
-                        "profile.default_content_setting_values.images": 2,
-                        "profile.default_content_setting_values.notifications": 2,
-                    },
-                )
-            except Exception:
-                pass
 
         if performance_logs:
             chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
@@ -604,27 +576,27 @@ def create_driver(
                 driver.scopes = NETWORK_CAPTURE_SCOPES
             except Exception:
                 pass
-        if capture_network or performance_logs:
-            try:
-                driver.execute_cdp_cmd("Network.enable", {})
-                driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
-            except Exception:
-                pass
         try:
-            driver.set_page_load_timeout(25 if capture_network else 12)
+            driver.execute_cdp_cmd("Network.enable", {})
+            driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
+        except Exception:
+            pass
+        try:
+            driver.set_page_load_timeout(25)
         except Exception:
             pass
         return driver
 
     startup_errors = []
-    launch_attempts = [False] if not capture_network else [False, True]
+    try:
+        return _launch_driver(_build_chrome_options(safe_mode=False))
+    except Exception as exc:
+        startup_errors.append(f"Primary launch failed: {exc}")
 
-    for safe_mode in launch_attempts:
-        try:
-            return _launch_driver(_build_chrome_options(safe_mode=safe_mode))
-        except Exception as exc:
-            label = "Fallback launch failed" if safe_mode else "Primary launch failed"
-            startup_errors.append(f"{label}: {exc}")
+    try:
+        return _launch_driver(_build_chrome_options(safe_mode=True))
+    except Exception as exc:
+        startup_errors.append(f"Fallback launch failed: {exc}")
 
     browser_version = _read_version(browser_cmd)
     driver_version = _read_version(chromedriver_path or shutil.which("chromedriver") or "")
