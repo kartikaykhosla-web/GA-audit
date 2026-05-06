@@ -2569,6 +2569,43 @@ def compute_implementation_score(
     return status, " | ".join(issues)
 
 
+def audit_capture_has_signals(result: Dict[str, Any]) -> bool:
+    """True when the browser run captured at least one trustworthy audit signal."""
+    if any(
+        bool(result.get(key))
+        for key in (
+            "datalayer_found",
+            "pageview_event_found",
+            "ga4_execution_present",
+            "ga4_collect_present",
+            "ccm_pageview_present",
+            "gtm_present",
+            "gtag_present",
+            "comscore_present",
+            "chartbeat_present",
+        )
+    ):
+        return True
+
+    json_fields = (
+        "all_datalayer_json",
+        "ga4_execution_hits_json",
+        "ga4_execution_events_json",
+        "ga4_network_hits_json",
+        "ga4_network_events_json",
+        "comscore_hits_json",
+        "chartbeat_hits_json",
+    )
+    for field in json_fields:
+        value = load_json_payload(result.get(field, ""), [])
+        if isinstance(value, list) and value:
+            return True
+        if isinstance(value, dict) and value:
+            return True
+
+    return False
+
+
 def _format_hits_sample(hits: List[Dict[str, Any]]) -> str:
     if not hits:
         return ""
@@ -2654,6 +2691,8 @@ def audit_single_url(
         "comscore_hits_json": "",
         "chartbeat_hits_json": "",
         "mapping_table": "",
+        "capture_failed": False,
+        "capture_failure_reason": "",
         "audit_duration_seconds": 0.0,
     }
 
@@ -2884,10 +2923,16 @@ def audit_single_url(
 
     # Scorecard
     status, issues = compute_implementation_score(result, pageview_event)
+    capture_failed = not audit_capture_has_signals(result)
+    if capture_failed:
+        status = "FAIL"
+        issues = "Capture failed: no GA/dataLayer/Comscore/Chartbeat signal was observed in this browser run. Retry once; if it repeats, the browser session likely failed before page scripts executed."
     if result["preload_hook_error"]:
         issues = f"{issues} | Early instrumentation unavailable" if issues else "Early instrumentation unavailable"
     result["status"] = status
     result["issues"] = issues
+    result["capture_failed"] = capture_failed
+    result["capture_failure_reason"] = issues if capture_failed else ""
 
     result["audit_duration_seconds"] = round(time.time() - audit_start, 2)
 
@@ -8341,6 +8386,12 @@ This capture is split into three layers:
                             "Early instrumentation was not installed cleanly. "
                             f"Details: {result['preload_hook_error']}"
                         )
+                    capture_failed = bool(result.get("capture_failed"))
+                    if capture_failed:
+                        st.error(
+                            result.get("capture_failure_reason")
+                            or "Capture failed: no audit signal was observed in this browser run."
+                        )
 
                     stat_col1, stat_col2, stat_col3, stat_col4, stat_col5, stat_col6, stat_col7 = st.columns(7)
                     stat_col1.metric(
@@ -8365,7 +8416,12 @@ This capture is split into three layers:
                         st.caption(
                             f"Template validation active: **{selected_template.get('template_name') or 'Unnamed template'}**"
                         )
-                        if not selected_template_rules:
+                        if capture_failed:
+                            st.warning(
+                                "Template validation is paused because this run captured no audit signal. "
+                                "The red rule mismatches below would be false negatives."
+                            )
+                        elif not selected_template_rules:
                             st.info("This template has no rules yet. Add execution-field or event rules in Template Manager.")
                         elif companion_validation_templates:
                             companion_names = ", ".join(
@@ -8402,7 +8458,11 @@ This capture is split into three layers:
                             st.dataframe(snapshot["computed_df"], use_container_width=True, hide_index=True)
                     with exec_col:
                         st.markdown("#### Execution Payload")
-                        if selected_template_rules:
+                        if capture_failed:
+                            execution_display_df = snapshot["execution_df"]
+                            if execution_display_df.empty and not snapshot["network_df"].empty:
+                                execution_display_df = snapshot["network_df"]
+                        elif selected_template_rules:
                             execution_display_df, _ = build_execution_validation_rows(
                                 snapshot,
                                 selected_template_rules,
@@ -8420,7 +8480,7 @@ This capture is split into three layers:
                         if execution_display_df.empty:
                             st.info("No execution payload matched this event.")
                         else:
-                            if selected_template_rules and "Validation" in execution_display_df.columns:
+                            if (not capture_failed) and selected_template_rules and "Validation" in execution_display_df.columns:
                                 st.dataframe(
                                     style_validation_table(execution_display_df, "Validation"),
                                     use_container_width=True,
@@ -8432,7 +8492,7 @@ This capture is split into three layers:
                     st.markdown("### Events")
                     event_df = (
                         build_event_validation_rows(audit_summary["event_rows"], selected_template_rules)
-                        if selected_template_rules
+                        if selected_template_rules and not capture_failed
                         else pd.DataFrame(audit_summary["event_rows"])
                     )
                     if event_df.empty:
@@ -8465,7 +8525,7 @@ This capture is split into three layers:
                         else:
                             st.dataframe(event_display_df, use_container_width=True, hide_index=True)
 
-                    if companion_validation_templates:
+                    if companion_validation_templates and not capture_failed:
                         st.markdown("### Additional Template Validations")
                         st.caption(
                             "Base article detail checks stay separate from companion validations like video interaction."
@@ -8543,7 +8603,9 @@ This capture is split into three layers:
                                         )
 
                     st.markdown("### Comscore")
-                    if not audit_summary["comscore_present"]:
+                    if capture_failed:
+                        st.info("Comscore check skipped because this browser run captured no audit signal.")
+                    elif not audit_summary["comscore_present"]:
                         st.info("No Comscore tag hit was captured during this audit run.")
                     else:
                         st.caption(
@@ -8570,7 +8632,9 @@ This capture is split into three layers:
                             st.dataframe(comscore_display_df, use_container_width=True, hide_index=True)
 
                     st.markdown("### Chartbeat")
-                    if not audit_summary["chartbeat_present"]:
+                    if capture_failed:
+                        st.info("Chartbeat check skipped because this browser run captured no audit signal.")
+                    elif not audit_summary["chartbeat_present"]:
                         chartbeat_validation_df = pd.DataFrame(
                             [
                                 {
