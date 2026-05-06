@@ -5988,6 +5988,17 @@ def snapshot_ga4_payload(event):
     return payload
 
 
+def snapshot_trigger_payload_from_event(event):
+    if not isinstance(event, dict):
+        return {}
+
+    payload = snapshot_ga4_payload(event)
+    event_name = event.get("event_name")
+    if event_name not in (None, ""):
+        payload.setdefault("event", event_name)
+    return payload
+
+
 def merge_payload_field_values(existing_value, new_value):
     if new_value in (None, ""):
         return existing_value
@@ -6099,26 +6110,40 @@ def build_datalayer_snapshot_export(result: dict):
                 selected_event = item
                 break
 
-    selected_index = None
-    if selected_event:
-        selected_index = find_matching_datalayer_index(data_layer, selected_event)
-        if selected_index is None:
-            selected_index = max(len(data_layer) - 1, 0) if isinstance(data_layer, list) and data_layer else 0
-
-    computed_state = build_computed_state(data_layer, selected_index) if selected_index is not None else {}
-
+    matched_execution = None
+    matched_network = None
     if selected_event:
         matched_execution = best_matching_event(selected_event, execution_events)
         matched_network = best_matching_event(selected_event, network_events)
-    else:
+
+    if not matched_execution:
         matched_execution = (
             find_event_by_name(execution_events, "page_view")
             or find_event_by_name(execution_events, "pageview")
+            or (execution_events[-1] if isinstance(execution_events, list) and execution_events else None)
         )
+    if not matched_network:
         matched_network = (
             find_event_by_name(network_events, "page_view")
             or find_event_by_name(network_events, "pageview")
+            or (network_events[-1] if isinstance(network_events, list) and network_events else None)
         )
+
+    if not selected_event:
+        selected_event = (
+            snapshot_trigger_payload_from_event(matched_execution)
+            or snapshot_trigger_payload_from_event(matched_network)
+        )
+
+    selected_index = None
+    if selected_event:
+        selected_index = find_matching_datalayer_index(data_layer, selected_event)
+        if selected_index is None and isinstance(data_layer, list) and data_layer:
+            selected_index = max(len(data_layer) - 1, 0)
+
+    computed_state = build_computed_state(data_layer, selected_index) if selected_index is not None else {}
+    if not computed_state and selected_event:
+        computed_state = dict(selected_event)
 
     execution_payload = snapshot_ga4_payload(matched_execution)
     network_payload = snapshot_ga4_payload(matched_network)
