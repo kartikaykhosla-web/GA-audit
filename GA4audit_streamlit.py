@@ -464,10 +464,11 @@ COMMON_CONSENT_SELECTORS = [
 
 NETWORK_CAPTURE_SCOPES = [
     r".*googletagmanager\.com/.*",
-    r".*google-analytics\.com/.*collect.*",
+    r".*google-analytics\.com.*collect.*",
+    r".*analytics\.google\.com.*",
     r".*google\.com/ccm/collect.*",
-    r".*scorecardresearch\.com/.*",
-    r".*chartbeat\.net/.*",
+    r".*scorecardresearch\.com.*",
+    r".*chartbeat.*",
 ]
 
 
@@ -941,15 +942,44 @@ GA4_PRELOAD_SCRIPT = r"""
 
         if (navigator && typeof navigator.sendBeacon === "function" && !navigator.sendBeacon.__ga4AuditWrapped) {
             var originalSendBeacon = navigator.sendBeacon.bind(navigator);
+
             var wrappedSendBeacon = function (url, data) {
                 recordTransport("sendBeacon", url, "POST", data);
                 return originalSendBeacon(url, data);
             };
+
             wrappedSendBeacon.__ga4AuditWrapped = true;
             navigator.sendBeacon = wrappedSendBeacon;
         }
 
-})();
+        if (typeof window.fetch === "function") {
+            var originalFetch = window.fetch;
+        
+            window.fetch = function(resource, init) {
+                try {
+                    var url =
+                        typeof resource === "string"
+                            ? resource
+                            : (resource && resource.url) || "";
+        
+                    var method =
+                        (init && init.method) ||
+                        (resource && resource.method) ||
+                        "GET";
+        
+                    var body =
+                        (init && init.body) ||
+                        (resource && resource.body) ||
+                        "";
+        
+                    recordTransport("fetch", url, method, body);
+                } catch (error) {}
+        
+                return originalFetch.apply(this, arguments);
+            };
+        }
+        
+        })();
 """
 
 
