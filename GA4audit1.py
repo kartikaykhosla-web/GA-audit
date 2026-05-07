@@ -189,6 +189,12 @@ def fetch_urls_from_homepage(homepage: str, max_urls: int = 50) -> List[str]:
 
 def create_driver(headless: bool = True):
     chrome_options = Options()
+    chrome_options.page_load_strategy = 'eager'
+    prefs = {
+        "profile.managed_default_content_settings.images": 2,
+    }
+    chrome_options.add_experimental_option("prefs", prefs)
+    
     if headless:
         chrome_options.add_argument("--headless=new")
 
@@ -275,6 +281,7 @@ def create_driver(headless: bool = True):
             driver = webdriver.Chrome(options=chrome_options, service=service)
         else:
             driver = webdriver.Chrome(options=chrome_options)
+        driver.set_page_load_timeout(25)
         try:
             driver.execute_cdp_cmd("Network.enable", {})
             driver.execute_cdp_cmd("Page.enable", {})
@@ -865,7 +872,7 @@ def _try_get_response_body_from_cdp(driver, request_id: str) -> str:
 
 def extract_collect_hits_from_performance_logs(driver, page_domain: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
-        raw_entries = driver.get_log("performance")
+        raw_entries = driver.get_log("performance")[-300:]
     except Exception:
         return [], []
 
@@ -1279,7 +1286,7 @@ def _format_hits_sample(hits: List[Dict[str, Any]]) -> str:
 # Core auditor
 # -------------------------
 
-def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
+def audit_single_url(driver, url: str, wait_seconds: int = 3) -> Dict[str, Any]:
     print(f"\n🔍 Auditing: {url}")
 
     audit_start = time.time()
@@ -1386,7 +1393,7 @@ def audit_single_url(driver, url: str, wait_seconds: int = 8) -> Dict[str, Any]:
     # Scroll the page (Taboola-safe) then extra scrolls to trigger scroll-depth
     scroll_before_taboola(driver)
     try:
-        for p in range(0, 71, 10):
+        for p in [0, 30, 60]:
             driver.execute_script(
                 "window.scrollTo(0, document.body.scrollHeight * arguments[0] / 100);",
                 p,
