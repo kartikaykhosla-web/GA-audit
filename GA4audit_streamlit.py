@@ -711,6 +711,15 @@ CHARTBEAT_GENERIC_PARAM_RE = re.compile(
 GA4_PRELOAD_SCRIPT = r"""
 (function () {
     try {
+        try {
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('consent', 'default', {
+                analytics_storage: 'granted',
+                ad_storage: 'granted'
+            });
+        } catch (consentError) {}
+
         var state = window.__ga4AuditState = window.__ga4AuditState || {
             initialDataLayer: [],
             dataLayerPushes: [],
@@ -2678,10 +2687,6 @@ def audit_single_url(
     # Clear selenium-wire history
     try:
         del driver.requests
-    except Exception:
-        pass
-    try:
-        driver.get_log("performance")
     except Exception:
         pass
 
