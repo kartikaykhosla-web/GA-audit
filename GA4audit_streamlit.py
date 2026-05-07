@@ -30,7 +30,6 @@ try:
     import extra_streamlit_components as stx
 except Exception:
     stx = None
-from selenium import webdriver as selenium_webdriver
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -545,32 +544,20 @@ def create_driver(
         except Exception:
             return ""
 
-    service = Service(executable_path=chromedriver_path) if chromedriver_path else None
-    seleniumwire_options = {
-        "request_storage": "memory",
-        "request_storage_max_size": 120,
-        "disable_encoding": True,
-    }
+   service = Service(executable_path=chromedriver_path) if chromedriver_path else None
+)
 
     def _launch_driver(chrome_options):
-        driver_module = webdriver if capture_network else selenium_webdriver
+        driver_module = webdriver
         if service:
-            if capture_network:
-                driver = driver_module.Chrome(
-                    options=chrome_options,
-                    service=service,
-                    seleniumwire_options=seleniumwire_options,
-                )
-            else:
-                driver = driver_module.Chrome(options=chrome_options, service=service)
-        else:
-            if capture_network:
-                driver = driver_module.Chrome(
-                    options=chrome_options,
-                    seleniumwire_options=seleniumwire_options,
-                )
-            else:
-                driver = driver_module.Chrome(options=chrome_options)
+            driver = driver_module.Chrome(
+                options=chrome_options,
+                service=service,
+            )
+    else:
+            driver = driver_module.Chrome(
+                options=chrome_options,
+            )
         if capture_network:
             try:
                 driver.scopes = NETWORK_CAPTURE_SCOPES
