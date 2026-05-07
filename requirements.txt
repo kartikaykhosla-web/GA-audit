@@ -4,7 +4,6 @@ openpyxl
 requests
 beautifulsoup4
 selenium
-selenium-wire
 blinker<1.8.0
 setuptools<81
 extra-streamlit-components
