@@ -546,12 +546,7 @@ def create_driver(
             return ""
 
     service = Service(executable_path=chromedriver_path) if chromedriver_path else None
-    seleniumwire_options = {
-        "request_storage": "memory",
-        "request_storage_max_size": 120,
-        "disable_encoding": True,
-    }
-
+   
     def _launch_driver(chrome_options):
         driver_module = webdriver if capture_network else selenium_webdriver
         if service:
