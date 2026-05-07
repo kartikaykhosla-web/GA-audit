@@ -2027,21 +2027,21 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
 
     print(f"  ↕ Scrolling page up to ~{target}px (Taboola-safe)")
 
- while current < target:
-    current = min(current + step, target)
+    while current < target:
+        current = min(current + step, target)
 
-    try:
-        driver.execute_script("""
+        try:
+            driver.execute_script("""
             window.scrollTo(0, arguments[0]);
 
             window.dispatchEvent(new Event('scroll'));
             window.dispatchEvent(new Event('focus'));
             document.dispatchEvent(new Event('visibilitychange'));
         """, current)
-    except Exception:
-        break
+        except Exception:
+            break
 
-    time.sleep(scroll_pause)
+        time.sleep(scroll_pause)
 
     # Give Chartbeat / Comscore time to fire engagement beacons
     time.sleep(6)
@@ -2855,6 +2855,17 @@ def audit_single_url(
         net_info = categorize_preload_transport_hits(execution_hits, page_domain)
     else:
         net_info = categorize_network_requests(driver, page_domain)
+        transport_net_info = categorize_preload_transport_hits(execution_hits, page_domain)
+        net_info["comscore_hits"] = merge_network_hits(
+            net_info.get("comscore_hits") or [],
+            transport_net_info.get("comscore_hits") or [],
+        )
+        net_info["chartbeat_hits"] = merge_network_hits(
+            net_info.get("chartbeat_hits") or [],
+            transport_net_info.get("chartbeat_hits") or [],
+        )
+        net_info["comscore_present"] = bool(net_info["comscore_hits"])
+        net_info["chartbeat_present"] = bool(net_info["chartbeat_hits"])
 
     result["gtm_present"] = net_info["gtm_present"]
     result["gtag_present"] = net_info["gtag_present"]
