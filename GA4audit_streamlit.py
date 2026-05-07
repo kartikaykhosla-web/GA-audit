@@ -108,7 +108,7 @@ def run_with_timeout(func, seconds: int, label: str):
             future.cancel()
             raise AuditTimeoutError(f"{label} after {timeout_seconds} seconds.") from exc
         finally:
-            executor.shutdown(wait=True, cancel_futures=True)
+            executor.shutdown(wait=False, cancel_futures=True)
 
     previous_handler = signal.getsignal(signal.SIGALRM)
 
@@ -161,6 +161,16 @@ def normalize_single_url(raw_value: str):
         )
     )
     return original, normalized, ""
+
+
+def _flatten_qs(values):
+    flat = {}
+    for key, raw in values.items():
+        if isinstance(raw, list):
+            flat[key] = raw[0] if raw else ""
+        else:
+            flat[key] = raw
+    return flat
 
 
 def _stringify_value(value):
@@ -464,11 +474,10 @@ COMMON_CONSENT_SELECTORS = [
 
 NETWORK_CAPTURE_SCOPES = [
     r".*googletagmanager\.com/.*",
-    r".*google-analytics\.com.*collect.*",
-    r".*analytics\.google\.com.*",
+    r".*google-analytics\.com/.*collect.*",
     r".*google\.com/ccm/collect.*",
-    r".*scorecardresearch\.com.*",
-    r".*chartbeat.*",
+    r".*scorecardresearch\.com/.*",
+    r".*chartbeat\.net/.*",
 ]
 
 
@@ -481,11 +490,6 @@ def create_driver(
 
     def _build_chrome_options(safe_mode: bool = False):
         chrome_options = Options()
-        prefs = {
-            "profile.default_content_setting_values.notifications": 2,
-            "profile.managed_default_content_settings.geolocation": 2,
-        }
-        chrome_options.add_experimental_option("prefs", prefs)
         chrome_options.page_load_strategy = "eager"
         if headless:
             chrome_options.add_argument("--headless" if safe_mode else "--headless=new")
@@ -566,13 +570,7 @@ def create_driver(
             except Exception:
                 pass
         try:
-            driver.execute_cdp_cmd(
-                "Network.enable",
-            {
-                "maxTotalBufferSize": 1048576,
-                "maxResourceBufferSize": 262144
-            }
-        )
+            driver.execute_cdp_cmd("Network.enable", {})
             driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
         except Exception:
             pass
@@ -723,14 +721,14 @@ GA4_PRELOAD_SCRIPT = r"""
         };
 
         function trim(list) {
-            if (list.length > 150) {
-                list.splice(0, list.length - 150);
+            if (list.length > 500) {
+                list.splice(0, list.length - 500);
             }
         }
 
         function safeClone(value, depth) {
             depth = depth || 0;
-            if (depth > 3) {
+            if (depth > 5) {
                 return "[MaxDepth]";
             }
             if (value === null || value === undefined) {
@@ -772,7 +770,7 @@ GA4_PRELOAD_SCRIPT = r"""
             }
             if (type === "object") {
                 var output = {};
-                Object.keys(value).slice(0, 30).forEach(function (key) {
+                Object.keys(value).slice(0, 100).forEach(function (key) {
                     try {
                         output[key] = safeClone(value[key], depth + 1);
                     } catch (error) {}
@@ -850,9 +848,6 @@ GA4_PRELOAD_SCRIPT = r"""
         function recordTransport(api, url, method, body) {
             try {
                 if (!isAnalyticsUrl(url)) {
-                    return;
-                }
-                if (state.transportHits.length > 100) {
                     return;
                 }
                 push("transportHits", {
@@ -942,44 +937,62 @@ GA4_PRELOAD_SCRIPT = r"""
 
         if (navigator && typeof navigator.sendBeacon === "function" && !navigator.sendBeacon.__ga4AuditWrapped) {
             var originalSendBeacon = navigator.sendBeacon.bind(navigator);
-
             var wrappedSendBeacon = function (url, data) {
                 recordTransport("sendBeacon", url, "POST", data);
                 return originalSendBeacon(url, data);
             };
-
             wrappedSendBeacon.__ga4AuditWrapped = true;
             navigator.sendBeacon = wrappedSendBeacon;
         }
 
-        if (typeof window.fetch === "function") {
-            var originalFetch = window.fetch;
-        
-            window.fetch = function(resource, init) {
-                try {
-                    var url =
-                        typeof resource === "string"
-                            ? resource
-                            : (resource && resource.url) || "";
-        
-                    var method =
-                        (init && init.method) ||
-                        (resource && resource.method) ||
-                        "GET";
-        
-                    var body =
-                        (init && init.body) ||
-                        (resource && resource.body) ||
-                        "";
-        
-                    recordTransport("fetch", url, method, body);
-                } catch (error) {}
-        
-                return originalFetch.apply(this, arguments);
+        if (typeof window.fetch === "function" && !window.fetch.__ga4AuditWrapped) {
+            var originalFetch = window.fetch.bind(window);
+            var wrappedFetch = function (input, init) {
+                var url = typeof input === "string" ? input : (input && input.url) || "";
+                var method = (init && init.method) || (input && input.method) || "GET";
+                var body = (init && init.body) || null;
+                recordTransport("fetch", url, method, body);
+                return originalFetch(input, init);
             };
+            wrappedFetch.__ga4AuditWrapped = true;
+            window.fetch = wrappedFetch;
         }
-        
-        })();
+
+        if (window.XMLHttpRequest && window.XMLHttpRequest.prototype && !window.XMLHttpRequest.prototype.__ga4AuditWrapped) {
+            var proto = window.XMLHttpRequest.prototype;
+            var originalOpen = proto.open;
+            var originalSend = proto.send;
+            proto.open = function (method, url) {
+                this.__ga4AuditMeta = { method: method, url: url };
+                return originalOpen.apply(this, arguments);
+            };
+            proto.send = function (body) {
+                var meta = this.__ga4AuditMeta || {};
+                recordTransport("xhr", meta.url || "", meta.method || "GET", body);
+                return originalSend.apply(this, arguments);
+            };
+            proto.__ga4AuditWrapped = true;
+        }
+
+        try {
+            var proto = window.HTMLImageElement && window.HTMLImageElement.prototype;
+            if (proto) {
+                var descriptor = Object.getOwnPropertyDescriptor(proto, "src");
+                if (descriptor && descriptor.configurable && descriptor.set && !descriptor.set.__ga4AuditWrapped) {
+                    Object.defineProperty(proto, "src", {
+                        configurable: true,
+                        enumerable: descriptor.enumerable,
+                        get: descriptor.get,
+                        set: function (value) {
+                            recordTransport("image", value, "GET", "");
+                            return descriptor.set.call(this, value);
+                        }
+                    });
+                }
+            }
+        } catch (error) {}
+    } catch (error) {}
+})();
 """
 
 
@@ -1065,6 +1078,14 @@ def _decode_ga_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "user_properties": user_properties,
         "raw_fields": payload,
     }
+
+
+def decode_ga4_collect_url(url: str) -> Dict[str, Any]:
+    payloads = _parse_ga_payloads(url)
+    if not payloads:
+        return {"event_name": "", "params": {}, "user_properties": {}, "raw_fields": {}}
+    return _decode_ga_payload(payloads[0])
+
 
 def decode_ga4_collect_request(url: str, body_text: str = "") -> List[Dict[str, Any]]:
     return [_decode_ga_payload(payload) for payload in _parse_ga_payloads(url, body_text)]
@@ -1616,7 +1637,7 @@ def extract_collect_hits_from_performance_logs(
     page_domain: str,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
-        raw_entries = driver.get_log("performance")[-200:]
+        raw_entries = driver.get_log("performance")[-1500:]
     except Exception:
         return [], [], [], []
 
@@ -1700,7 +1721,7 @@ def extract_collect_hits_from_performance_logs(
 
         response_headers = _safe_headers(item.get("response_headers", {}))
         request_body = _truncate_text(str(item.get("request_body") or ""))
-        response_body = ""
+        response_body = _try_get_response_body_from_cdp(driver, request_id)
         hit = {
             "source": "performance_log",
             "request_id": request_id,
@@ -1823,20 +1844,60 @@ def merge_network_hits(*hit_groups: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
 
 def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
+    asset_seen = set()
+    gtm_scripts: List[Dict[str, Any]] = []
+    gtag_scripts: List[Dict[str, Any]] = []
+    ga4_collects: List[Dict[str, Any]] = []
+    ccm_pageviews: List[Dict[str, Any]] = []
+    comscore_hits: List[Dict[str, Any]] = []
+    chartbeat_hits: List[Dict[str, Any]] = []
+
+    for request in getattr(driver, "requests", []) or []:
+        url = getattr(request, "url", "")
+        if not url:
+            continue
+
+        hit = _build_network_hit(request)
+
+        if GTM_SCRIPT_PATTERN.search(url):
+            key = (hit["url"], hit["status"])
+            if key not in asset_seen:
+                asset_seen.add(key)
+                gtm_scripts.append(hit)
+        elif GTAG_SCRIPT_PATTERN.search(url):
+            key = (hit["url"], hit["status"])
+            if key not in asset_seen:
+                asset_seen.add(key)
+                gtag_scripts.append(hit)
+        elif _is_ga4_collect_hit(url):
+            ga4_collects.append(hit)
+        elif _is_ccm_pageview_hit(url, page_domain):
+            ccm_pageviews.append(hit)
+        elif _is_comscore_hit(url):
+            comscore_hits.append(hit)
+        elif _is_chartbeat_hit(url):
+            chartbeat_hits.append(hit)
+
+    if not gtm_scripts and not gtag_scripts:
+        dom_gtm_scripts, dom_gtag_scripts = detect_tag_scripts_in_dom(driver)
+        gtm_scripts = dom_gtm_scripts
+        gtag_scripts = dom_gtag_scripts
+
     return {
-        "gtm_present": False,
-        "gtag_present": False,
-        "ga4_collect_present": False,
-        "ccm_pageview_present": False,
-        "comscore_present": False,
-        "chartbeat_present": False,
-        "gtm_scripts": [],
-        "gtag_scripts": [],
-        "ga4_collects": [],
-        "ccm_pageviews": [],
-        "comscore_hits": [],
-        "chartbeat_hits": [],
+        "gtm_present": bool(gtm_scripts),
+        "gtag_present": bool(gtag_scripts),
+        "ga4_collect_present": bool(ga4_collects),
+        "ccm_pageview_present": bool(ccm_pageviews),
+        "comscore_present": bool(comscore_hits),
+        "chartbeat_present": bool(chartbeat_hits),
+        "gtm_scripts": gtm_scripts,
+        "gtag_scripts": gtag_scripts,
+        "ga4_collects": ga4_collects,
+        "ccm_pageviews": ccm_pageviews,
+        "comscore_hits": comscore_hits,
+        "chartbeat_hits": chartbeat_hits,
     }
+
 
 def categorize_preload_transport_hits(hits: List[Dict[str, Any]], page_domain: str) -> Dict[str, Any]:
     ga4_collects: List[Dict[str, Any]] = []
@@ -1920,7 +1981,7 @@ def sanitize_for_json(obj: Any) -> Any:
 # Scroll helper – stop before Taboola
 # -------------------------
 
-def scroll_before_taboola(driver, scroll_pause: float = 0.2, max_steps: int = 4) -> None:
+def scroll_before_taboola(driver, scroll_pause: float = 0.2, max_steps: int = 8) -> None:
     try:
         info = driver.execute_script(
             """
@@ -1954,7 +2015,7 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
     doc_h = info.get("docHeight") or 0
 
     if taboola_y is None:
-        target = min(doc_h, 2500)
+        target = doc_h
     else:
         target = max(int(taboola_y - 0.5 * viewport_h), 0)
 
@@ -1964,23 +2025,26 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
     step = max(int(target / max_steps), int(viewport_h * 0.3))
     current = 0
 
-    while current < target:
-        current = min(current + step, target)
+    print(f"  ↕ Scrolling page up to ~{target}px (Taboola-safe)")
 
-        try:
-            driver.execute_script(
-                """
-                window.scrollTo(0, arguments[0]);
-                window.dispatchEvent(new Event('scroll'));
-                """,
-                current,
-            )
-        except Exception:
-            break
+ while current < target:
+    current = min(current + step, target)
 
-        time.sleep(scroll_pause)
+    try:
+        driver.execute_script("""
+            window.scrollTo(0, arguments[0]);
 
-    time.sleep(1)
+            window.dispatchEvent(new Event('scroll'));
+            window.dispatchEvent(new Event('focus'));
+            document.dispatchEvent(new Event('visibilitychange'));
+        """, current)
+    except Exception:
+        break
+
+    time.sleep(scroll_pause)
+
+    # Give Chartbeat / Comscore time to fire engagement beacons
+    time.sleep(6)
 # -------------------------
 # Consent helper
 # -------------------------
@@ -2791,17 +2855,6 @@ def audit_single_url(
         net_info = categorize_preload_transport_hits(execution_hits, page_domain)
     else:
         net_info = categorize_network_requests(driver, page_domain)
-        transport_net_info = categorize_preload_transport_hits(execution_hits, page_domain)
-        net_info["comscore_hits"] = merge_network_hits(
-            net_info.get("comscore_hits") or [],
-            transport_net_info.get("comscore_hits") or [],
-        )
-        net_info["chartbeat_hits"] = merge_network_hits(
-            net_info.get("chartbeat_hits") or [],
-            transport_net_info.get("chartbeat_hits") or [],
-        )
-        net_info["comscore_present"] = bool(net_info["comscore_hits"])
-        net_info["chartbeat_present"] = bool(net_info["chartbeat_hits"])
 
     result["gtm_present"] = net_info["gtm_present"]
     result["gtag_present"] = net_info["gtag_present"]
