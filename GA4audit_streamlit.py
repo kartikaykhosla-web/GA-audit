@@ -565,7 +565,13 @@ def create_driver(
             except Exception:
                 pass
         try:
-            driver.execute_cdp_cmd("Network.enable", {})
+            driver.execute_cdp_cmd(
+                "Network.enable",
+            {
+                "maxTotalBufferSize": 1048576,
+                "maxResourceBufferSize": 262144
+            }
+        )
             driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
         except Exception:
             pass
@@ -943,53 +949,6 @@ GA4_PRELOAD_SCRIPT = r"""
             navigator.sendBeacon = wrappedSendBeacon;
         }
 
-        if (typeof window.fetch === "function" && !window.fetch.__ga4AuditWrapped) {
-            var originalFetch = window.fetch.bind(window);
-            var wrappedFetch = function (input, init) {
-                var url = typeof input === "string" ? input : (input && input.url) || "";
-                var method = (init && init.method) || (input && input.method) || "GET";
-                var body = (init && init.body) || null;
-                recordTransport("fetch", url, method, body);
-                return originalFetch(input, init);
-            };
-            wrappedFetch.__ga4AuditWrapped = true;
-            window.fetch = wrappedFetch;
-        }
-
-        if (window.XMLHttpRequest && window.XMLHttpRequest.prototype && !window.XMLHttpRequest.prototype.__ga4AuditWrapped) {
-            var proto = window.XMLHttpRequest.prototype;
-            var originalOpen = proto.open;
-            var originalSend = proto.send;
-            proto.open = function (method, url) {
-                this.__ga4AuditMeta = { method: method, url: url };
-                return originalOpen.apply(this, arguments);
-            };
-            proto.send = function (body) {
-                var meta = this.__ga4AuditMeta || {};
-                recordTransport("xhr", meta.url || "", meta.method || "GET", body);
-                return originalSend.apply(this, arguments);
-            };
-            proto.__ga4AuditWrapped = true;
-        }
-
-        try {
-            var proto = window.HTMLImageElement && window.HTMLImageElement.prototype;
-            if (proto) {
-                var descriptor = Object.getOwnPropertyDescriptor(proto, "src");
-                if (descriptor && descriptor.configurable && descriptor.set && !descriptor.set.__ga4AuditWrapped) {
-                    Object.defineProperty(proto, "src", {
-                        configurable: true,
-                        enumerable: descriptor.enumerable,
-                        get: descriptor.get,
-                        set: function (value) {
-                            recordTransport("image", value, "GET", "");
-                            return descriptor.set.call(this, value);
-                        }
-                    });
-                }
-            }
-        } catch (error) {}
-    } catch (error) {}
 })();
 """
 
@@ -1627,7 +1586,7 @@ def extract_collect_hits_from_performance_logs(
     page_domain: str,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
-        raw_entries = driver.get_log("performance")[-300:]
+        raw_entries = driver.get_log("performance")[-200:]
     except Exception:
         return [], [], [], []
 
