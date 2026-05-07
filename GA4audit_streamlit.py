@@ -801,9 +801,16 @@ GA4_PRELOAD_SCRIPT = r"""
             } catch (error) {}
         }
 
-        function isGaUrl(url) {
-            return typeof url === "string" && /(google-analytics\.com\/(g|j|r)\/collect|analytics\.google\.com\/g\/collect|google\.com\/ccm\/collect)/i.test(url);
-        }
+        function isAnalyticsUrl(url) {
+            return typeof url === "string" && (
+                /(google-analytics\.com\/(g|j|r)\/collect)/i.test(url) ||
+                /(analytics\.google\.com\/g\/collect)/i.test(url) ||
+                /(google\.com\/ccm\/collect)/i.test(url) ||
+                /(scorecardresearch\.com)/i.test(url) ||
+                /(chartbeat\.net)/i.test(url) ||
+                /(chartbeat\.com)/i.test(url)
+            );
+        }     
 
         function asText(data) {
             try {
@@ -840,7 +847,7 @@ GA4_PRELOAD_SCRIPT = r"""
 
         function recordTransport(api, url, method, body) {
             try {
-                if (!isGaUrl(url)) {
+                if (!isAnalyticsUrl(url)) {
                     return;
                 }
                 push("transportHits", {
@@ -1630,7 +1637,7 @@ def extract_collect_hits_from_performance_logs(
     page_domain: str,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
-        raw_entries = driver.get_log("performance")
+        raw_entries = driver.get_log("performance")[-1500:]
     except Exception:
         return [], [], [], []
 
@@ -2021,12 +2028,20 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
     print(f"  ↕ Scrolling page up to ~{target}px (Taboola-safe)")
 
     while current < target:
-        current = min(current + step, target)
-        try:
-            driver.execute_script("window.scrollTo(0, arguments[0]);", current)
-        except Exception:
-            break
-        time.sleep(scroll_pause)
+    current = min(current + step, target)
+
+    try:
+        driver.execute_script("""
+            window.scrollTo(0, arguments[0]);
+
+            window.dispatchEvent(new Event('scroll'));
+            window.dispatchEvent(new Event('focus'));
+            document.dispatchEvent(new Event('visibilitychange'));
+        """, current)
+    except Exception:
+        break
+
+    time.sleep(scroll_pause)
 
 
 # -------------------------
