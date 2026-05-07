@@ -108,7 +108,7 @@ def run_with_timeout(func, seconds: int, label: str):
             future.cancel()
             raise AuditTimeoutError(f"{label} after {timeout_seconds} seconds.") from exc
         finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
 
     previous_handler = signal.getsignal(signal.SIGALRM)
 
@@ -717,13 +717,13 @@ GA4_PRELOAD_SCRIPT = r"""
 
         function trim(list) {
             if (list.length > 150) {
-                list.splice(0, list.length - 500);
+                list.splice(0, list.length - 150);
             }
         }
 
         function safeClone(value, depth) {
             depth = depth || 0;
-            if (depth > 5) {
+            if (depth > 3) {
                 return "[MaxDepth]";
             }
             if (value === null || value === undefined) {
@@ -765,7 +765,7 @@ GA4_PRELOAD_SCRIPT = r"""
             }
             if (type === "object") {
                 var output = {};
-                Object.keys(value).slice(0, 100).forEach(function (key) {
+                Object.keys(value).slice(0, 30).forEach(function (key) {
                     try {
                         output[key] = safeClone(value[key], depth + 1);
                     } catch (error) {}
@@ -843,6 +843,9 @@ GA4_PRELOAD_SCRIPT = r"""
         function recordTransport(api, url, method, body) {
             try {
                 if (!isAnalyticsUrl(url)) {
+                    return;
+                }
+                if (state.transportHits.length > 100) {
                     return;
                 }
                 push("transportHits", {
@@ -1624,7 +1627,7 @@ def extract_collect_hits_from_performance_logs(
     page_domain: str,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
-        raw_entries = driver.get_log("performance")[-600:]
+        raw_entries = driver.get_log("performance")[-300:]
     except Exception:
         return [], [], [], []
 
@@ -1831,13 +1834,20 @@ def merge_network_hits(*hit_groups: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
 
 def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
-    asset_seen = set()
-    gtm_scripts: List[Dict[str, Any]] = []
-    gtag_scripts: List[Dict[str, Any]] = []
-    ga4_collects: List[Dict[str, Any]] = []
-    ccm_pageviews: List[Dict[str, Any]] = []
-    comscore_hits: List[Dict[str, Any]] = []
-    chartbeat_hits: List[Dict[str, Any]] = []
+    return {
+        "gtm_present": False,
+        "gtag_present": False,
+        "ga4_collect_present": False,
+        "ccm_pageview_present": False,
+        "comscore_present": False,
+        "chartbeat_present": False,
+        "gtm_scripts": [],
+        "gtag_scripts": [],
+        "ga4_collects": [],
+        "ccm_pageviews": [],
+        "comscore_hits": [],
+        "chartbeat_hits": [],
+    }
 
 def categorize_preload_transport_hits(hits: List[Dict[str, Any]], page_domain: str) -> Dict[str, Any]:
     ga4_collects: List[Dict[str, Any]] = []
@@ -1955,7 +1965,7 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
     doc_h = info.get("docHeight") or 0
 
     if taboola_y is None:
-        target = doc_h
+        target = min(doc_h, 2500)
     else:
         target = max(int(taboola_y - 0.5 * viewport_h), 0)
 
@@ -1965,26 +1975,23 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
     step = max(int(target / max_steps), int(viewport_h * 0.3))
     current = 0
 
-    print(f"  ↕ Scrolling page up to ~{target}px (Taboola-safe)")
-
     while current < target:
         current = min(current + step, target)
 
         try:
-            driver.execute_script("""
-            window.scrollTo(0, arguments[0]);
-
-            window.dispatchEvent(new Event('scroll'));
-            window.dispatchEvent(new Event('focus'));
-            document.dispatchEvent(new Event('visibilitychange'));
-        """, current)
+            driver.execute_script(
+                """
+                window.scrollTo(0, arguments[0]);
+                window.dispatchEvent(new Event('scroll'));
+                """,
+                current,
+            )
         except Exception:
             break
 
         time.sleep(scroll_pause)
 
-    # Give Chartbeat / Comscore time to fire engagement beacons
-    time.sleep(2)
+    time.sleep(1)
 # -------------------------
 # Consent helper
 # -------------------------
