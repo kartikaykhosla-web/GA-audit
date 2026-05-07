@@ -559,7 +559,6 @@ def create_driver(
                 driver = driver_module.Chrome(
                     options=chrome_options,
                     service=service,
-                    seleniumwire_options=seleniumwire_options,
                 )
             else:
                 driver = driver_module.Chrome(options=chrome_options, service=service)
@@ -567,7 +566,6 @@ def create_driver(
             if capture_network:
                 driver = driver_module.Chrome(
                     options=chrome_options,
-                    seleniumwire_options=seleniumwire_options,
                 )
             else:
                 driver = driver_module.Chrome(options=chrome_options)
