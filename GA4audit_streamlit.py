@@ -1878,12 +1878,6 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
         elif _is_chartbeat_hit(url):
             chartbeat_hits.append(hit)
 
-    perf_ga4_collects, perf_ccm_pageviews, perf_comscore_hits, perf_chartbeat_hits = extract_collect_hits_from_performance_logs(driver, page_domain)
-    ga4_collects = merge_network_hits(ga4_collects, perf_ga4_collects)
-    ccm_pageviews = merge_network_hits(ccm_pageviews, perf_ccm_pageviews)
-    comscore_hits = merge_network_hits(comscore_hits, perf_comscore_hits)
-    chartbeat_hits = merge_network_hits(chartbeat_hits, perf_chartbeat_hits)
-
     if not gtm_scripts and not gtag_scripts:
         dom_gtm_scripts, dom_gtag_scripts = detect_tag_scripts_in_dom(driver)
         gtm_scripts = dom_gtm_scripts
@@ -8281,7 +8275,7 @@ This capture is split into three layers:
                 # making Chrome startup less reliable than the original fast path.
                 driver = create_driver(
                     headless=True,
-                    performance_logs=True,
+                    performance_logs=False,
                     capture_network=True,
                 )
                 try:
