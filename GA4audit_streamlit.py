@@ -546,7 +546,12 @@ def create_driver(
             return ""
 
     service = Service(executable_path=chromedriver_path) if chromedriver_path else None
-   
+    seleniumwire_options = {
+        "request_storage": "memory",
+        "request_storage_max_size": 120,
+        "disable_encoding": True,
+    }
+
     def _launch_driver(chrome_options):
         driver_module = webdriver if capture_network else selenium_webdriver
         if service:
@@ -554,6 +559,7 @@ def create_driver(
                 driver = driver_module.Chrome(
                     options=chrome_options,
                     service=service,
+                    seleniumwire_options=seleniumwire_options,
                 )
             else:
                 driver = driver_module.Chrome(options=chrome_options, service=service)
@@ -561,6 +567,7 @@ def create_driver(
             if capture_network:
                 driver = driver_module.Chrome(
                     options=chrome_options,
+                    seleniumwire_options=seleniumwire_options,
                 )
             else:
                 driver = driver_module.Chrome(options=chrome_options)
@@ -801,16 +808,9 @@ GA4_PRELOAD_SCRIPT = r"""
             } catch (error) {}
         }
 
-        function isAnalyticsUrl(url) {
-            return typeof url === "string" && (
-                /(google-analytics\.com\/(g|j|r)\/collect)/i.test(url) ||
-                /(analytics\.google\.com\/g\/collect)/i.test(url) ||
-                /(google\.com\/ccm\/collect)/i.test(url) ||
-                /(scorecardresearch\.com)/i.test(url) ||
-                /(chartbeat\.net)/i.test(url) ||
-                /(chartbeat\.com)/i.test(url)
-            );
-        }     
+        function isGaUrl(url) {
+            return typeof url === "string" && /(google-analytics\.com\/(g|j|r)\/collect|analytics\.google\.com\/g\/collect|google\.com\/ccm\/collect)/i.test(url);
+        }
 
         function asText(data) {
             try {
@@ -847,7 +847,7 @@ GA4_PRELOAD_SCRIPT = r"""
 
         function recordTransport(api, url, method, body) {
             try {
-                if (!isAnalyticsUrl(url)) {
+                if (!isGaUrl(url)) {
                     return;
                 }
                 push("transportHits", {
@@ -1637,7 +1637,7 @@ def extract_collect_hits_from_performance_logs(
     page_domain: str,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
-        raw_entries = driver.get_log("performance")[-1500:]
+        raw_entries = driver.get_log("performance")
     except Exception:
         return [], [], [], []
 
@@ -2028,20 +2028,12 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
     print(f"  ↕ Scrolling page up to ~{target}px (Taboola-safe)")
 
     while current < target:
-    current = min(current + step, target)
-
-    try:
-        driver.execute_script("""
-            window.scrollTo(0, arguments[0]);
-
-            window.dispatchEvent(new Event('scroll'));
-            window.dispatchEvent(new Event('focus'));
-            document.dispatchEvent(new Event('visibilitychange'));
-        """, current)
-    except Exception:
-        break
-
-    time.sleep(scroll_pause)
+        current = min(current + step, target)
+        try:
+            driver.execute_script("window.scrollTo(0, arguments[0]);", current)
+        except Exception:
+            break
+        time.sleep(scroll_pause)
 
 
 # -------------------------
