@@ -2027,7 +2027,7 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
 
     print(f"  ↕ Scrolling page up to ~{target}px (Taboola-safe)")
 
- while current < target:
+    while current < target:
     current = min(current + step, target)
 
     try:
@@ -2043,8 +2043,7 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
 
     time.sleep(scroll_pause)
 
-    # Give Chartbeat / Comscore time to fire engagement beacons
-    time.sleep(6)
+
 # -------------------------
 # Consent helper
 # -------------------------
