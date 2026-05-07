@@ -2043,9 +2043,6 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
 
     time.sleep(scroll_pause)
 
-# Give Chartbeat / Comscore time to fire engagement beacons
-time.sleep(6)
-
 
 # -------------------------
 # Consent helper
