@@ -163,16 +163,6 @@ def normalize_single_url(raw_value: str):
     return original, normalized, ""
 
 
-def _flatten_qs(values):
-    flat = {}
-    for key, raw in values.items():
-        if isinstance(raw, list):
-            flat[key] = raw[0] if raw else ""
-        else:
-            flat[key] = raw
-    return flat
-
-
 def _stringify_value(value):
     if value is None:
         return ""
@@ -490,6 +480,11 @@ def create_driver(
 
     def _build_chrome_options(safe_mode: bool = False):
         chrome_options = Options()
+        prefs = {
+            "profile.default_content_setting_values.notifications": 2,
+            "profile.managed_default_content_settings.geolocation": 2,
+        }
+        chrome_options.add_experimental_option("prefs", prefs)
         chrome_options.page_load_strategy = "eager"
         if headless:
             chrome_options.add_argument("--headless" if safe_mode else "--headless=new")
@@ -721,7 +716,7 @@ GA4_PRELOAD_SCRIPT = r"""
         };
 
         function trim(list) {
-            if (list.length > 500) {
+            if (list.length > 150) {
                 list.splice(0, list.length - 500);
             }
         }
@@ -1078,14 +1073,6 @@ def _decode_ga_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "user_properties": user_properties,
         "raw_fields": payload,
     }
-
-
-def decode_ga4_collect_url(url: str) -> Dict[str, Any]:
-    payloads = _parse_ga_payloads(url)
-    if not payloads:
-        return {"event_name": "", "params": {}, "user_properties": {}, "raw_fields": {}}
-    return _decode_ga_payload(payloads[0])
-
 
 def decode_ga4_collect_request(url: str, body_text: str = "") -> List[Dict[str, Any]]:
     return [_decode_ga_payload(payload) for payload in _parse_ga_payloads(url, body_text)]
@@ -1637,7 +1624,7 @@ def extract_collect_hits_from_performance_logs(
     page_domain: str,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
-        raw_entries = driver.get_log("performance")[-1500:]
+        raw_entries = driver.get_log("performance")[-600:]
     except Exception:
         return [], [], [], []
 
@@ -1721,7 +1708,7 @@ def extract_collect_hits_from_performance_logs(
 
         response_headers = _safe_headers(item.get("response_headers", {}))
         request_body = _truncate_text(str(item.get("request_body") or ""))
-        response_body = _try_get_response_body_from_cdp(driver, request_id)
+        response_body = ""
         hit = {
             "source": "performance_log",
             "request_id": request_id,
@@ -1852,53 +1839,6 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
     comscore_hits: List[Dict[str, Any]] = []
     chartbeat_hits: List[Dict[str, Any]] = []
 
-    for request in getattr(driver, "requests", []) or []:
-        url = getattr(request, "url", "")
-        if not url:
-            continue
-
-        hit = _build_network_hit(request)
-
-        if GTM_SCRIPT_PATTERN.search(url):
-            key = (hit["url"], hit["status"])
-            if key not in asset_seen:
-                asset_seen.add(key)
-                gtm_scripts.append(hit)
-        elif GTAG_SCRIPT_PATTERN.search(url):
-            key = (hit["url"], hit["status"])
-            if key not in asset_seen:
-                asset_seen.add(key)
-                gtag_scripts.append(hit)
-        elif _is_ga4_collect_hit(url):
-            ga4_collects.append(hit)
-        elif _is_ccm_pageview_hit(url, page_domain):
-            ccm_pageviews.append(hit)
-        elif _is_comscore_hit(url):
-            comscore_hits.append(hit)
-        elif _is_chartbeat_hit(url):
-            chartbeat_hits.append(hit)
-
-    if not gtm_scripts and not gtag_scripts:
-        dom_gtm_scripts, dom_gtag_scripts = detect_tag_scripts_in_dom(driver)
-        gtm_scripts = dom_gtm_scripts
-        gtag_scripts = dom_gtag_scripts
-
-    return {
-        "gtm_present": bool(gtm_scripts),
-        "gtag_present": bool(gtag_scripts),
-        "ga4_collect_present": bool(ga4_collects),
-        "ccm_pageview_present": bool(ccm_pageviews),
-        "comscore_present": bool(comscore_hits),
-        "chartbeat_present": bool(chartbeat_hits),
-        "gtm_scripts": gtm_scripts,
-        "gtag_scripts": gtag_scripts,
-        "ga4_collects": ga4_collects,
-        "ccm_pageviews": ccm_pageviews,
-        "comscore_hits": comscore_hits,
-        "chartbeat_hits": chartbeat_hits,
-    }
-
-
 def categorize_preload_transport_hits(hits: List[Dict[str, Any]], page_domain: str) -> Dict[str, Any]:
     ga4_collects: List[Dict[str, Any]] = []
     ccm_pageviews: List[Dict[str, Any]] = []
@@ -1981,7 +1921,7 @@ def sanitize_for_json(obj: Any) -> Any:
 # Scroll helper – stop before Taboola
 # -------------------------
 
-def scroll_before_taboola(driver, scroll_pause: float = 0.2, max_steps: int = 8) -> None:
+def scroll_before_taboola(driver, scroll_pause: float = 0.2, max_steps: int = 4) -> None:
     try:
         info = driver.execute_script(
             """
@@ -2044,7 +1984,7 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
         time.sleep(scroll_pause)
 
     # Give Chartbeat / Comscore time to fire engagement beacons
-    time.sleep(6)
+    time.sleep(2)
 # -------------------------
 # Consent helper
 # -------------------------
