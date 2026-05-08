@@ -938,6 +938,58 @@ def _safe_headers(headers: Any) -> Dict[str, Any]:
         return {}
 
 
+def _parse_ga_payloads(url: str, body_text: str = "") -> List[Dict[str, Any]]:
+    parsed = urlparse(url)
+    query_payload = _flatten_qs(parse_qs(parsed.query, keep_blank_values=True))
+    body_text = (body_text or "").strip()
+
+    if not body_text or ("[" in body_text and "byteLength" in body_text):
+        return [query_payload]
+
+    lines = [line.strip() for line in body_text.splitlines() if line.strip()]
+    if len(lines) > 1 and all("=" in line for line in lines):
+        return [
+            {
+                **query_payload,
+                **_flatten_qs(parse_qs(line, keep_blank_values=True)),
+            }
+            for line in lines
+        ]
+
+    if "=" in body_text:
+        return [
+            {
+                **query_payload,
+                **_flatten_qs(parse_qs(body_text, keep_blank_values=True)),
+            }
+        ]
+
+    return [{**query_payload, "_body_text": body_text}]
+
+
+def _decode_ga_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    event_name = str(payload.get("en") or payload.get("event_name") or "")
+    params: Dict[str, Any] = {}
+    user_properties: Dict[str, Any] = {}
+
+    for key, value in payload.items():
+        if key.startswith(("ep.", "epn.", "epf.")):
+            params[key.split(".", 1)[1]] = value
+        elif key.startswith(("up.", "upn.")):
+            user_properties[key.split(".", 1)[1]] = value
+
+    for raw_key, clean_key in GA4_CONTEXT_FIELD_MAP.items():
+        if raw_key in payload and clean_key not in params:
+            params[clean_key] = payload[raw_key]
+
+    return {
+        "event_name": event_name,
+        "params": params,
+        "user_properties": user_properties,
+        "raw_fields": payload,
+    }
+
+
 def decode_ga4_collect_request(url: str, body_text: str = "") -> List[Dict[str, Any]]:
     return [_decode_ga_payload(payload) for payload in _parse_ga_payloads(url, body_text)]
 
