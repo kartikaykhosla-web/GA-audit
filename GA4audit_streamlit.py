@@ -8263,13 +8263,14 @@ This capture is split into three layers:
 
             status_box.write("Launching browser...")
             try:
-                # Keep the single-audit path direct and lightweight. The timeout wrappers
-                # introduced extra thread/process churn on Streamlit Cloud and ended up
-                # making Chrome startup less reliable than the original fast path.
-                driver = create_driver(
-                    headless=True,
-                    performance_logs=False,
-                    capture_network=True,
+                driver = run_with_timeout(
+                    lambda: create_driver(
+                        headless=True,
+                        performance_logs=True,
+                        capture_network=True,
+                    ),
+                    45,
+                    "Browser launch timed out",
                 )
                 try:
                     progress.progress(0.2)
