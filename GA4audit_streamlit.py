@@ -474,7 +474,7 @@ COMMON_CONSENT_SELECTORS = [
 
 def create_driver(
     headless: bool = True,
-    performance_logs: bool = True,
+    performance_logs: bool = False,
     capture_network: bool = True,
 ):
     selected_binary, chromedriver_path = _resolve_chrome_paths()
@@ -512,7 +512,7 @@ def create_driver(
             chrome_options.add_argument(arg)
 
         if performance_logs:
-            chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+            
         return chrome_options
 
     browser_cmd = selected_binary or os.environ.get("CHROME_BINARY") or ""
@@ -931,24 +931,6 @@ GA4_PRELOAD_SCRIPT = r"""
             window.fetch = wrappedFetch;
         }
 
-        if (window.XMLHttpRequest && window.XMLHttpRequest.prototype && !window.XMLHttpRequest.prototype.__ga4AuditWrapped) {
-            var proto = window.XMLHttpRequest.prototype;
-            var originalOpen = proto.open;
-            var originalSend = proto.send;
-            proto.open = function (method, url) {
-                this.__ga4AuditMeta = { method: method, url: url };
-                return originalOpen.apply(this, arguments);
-            };
-            proto.send = function (body) {
-                var meta = this.__ga4AuditMeta || {};
-                recordTransport("xhr", meta.url || "", meta.method || "GET", body);
-                return originalSend.apply(this, arguments);
-            };
-            proto.__ga4AuditWrapped = true;
-        }
-
-    } catch (error) {}
-})();
 """
 
 
