@@ -2019,6 +2019,8 @@ ARTICLE_HERO_VIDEO_SELECTORS = [
     ".ArticleDetail_relatedvideo__wvgRP i.videoImage",
     ".relatedvideo img",
     ".relatedvideo .article",
+    ".relatedvideo a",
+    "a[href*='/videos/' i]",
     "i.videoImage",
 ]
 
@@ -2249,20 +2251,12 @@ def _seek_visible_videos_in_frames(driver, target_percent: float = 26.0, depth: 
 def trigger_video_playback(driver) -> bool:
     started = False
     try:
-        has_video = driver.execute_script(
-            "return document.querySelectorAll('video').length > 0;"
-        )
-        if not has_video:
-            return False
+        driver.switch_to.default_content()
     except Exception:
         return False
-        try:
-            driver.switch_to.default_content()
-        except Exception:
-            pass
 
     # Try the hero media near the top of the article before we scroll past it.
-    for percent in (0, 12):
+    for percent in (0, 8, 18):
         try:
             driver.execute_script(
                 """
@@ -2274,7 +2268,7 @@ def trigger_video_playback(driver) -> bool:
                 """,
                 percent,
             )
-            time.sleep(0.02)
+            time.sleep(0.08)
         except Exception:
             pass
         started = _attempt_video_start_in_current_context(driver) or started
@@ -6634,7 +6628,15 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
                         payload_text_parts.append(str(detail.get("Field") or ""))
                         payload_text_parts.append(str(detail.get("Value") or ""))
                 payload_text = " | ".join(part for part in payload_text_parts if part).lower()
-                matched = all(str(value).strip().lower() in payload_text for value in configured_values if str(value).strip())
+                expected_payload_values = [
+                    str(value).strip().lower()
+                    for value in configured_values
+                    if str(value).strip()
+                ]
+                if any("scroll" in event_name for event_name in matched_names):
+                    matched = any(value in payload_text for value in expected_payload_values)
+                else:
+                    matched = all(value in payload_text for value in expected_payload_values)
 
         validation_label = VALIDATION_PASS_LABEL if matched else (
             VALIDATION_OPTIONAL_LABEL if str(rule.get("rule_type") or "").strip().lower() == "optional" else VALIDATION_FAIL_LABEL
