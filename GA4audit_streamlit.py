@@ -1,14 +1,10 @@
 import os
 import re
-import io
-import gc
 import json
 import time
-import glob
 import base64
 import shutil
 import subprocess
-import uuid
 import functools
 import signal
 import threading
@@ -19,9 +15,7 @@ from urllib.parse import urlparse, parse_qs, urlunparse, unquote_plus
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import requests
 import streamlit as st
-from bs4 import BeautifulSoup
 try:
     from streamlit_autorefresh import st_autorefresh
 except Exception:
@@ -69,7 +63,7 @@ def _resolve_chrome_paths() -> Tuple[str, str]:
 
 def safe_json(obj):
     try:
-        return json.dumps(obj, ensure_ascii=False, indent=2)
+        return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
     except Exception:
         try:
             return json.dumps(str(obj), ensure_ascii=False)
@@ -192,40 +186,6 @@ def _normalize_key(name: str) -> str:
 
     return name.replace("_", "").lower()
 
-
-def decode_ga4_collect_url(url: str) -> dict:
-    parsed = urlparse(url)
-    flat = _flatten_qs(parse_qs(parsed.query))
-
-    event_name = flat.get("en", "")
-    event_params = {}
-    user_properties = {}
-
-    for key, value in flat.items():
-        if key.startswith(("ep.", "epn.", "epf.")):
-            clean_key = key.split(".", 1)[1]
-            event_params[clean_key] = value
-        elif key.startswith(("up.", "upn.")):
-            clean_key = key.split(".", 1)[1]
-            user_properties[clean_key] = value
-
-    fallback_fields = {
-        "dl": "page_location",
-        "dt": "page_title",
-        "dr": "page_referrer",
-        "ul": "browser_language",
-    }
-    for raw_key, clean_key in fallback_fields.items():
-        if raw_key in flat and clean_key not in event_params:
-            event_params[clean_key] = flat[raw_key]
-
-    return {
-        "event_name": event_name,
-        "params": event_params,
-        "event_params": event_params,
-        "user_properties": user_properties,
-        "raw_fields": flat,
-    }
 
 
 def merge_ga4_events(event_list):
@@ -512,6 +472,10 @@ def create_driver(
             chrome_options.add_argument(arg)
 
         if performance_logs:
+            chrome_options.set_capability(
+                "goog:loggingPrefs",
+                {"performance": "ALL"},
+            )    
             
         return chrome_options
 
@@ -701,8 +665,8 @@ GA4_PRELOAD_SCRIPT = r"""
         };
 
         function trim(list) {
-            if (list.length > 100) {
-                list.splice(0, list.length - 100);
+            if (list.length > 40) {
+                list.splice(0, list.length - 40);
             }
         }
 
@@ -725,7 +689,7 @@ GA4_PRELOAD_SCRIPT = r"""
                 return "<" + value.tagName.toLowerCase() + ">";
             }
             if (Array.isArray(value)) {
-                return value.slice(0, 50).map(function (entry) {
+                return value.slice(0, 10).map(function (entry) {
                     return safeClone(entry, depth + 1);
                 });
             }
@@ -772,9 +736,11 @@ GA4_PRELOAD_SCRIPT = r"""
                 if (!list || !list.length || state.initialDataLayer.length) {
                     return;
                 }
-                for (var i = 0; i < list.length; i++) {
+                for (var i = 0; i < Math.min(list.length, 20); i++) {
                     if (list[i] && typeof list[i] === "object") {
-                        state.initialDataLayer.push(safeClone(list[i]));
+                        state.initialDataLayer.push({
+                            event: list[i] && list[i].event ? list[i].event : ""
+                        });
                     }
                 }
                 trim(state.initialDataLayer);
@@ -782,7 +748,17 @@ GA4_PRELOAD_SCRIPT = r"""
         }
 
         function isGaUrl(url) {
-            return typeof url === "string" && /(google-analytics\.com\/(g|j|r)\/collect|analytics\.google\.com\/g\/collect|google\.com\/ccm\/collect|scorecardresearch\.com\/(?:b|p)|chartbeat\.(?:net|com)\/ping)/i.test(url);
+            if (typeof url !== "string") {
+                return false;
+            }
+
+            return (
+                url.indexOf("google-analytics.com") !== -1 ||
+                url.indexOf("/ccm/collect") !== -1 ||
+                url.indexOf("scorecardresearch.com") !== -1 ||
+                url.indexOf("chartbeat.net/ping") !== -1 ||
+                url.indexOf("chartbeat.com/ping") !== -1
+            );
         }
 
         function asText(data) {
@@ -827,7 +803,7 @@ GA4_PRELOAD_SCRIPT = r"""
                     api: api,
                     url: String(url || ""),
                     method: String(method || "GET").toUpperCase(),
-                    bodyText: asText(body)
+                    bodyText: ""
                 });
             } catch (error) {}
         }
@@ -876,12 +852,15 @@ GA4_PRELOAD_SCRIPT = r"""
             }
             var wrapped = function () {
                 var args = Array.prototype.slice.call(arguments);
-                push("gtagCalls", {
-                    args: safeClone(args),
+               push("gtagCalls", {
                     command: args[0],
                     event_name: args[0] === "event" ? args[1] : "",
                     params: args[0] === "event" && args[2] && typeof args[2] === "object"
-                        ? safeClone(args[2])
+                        ? {
+                            page_location: args[2].page_location || "",
+                            page_title: args[2].page_title || "",
+                            page_referrer: args[2].page_referrer || ""
+                        }
                         : null
                 });
                 if (typeof original === "function") {
@@ -944,7 +923,7 @@ def _decode_body_bytes(value: Any) -> str:
     return str(value)
 
 
-def _truncate_text(value: str, limit: int = 4000) -> str:
+def _truncate_text(value: str, limit: int = 300) -> str:
     value = value or ""
     if len(value) <= limit:
         return value
@@ -956,75 +935,6 @@ def _safe_headers(headers: Any) -> Dict[str, Any]:
         return {str(key): str(value) for key, value in dict(headers or {}).items()}
     except Exception:
         return {}
-
-
-def _flatten_qs(values: Dict[str, List[str]]) -> Dict[str, str]:
-    flat: Dict[str, str] = {}
-    for key, raw in values.items():
-        flat[key] = raw[0] if raw else ""
-    return flat
-
-
-def _parse_ga_payloads(url: str, body_text: str = "") -> List[Dict[str, Any]]:
-    parsed = urlparse(url)
-    query_payload = _flatten_qs(parse_qs(parsed.query, keep_blank_values=True))
-    body_text = (body_text or "").strip()
-
-    if not body_text or "[" in body_text and "byteLength" in body_text:
-        return [query_payload]
-
-    payloads: List[Dict[str, Any]] = []
-    lines = [line.strip() for line in body_text.splitlines() if line.strip()]
-
-    if len(lines) > 1 and all("=" in line for line in lines):
-        for line in lines:
-            payloads.append(
-                {
-                    **query_payload,
-                    **_flatten_qs(parse_qs(line, keep_blank_values=True)),
-                }
-            )
-        return payloads
-
-    if "=" in body_text:
-        return [
-            {
-                **query_payload,
-                **_flatten_qs(parse_qs(body_text, keep_blank_values=True)),
-            }
-        ]
-
-    return [{**query_payload, "_body_text": body_text}]
-
-
-def _decode_ga_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    event_name = str(payload.get("en") or payload.get("event_name") or "")
-    params: Dict[str, Any] = {}
-    user_properties: Dict[str, Any] = {}
-
-    for key, value in payload.items():
-        if key.startswith(("ep.", "epn.", "epf.")):
-            params[key.split(".", 1)[1]] = value
-        elif key.startswith(("up.", "upn.")):
-            user_properties[key.split(".", 1)[1]] = value
-
-    for raw_key, clean_key in GA4_CONTEXT_FIELD_MAP.items():
-        if raw_key in payload and clean_key not in params:
-            params[clean_key] = payload[raw_key]
-
-    return {
-        "event_name": event_name,
-        "params": params,
-        "user_properties": user_properties,
-        "raw_fields": payload,
-    }
-
-
-def decode_ga4_collect_url(url: str) -> Dict[str, Any]:
-    payloads = _parse_ga_payloads(url)
-    if not payloads:
-        return {"event_name": "", "params": {}, "user_properties": {}, "raw_fields": {}}
-    return _decode_ga_payload(payloads[0])
 
 
 def decode_ga4_collect_request(url: str, body_text: str = "") -> List[Dict[str, Any]]:
@@ -1055,6 +965,7 @@ def extract_preload_state(driver) -> Dict[str, Any]:
 
 def reconstruct_datalayer_from_preload(preload_state: Dict[str, Any]) -> List[Dict[str, Any]]:
     reconstructed: List[Dict[str, Any]] = []
+
     for entry in preload_state.get("initialDataLayer", []) or []:
         if isinstance(entry, dict):
             reconstructed.append(entry)
@@ -1062,12 +973,12 @@ def reconstruct_datalayer_from_preload(preload_state: Dict[str, Any]) -> List[Di
     for push_entry in preload_state.get("dataLayerPushes", []) or []:
         if not isinstance(push_entry, dict):
             continue
-        args = push_entry.get("args", [])
-        if not isinstance(args, list):
-            continue
-        for arg in args:
-            if isinstance(arg, dict):
-                reconstructed.append(arg)
+
+        event_name = str(push_entry.get("event") or "").strip()
+
+        if event_name:
+            reconstructed.append({"event": event_name})
+
     return reconstructed
 
 
@@ -1100,17 +1011,14 @@ def normalize_transport_hits(preload_state: Dict[str, Any]) -> Tuple[List[Dict[s
             continue
         url = str(hit.get("url") or "")
         body_text = _truncate_text(str(hit.get("bodyText") or ""))
-        decoded_events = decode_ga4_collect_request(url, body_text)
+        decoded_events = []
         normalized_hit = {
             "transport": hit.get("api"),
             "request_url": url,
             "method": hit.get("method") or "GET",
-            "request_body": body_text,
             "timestamp": hit.get("timestamp"),
-            "decoded_events": decoded_events,
         }
         hits.append(normalized_hit)
-        events.extend(decoded_events)
 
     return hits, events
 
@@ -1131,27 +1039,21 @@ def _is_chartbeat_hit(url: str) -> bool:
 
 
 def _merge_multivalue_dicts(base: Dict[str, List[str]], extra: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    if not extra:
+        return base or {}
+
     merged = {key: list(values) for key, values in (base or {}).items()}
+
     for key, values in (extra or {}).items():
         bucket = merged.setdefault(key, [])
+
         for value in values or []:
             value_text = str(value)
+
             if value_text not in bucket:
                 bucket.append(value_text)
+
     return merged
-
-
-def _base64_decode_attempt(value: str) -> Optional[str]:
-    text = str(value or "").strip()
-    if len(text) < 8:
-        return None
-    try:
-        raw = base64.b64decode(text, validate=False)
-        decoded = raw.decode("utf-8", errors="ignore")
-        return decoded or None
-    except Exception:
-        return None
-
 
 def _filter_comscore_params(values: Dict[str, List[str]]) -> Dict[str, List[str]]:
     filtered: Dict[str, List[str]] = {}
@@ -1200,10 +1102,6 @@ def _extract_comscore_params_from_text(value: str) -> Dict[str, List[str]]:
     if matches:
         return matches
 
-    decoded = _base64_decode_attempt(text)
-    if decoded and decoded != text:
-        return _extract_comscore_params_from_text(decoded)
-
     return {}
 
 
@@ -1229,34 +1127,8 @@ def _extract_chartbeat_params_from_text(value: str) -> Dict[str, List[str]]:
             matches[key].append(val)
     if matches:
         return matches
-
-    decoded = _base64_decode_attempt(text)
-    if decoded and decoded != text:
-        return _extract_chartbeat_params_from_text(decoded)
-
     return {}
 
-
-def _extract_comscore_params_from_js(value: str) -> Dict[str, List[str]]:
-    text = str(value or "")
-    if not text:
-        return {}
-
-    params = _extract_comscore_params_from_text(text)
-
-    c1_match = COMSCORE_JS_C1_RE.search(text)
-    if c1_match:
-        c1_value = next((group for group in c1_match.groups() if group), "")
-        if c1_value:
-            params = _merge_multivalue_dicts(params, {"c1": [c1_value]})
-
-    c2_match = COMSCORE_JS_C2_RE.search(text)
-    if c2_match:
-        c2_value = next((group for group in c2_match.groups() if group), "")
-        if c2_value:
-            params = _merge_multivalue_dicts(params, {"c2": [c2_value]})
-
-    return params
 
 
 def _build_comscore_capture_row(hit: Dict[str, Any]) -> Dict[str, Any]:
@@ -1264,7 +1136,12 @@ def _build_comscore_capture_row(hit: Dict[str, Any]) -> Dict[str, Any]:
     combined: Dict[str, List[str]] = {}
 
     try:
-        query_params = _filter_comscore_params(parse_qs(urlparse(url).query, keep_blank_values=True))
+        parsed_query = parse_qs(
+            url.split("?", 1)[1] if "?" in url else "",
+            keep_blank_values=True,
+    )
+
+    query_params = _filter_comscore_params(parsed_query)
         combined = _merge_multivalue_dicts(combined, query_params)
     except Exception:
         pass
@@ -1274,29 +1151,6 @@ def _build_comscore_capture_row(hit: Dict[str, Any]) -> Dict[str, Any]:
         _extract_comscore_params_from_text(hit.get("request_body") or ""),
     )
 
-    for headers_field in ("request_headers", "response_headers", "headers"):
-        headers = hit.get(headers_field) or {}
-        if not isinstance(headers, dict):
-            continue
-        for header_value in headers.values():
-            combined = _merge_multivalue_dicts(
-                combined,
-                _extract_comscore_params_from_text(header_value),
-            )
-
-    response_headers = hit.get("response_headers") or hit.get("headers") or {}
-    if isinstance(response_headers, dict):
-        location_value = _case_insensitive_get(response_headers, "Location")
-        combined = _merge_multivalue_dicts(
-            combined,
-            _extract_comscore_params_from_text(location_value or ""),
-        )
-
-    if COMSCORE_JS_PATTERN.search(url):
-        combined = _merge_multivalue_dicts(
-            combined,
-            _extract_comscore_params_from_js(hit.get("response_body") or ""),
-        )
 
     hit_type = "Beacon JS" if COMSCORE_JS_PATTERN.search(url) else "Beacon Request"
 
@@ -1321,7 +1175,13 @@ def _build_chartbeat_capture_row(hit: Dict[str, Any]) -> Dict[str, Any]:
     combined: Dict[str, List[str]] = {}
 
     try:
-        query_params = _filter_chartbeat_params(parse_qs(urlparse(url).query, keep_blank_values=True))
+        parsed_query = parse_qs(
+            url.split("?", 1)[1] if "?" in url else "",
+            keep_blank_values=True,
+    )
+
+    query_params = _filter_comscore_params(parsed_query)
+
         combined = _merge_multivalue_dicts(combined, query_params)
     except Exception:
         pass
@@ -1331,25 +1191,7 @@ def _build_chartbeat_capture_row(hit: Dict[str, Any]) -> Dict[str, Any]:
         _extract_chartbeat_params_from_text(hit.get("request_body") or ""),
     )
 
-    for headers_field in ("request_headers", "response_headers", "headers"):
-        headers = hit.get(headers_field) or {}
-        if not isinstance(headers, dict):
-            continue
-        for header_value in headers.values():
-            combined = _merge_multivalue_dicts(
-                combined,
-                _extract_chartbeat_params_from_text(header_value),
-            )
-
-    response_headers = hit.get("response_headers") or hit.get("headers") or {}
-    if isinstance(response_headers, dict):
-        location_value = _case_insensitive_get(response_headers, "Location")
-        combined = _merge_multivalue_dicts(
-            combined,
-            _extract_chartbeat_params_from_text(location_value or ""),
-        )
-
-    summary_parts = []
+        summary_parts = []
     for key in ("h", "p", "d", "g", "title", "t", "u", "x", "m"):
         value_text = format_exact_value(combined.get(key) or [])
         if value_text:
@@ -1370,7 +1212,7 @@ def _build_chartbeat_capture_row(hit: Dict[str, Any]) -> Dict[str, Any]:
         "u": format_exact_value(combined.get("u") or []),
         "x": format_exact_value(combined.get("x") or []),
         "m": format_exact_value(combined.get("m") or []),
-        "params_summary": " | ".join(summary_parts),
+        "params_summary": "",
     }
 
 
@@ -1471,7 +1313,7 @@ def build_chartbeat_capture_rows(hits: List[Dict[str, Any]]) -> List[Dict[str, A
                 "u": row["u"],
                 "x": row["x"],
                 "m": row["m"],
-                "params_summary": row["params_summary"],
+                "params_summary": "",
                 "request_url": row["request_url"],
             },
         )
@@ -1507,10 +1349,11 @@ def build_chartbeat_capture_rows(hits: List[Dict[str, Any]]) -> List[Dict[str, A
 
 
 def _is_ga4_collect_hit(url: str) -> bool:
-    parsed = urlparse(str(url or ""))
+    url = str(url or "")
+    parsed = urlparse(url)
+
     host = parsed.netloc.lower()
     path = parsed.path.lower()
-    query = parse_qs(parsed.query, keep_blank_values=True)
 
     if not path.endswith("/collect"):
         return False
@@ -1518,10 +1361,12 @@ def _is_ga4_collect_hit(url: str) -> bool:
     if "google-analytics.com" in host:
         return True
 
-    if host.endswith("google.com"):
-        return bool({"v", "tid", "en"} & set(query.keys()))
+    if not host.endswith("google.com"):
+        return False
 
-    return False
+    query = parse_qs(parsed.query, keep_blank_values=True)
+
+    return bool({"v", "tid", "en"} & set(query.keys()))
 
 
 def _is_ccm_pageview_hit(url: str, page_domain: str) -> bool:
@@ -1565,7 +1410,9 @@ def extract_collect_hits_from_performance_logs(
     page_domain: str,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
-        raw_entries = driver.get_log("performance")[-250:]
+        raw_entries = driver.get_log("performance")[-60:]
+        if not raw_entries:
+            return [], [], [], []
     except Exception:
         return [], [], [], []
 
@@ -1658,12 +1505,12 @@ def extract_collect_hits_from_performance_logs(
             "status": item.get("status"),
             "response_status": item.get("response_status"),
             "content_type": item.get("content_type") or _case_insensitive_get(response_headers, "Content-Type"),
-            "headers": response_headers,
-            "request_headers": _safe_headers(item.get("request_headers", {})),
-            "response_headers": response_headers,
+            "headers": {},
+            "request_headers": {},
+            "response_headers": {},
             "request_body": request_body,
             "response_body": response_body,
-            "decoded_events": decode_ga4_collect_request(url, request_body),
+            "decoded_events": [],
         }
 
         if _is_comscore_hit(url):
@@ -1680,18 +1527,21 @@ def extract_collect_hits_from_performance_logs(
 
 def detect_tag_scripts_in_dom(driver) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
-        page_source = str(driver.page_source or "")
+        page_source = driver.execute_script("""
+        return document.documentElement.outerHTML.slice(0, 120000);
+        """) or ""
     except Exception:
         page_source = ""
 
     gtm_scripts: List[Dict[str, Any]] = []
     gtag_scripts: List[Dict[str, Any]] = []
 
-    for match in GTM_SCRIPT_PATTERN.findall(page_source):
+    gtm_match = GTM_SCRIPT_PATTERN.search(page_source)
+    if gtm_match:
         gtm_scripts.append(
             {
                 "source": "dom",
-                "url": match,
+                "url": gtm_match.group(0),
                 "method": "GET",
                 "status": "Observed",
                 "response_status": "Observed",
@@ -1705,11 +1555,12 @@ def detect_tag_scripts_in_dom(driver) -> Tuple[List[Dict[str, Any]], List[Dict[s
             }
         )
 
-    for match in GTAG_SCRIPT_PATTERN.findall(page_source):
+    gtag_match = GTAG_SCRIPT_PATTERN.search(page_source)
+    if gtag_match:
         gtag_scripts.append(
             {
                 "source": "dom",
-                "url": match,
+                "url": gtag_match.group(0),
                 "method": "GET",
                 "status": "Observed",
                 "response_status": "Observed",
@@ -1772,50 +1623,19 @@ def merge_network_hits(*hit_groups: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
 
 def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
-    asset_seen = set()
-    gtm_scripts: List[Dict[str, Any]] = []
-    gtag_scripts: List[Dict[str, Any]] = []
+    dom_gtm_scripts, dom_gtag_scripts = detect_tag_scripts_in_dom(driver)
+    gtm_scripts = dom_gtm_scripts
+    gtag_scripts = dom_gtag_scripts
     ga4_collects: List[Dict[str, Any]] = []
     ccm_pageviews: List[Dict[str, Any]] = []
     comscore_hits: List[Dict[str, Any]] = []
     chartbeat_hits: List[Dict[str, Any]] = []
-
-    for request in getattr(driver, "requests", []) or []:
-        url = getattr(request, "url", "")
-        if not url:
-            continue
-
-        hit = _build_network_hit(request)
-
-        if GTM_SCRIPT_PATTERN.search(url):
-            key = (hit["url"], hit["status"])
-            if key not in asset_seen:
-                asset_seen.add(key)
-                gtm_scripts.append(hit)
-        elif GTAG_SCRIPT_PATTERN.search(url):
-            key = (hit["url"], hit["status"])
-            if key not in asset_seen:
-                asset_seen.add(key)
-                gtag_scripts.append(hit)
-        elif _is_ga4_collect_hit(url):
-            ga4_collects.append(hit)
-        elif _is_ccm_pageview_hit(url, page_domain):
-            ccm_pageviews.append(hit)
-        elif _is_comscore_hit(url):
-            comscore_hits.append(hit)
-        elif _is_chartbeat_hit(url):
-            chartbeat_hits.append(hit)
-
+   
     perf_ga4_collects, perf_ccm_pageviews, perf_comscore_hits, perf_chartbeat_hits = extract_collect_hits_from_performance_logs(driver, page_domain)
     ga4_collects = merge_network_hits(ga4_collects, perf_ga4_collects)
     ccm_pageviews = merge_network_hits(ccm_pageviews, perf_ccm_pageviews)
     comscore_hits = merge_network_hits(comscore_hits, perf_comscore_hits)
     chartbeat_hits = merge_network_hits(chartbeat_hits, perf_chartbeat_hits)
-
-    if not gtm_scripts and not gtag_scripts:
-        dom_gtm_scripts, dom_gtag_scripts = detect_tag_scripts_in_dom(driver)
-        gtm_scripts = dom_gtm_scripts
-        gtag_scripts = dom_gtag_scripts
 
     return {
         "gtm_present": bool(gtm_scripts),
@@ -1915,7 +1735,7 @@ def sanitize_for_json(obj: Any) -> Any:
 # Scroll helper – stop before Taboola
 # -------------------------
 
-def scroll_before_taboola(driver, scroll_pause: float = 0.2, max_steps: int = 8) -> None:
+def scroll_before_taboola(driver, scroll_pause: float = 0.05, max_steps: int = 8) -> None:
     try:
         info = driver.execute_script(
             """
@@ -1949,7 +1769,7 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
     doc_h = info.get("docHeight") or 0
 
     if taboola_y is None:
-        target = doc_h
+        target = min(doc_h, int(viewport_h * 2))
     else:
         target = max(int(taboola_y - 0.5 * viewport_h), 0)
 
@@ -1981,7 +1801,7 @@ def _click_candidate_elements(driver, actions: List[Dict[str, Any]]) -> None:
         except Exception:
             continue
 
-        for element in elements[:20]:
+        for element in elements[:5]:
             try:
                 text = (element.text or "").strip()
                 aria_label = (element.get_attribute("aria-label") or "").strip()
@@ -1999,7 +1819,7 @@ def _click_candidate_elements(driver, actions: List[Dict[str, Any]]) -> None:
                         "label": label or "(matched by selector)",
                     }
                 )
-                time.sleep(0.4)
+                time.sleep(0.1)
                 return
             except Exception:
                 continue
@@ -2021,7 +1841,7 @@ def accept_common_consent(driver) -> List[Dict[str, Any]]:
     except Exception:
         return actions
 
-    for index, frame in enumerate(frames[:3]):
+    for index, frame in enumerate(frames[:1]):
         try:
             driver.switch_to.default_content()
             driver.switch_to.frame(frame)
@@ -2077,7 +1897,7 @@ def _click_element(driver, element) -> bool:
         driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", element)
     except Exception:
         pass
-    time.sleep(0.05)
+    time.sleep(0.01)
     for click_attempt in (
         lambda: element.click(),
         lambda: driver.execute_script("arguments[0].click();", element),
@@ -2120,11 +1940,13 @@ def _play_visible_videos_in_current_context(driver) -> bool:
 
 def _click_video_controls_in_current_context(driver) -> bool:
     for selector in VIDEO_PLAY_SELECTORS:
+        if selector.startswith("[class*='video'"):
+            continue
         try:
             elements = driver.find_elements(By.CSS_SELECTOR, selector)
         except Exception:
             continue
-        for element in elements[:10]:
+        for element in elements[:3]:
             try:
                 if not element.is_displayed():
                     continue
@@ -2145,7 +1967,7 @@ def _click_video_text_targets_in_current_context(driver) -> bool:
             elements = driver.find_elements(By.XPATH, xpath)
         except Exception:
             continue
-        for element in elements[:10]:
+        for element in elements[:2]:
             try:
                 if not element.is_displayed():
                     continue
@@ -2163,7 +1985,7 @@ def _click_article_hero_video_in_current_context(driver) -> bool:
             elements = driver.find_elements(By.CSS_SELECTOR, selector)
         except Exception:
             continue
-        for element in elements[:8]:
+        for element in elements[:2]:
             try:
                 if not element.is_displayed():
                     continue
@@ -2182,19 +2004,16 @@ def _attempt_video_start_in_current_context(driver) -> bool:
         time.sleep(0.15)
     if _play_visible_videos_in_current_context(driver):
         attempted = True
-        time.sleep(0.05)
-    if _click_video_controls_in_current_context(driver):
-        attempted = True
-        time.sleep(0.08)
+        time.sleep(0.01)
     if _click_video_text_targets_in_current_context(driver):
         attempted = True
-        time.sleep(0.08)
+        time.sleep(0.02)
     if _click_video_controls_in_current_context(driver):
         attempted = True
-        time.sleep(0.08)
+        time.sleep(0.02)
     if _play_visible_videos_in_current_context(driver):
         attempted = True
-        time.sleep(0.05)
+        time.sleep(0.01)
     return attempted
 
 
@@ -2203,16 +2022,15 @@ def _attempt_video_start_in_frames(driver, depth: int = 0, max_depth: int = 1) -
         return False
     attempted = False
     try:
-        frames = driver.find_elements(By.TAG_NAME, "iframe")
+        
     except Exception:
         return False
 
-    for frame_index, frame in enumerate(frames[:10]):
+    for frame_index, frame in enumerate(frames[:3]):
         try:
-            driver.switch_to.default_content()
             frames = driver.find_elements(By.TAG_NAME, "iframe")
-            if frame_index >= len(frames):
-                continue
+            if not frames:
+                return False
             driver.switch_to.frame(frames[frame_index])
             attempted = _attempt_video_start_in_current_context(driver) or attempted
             if depth + 1 <= max_depth:
@@ -2276,16 +2094,13 @@ def _seek_visible_videos_in_frames(driver, target_percent: float = 26.0, depth: 
         return False
     updated = False
     try:
-        frames = driver.find_elements(By.TAG_NAME, "iframe")
+        
     except Exception:
         return False
 
-    for frame_index, frame in enumerate(frames[:10]):
+    for frame_index, frame in enumerate(frames[:2]):
         try:
-            driver.switch_to.default_content()
             frames = driver.find_elements(By.TAG_NAME, "iframe")
-            if frame_index >= len(frames):
-                continue
             driver.switch_to.frame(frames[frame_index])
             updated = _seek_visible_videos_in_current_context(driver, target_percent=target_percent) or updated
             if depth + 1 <= max_depth:
@@ -2303,12 +2118,20 @@ def _seek_visible_videos_in_frames(driver, target_percent: float = 26.0, depth: 
 def trigger_video_playback(driver) -> bool:
     started = False
     try:
-        driver.switch_to.default_content()
+        has_video = driver.execute_script(
+            "return document.querySelectorAll('video').length > 0;"
+        )
+        if not has_video:
+            return False
     except Exception:
         return False
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
 
     # Try the hero media near the top of the article before we scroll past it.
-    for percent in (0, 8, 18):
+    for percent in (0, 12):
         try:
             driver.execute_script(
                 """
@@ -2320,7 +2143,7 @@ def trigger_video_playback(driver) -> bool:
                 """,
                 percent,
             )
-            time.sleep(0.08)
+            time.sleep(0.02)
         except Exception:
             pass
         started = _attempt_video_start_in_current_context(driver) or started
@@ -2337,7 +2160,7 @@ def seek_video_progress(driver, target_percent: float = 26.0) -> bool:
     updated = _seek_visible_videos_in_current_context(driver, target_percent=target_percent) or updated
     updated = _seek_visible_videos_in_frames(driver, target_percent=target_percent) or updated
     if updated:
-        time.sleep(0.08)
+        time.sleep(0.02)
     return updated
 
 
@@ -2662,9 +2485,9 @@ def audit_single_url(
                 seek_video_progress(driver, target_percent=26.0)
             except Exception:
                 pass
-            time.sleep(0.15)
+            time.sleep(0.03)
         else:
-            time.sleep(0.08)
+            time.sleep(0.02)
 
     try:
         if requires_scroll_capture:
@@ -7824,7 +7647,7 @@ def format_exact_value(value):
         parts = [part for part in parts if part != ""]
         return ", ".join(parts)
     if isinstance(value, dict):
-        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        return json.dumps(value, ensure_ascii=False)
     return str(value)
 
 
@@ -8234,7 +8057,7 @@ This capture is split into three layers:
                 # making Chrome startup less reliable than the original fast path.
                 driver = create_driver(
                     headless=True,
-                    performance_logs=True,
+                    performance_logs=False,
                     capture_network=True,
                 )
                 try:
