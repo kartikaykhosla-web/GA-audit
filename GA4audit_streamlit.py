@@ -4035,21 +4035,16 @@ def load_templates_and_rules():
         return [], [], "Supabase is not configured yet. Add `supabase.url` and `supabase.service_role_key` to Streamlit secrets."
 
     try:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            template_future = executor.submit(
-                supabase_request,
-                "GET",
-                SUPABASE_TEMPLATE_TABLE,
-                params={"select": "*", "order": "template_name.asc"},
-            )
-            rule_future = executor.submit(
-                supabase_request,
-                "GET",
-                SUPABASE_TEMPLATE_RULE_TABLE,
-                params={"select": "*", "order": "field_name.asc"},
-            )
-            template_rows = template_future.result()
-            rule_rows = rule_future.result()
+        template_rows = supabase_request(
+            "GET",
+            SUPABASE_TEMPLATE_TABLE,
+            params={"select": "*", "order": "template_name.asc"},
+        )
+        rule_rows = supabase_request(
+            "GET",
+            SUPABASE_TEMPLATE_RULE_TABLE,
+            params={"select": "*", "order": "field_name.asc"},
+        )
     except Exception as exc:
         return [], [], str(exc)
 
@@ -5614,11 +5609,12 @@ tab_labels = ["Audit URLs", "Domain Audit", "Compare Prod vs Stage"]
 if is_template_admin(logged_in_email):
     tab_labels.append("Template Manager")
 
-active_section = st.radio(
+active_section_state = st.session_state.get("active_section", tab_labels[0])
+active_section_index = tab_labels.index(active_section_state) if active_section_state in tab_labels else 0
+active_section = st.selectbox(
     "Section",
     tab_labels,
-    horizontal=True,
-    label_visibility="collapsed",
+    index=active_section_index,
     key="active_section",
 )
 
