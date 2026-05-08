@@ -1560,18 +1560,6 @@ def _build_network_hit(request) -> Dict[str, Any]:
     }
 
 
-def _try_get_response_body_from_cdp(driver, request_id: str) -> str:
-    if not request_id:
-        return ""
-    try:
-        body_info = driver.execute_cdp_cmd("Network.getResponseBody", {"requestId": request_id})
-    except Exception:
-        return ""
-    if not isinstance(body_info, dict):
-        return ""
-    return _truncate_text(str(body_info.get("body") or ""))
-
-
 def extract_collect_hits_from_performance_logs(
     driver,
     page_domain: str,
@@ -1661,7 +1649,7 @@ def extract_collect_hits_from_performance_logs(
 
         response_headers = _safe_headers(item.get("response_headers", {}))
         request_body = _truncate_text(str(item.get("request_body") or ""))
-        response_body = _try_get_response_body_from_cdp(driver, request_id)
+        response_body = ""
         hit = {
             "source": "performance_log",
             "request_id": request_id,
