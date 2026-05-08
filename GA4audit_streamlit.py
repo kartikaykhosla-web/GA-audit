@@ -1139,9 +1139,9 @@ def _build_comscore_capture_row(hit: Dict[str, Any]) -> Dict[str, Any]:
         parsed_query = parse_qs(
             url.split("?", 1)[1] if "?" in url else "",
             keep_blank_values=True,
-    )
+        )
 
-    query_params = _filter_comscore_params(parsed_query)
+        query_params = _filter_comscore_params(parsed_query)
         combined = _merge_multivalue_dicts(combined, query_params)
     except Exception:
         pass
@@ -1178,9 +1178,9 @@ def _build_chartbeat_capture_row(hit: Dict[str, Any]) -> Dict[str, Any]:
         parsed_query = parse_qs(
             url.split("?", 1)[1] if "?" in url else "",
             keep_blank_values=True,
-    )
+        )
 
-    query_params = _filter_comscore_params(parsed_query)
+        query_params = _filter_chartbeat_params(parsed_query)
 
         combined = _merge_multivalue_dicts(combined, query_params)
     except Exception:
@@ -1191,7 +1191,7 @@ def _build_chartbeat_capture_row(hit: Dict[str, Any]) -> Dict[str, Any]:
         _extract_chartbeat_params_from_text(hit.get("request_body") or ""),
     )
 
-        summary_parts = []
+    summary_parts = []
     for key in ("h", "p", "d", "g", "title", "t", "u", "x", "m"):
         value_text = format_exact_value(combined.get(key) or [])
         if value_text:
@@ -2022,7 +2022,7 @@ def _attempt_video_start_in_frames(driver, depth: int = 0, max_depth: int = 1) -
         return False
     attempted = False
     try:
-        
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
     except Exception:
         return False
 
@@ -2094,7 +2094,7 @@ def _seek_visible_videos_in_frames(driver, target_percent: float = 26.0, depth: 
         return False
     updated = False
     try:
-        
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
     except Exception:
         return False
 
