@@ -3750,11 +3750,13 @@ def supabase_headers(prefer: str = "") -> Dict[str, str]:
 
 
 def supabase_request(method: str, table: str, params: Optional[dict] = None, payload: Any = None, prefer: str = ""):
+    import requests as http_requests
+
     settings = get_supabase_settings()
     if not settings["url"] or not settings["key"]:
         raise RuntimeError("Supabase is not configured. Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
     url = f"{settings['url']}/rest/v1/{table}"
-    response = requests.request(
+    response = http_requests.request(
         method,
         url,
         headers=supabase_headers(prefer=prefer),
