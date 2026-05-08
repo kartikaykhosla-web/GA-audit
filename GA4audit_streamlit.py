@@ -3676,11 +3676,16 @@ def get_supabase_settings() -> Dict[str, str]:
         "key": (
             os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
             or os.environ.get("SUPABASE_ANON_KEY")
+            or os.environ.get("SUPABASE_KEY")
             or ""
         ).strip(),
     }
     try:
-        raw = st.secrets.get("supabase", {})
+        secrets = st.secrets
+    except Exception:
+        secrets = {}
+    try:
+        raw = secrets.get("supabase", {})
     except Exception:
         raw = {}
     if raw:
@@ -3692,6 +3697,36 @@ def get_supabase_settings() -> Dict[str, str]:
             or raw_settings.get("key")
             or ""
         ).strip()
+    try:
+        connections = secrets.get("connections", {})
+    except Exception:
+        connections = {}
+    if connections:
+        connection_settings = dict(connections.get("supabase", {}) or {})
+        settings["url"] = settings["url"] or str(connection_settings.get("url") or "").strip()
+        settings["key"] = settings["key"] or str(
+            connection_settings.get("service_role_key")
+            or connection_settings.get("anon_key")
+            or connection_settings.get("key")
+            or ""
+        ).strip()
+    try:
+        settings["url"] = settings["url"] or str(
+            secrets.get("SUPABASE_URL")
+            or secrets.get("supabase_url")
+            or ""
+        ).strip()
+        settings["key"] = settings["key"] or str(
+            secrets.get("SUPABASE_SERVICE_ROLE_KEY")
+            or secrets.get("supabase_service_role_key")
+            or secrets.get("SUPABASE_ANON_KEY")
+            or secrets.get("supabase_anon_key")
+            or secrets.get("SUPABASE_KEY")
+            or secrets.get("supabase_key")
+            or ""
+        ).strip()
+    except Exception:
+        pass
     settings["url"] = settings["url"].rstrip("/")
     return settings
 
@@ -3737,10 +3772,13 @@ def supabase_request(method: str, table: str, params: Optional[dict] = None, pay
 
 
 def _supabase_clean_record(record: dict, headers: List[str]) -> dict:
+    record = record or {}
     cleaned = {header: "" for header in headers}
-    for key, value in (record or {}).items():
+    if "active" in headers:
+        cleaned["active"] = True
+    for key, value in record.items():
         if key == "active":
-            cleaned[key] = _normalize_template_flag(value)
+            cleaned[key] = True if value is None or str(value).strip() == "" else _normalize_template_flag(value)
         elif value is None:
             cleaned[str(key)] = ""
         else:
