@@ -15,6 +15,7 @@ from urllib.parse import urlparse, parse_qs, urlunparse, unquote_plus
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import requests
 import streamlit as st
 try:
     from streamlit_autorefresh import st_autorefresh
