@@ -529,7 +529,7 @@ def create_driver(
         match = re.search(r"(\d+)\.", text or "")
         return match.group(1) if match else ""
 
-       def _read_version(command_path: str) -> str:
+    def _read_version(command_path: str) -> str:
         if not command_path or not os.path.exists(command_path):
             return ""
         try:
@@ -548,25 +548,12 @@ def create_driver(
 
     def _launch_driver(chrome_options):
         driver_module = webdriver
-
         if service:
             driver = driver_module.Chrome(
                 options=chrome_options,
                 service=service,
             )
         else:
-            driver = driver_module.Chrome(
-                options=chrome_options,
-            )
-
-    def _launch_driver(chrome_options):
-        driver_module = webdriver
-        if service:
-            driver = driver_module.Chrome(
-                options=chrome_options,
-                service=service,
-            )
-    else:
             driver = driver_module.Chrome(
                 options=chrome_options,
             )
