@@ -1529,6 +1529,74 @@ def extract_collect_hits_from_performance_logs(
     return ga4_collects, ccm_pageviews, comscore_hits, chartbeat_hits
 
 
+def extract_collect_hits_from_resource_timing(
+    driver,
+    page_domain: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    try:
+        entries = driver.execute_script(
+            """
+            return (performance.getEntriesByType("resource") || [])
+              .slice(-500)
+              .map(function(entry) {
+                return {
+                  url: entry.name || "",
+                  initiator_type: entry.initiatorType || "",
+                  response_status: entry.responseStatus || ""
+                };
+              });
+            """
+        )
+    except Exception:
+        return [], [], [], []
+
+    ga4_collects: List[Dict[str, Any]] = []
+    ccm_pageviews: List[Dict[str, Any]] = []
+    comscore_hits: List[Dict[str, Any]] = []
+    chartbeat_hits: List[Dict[str, Any]] = []
+
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        url = str(entry.get("url") or "")
+        if not url:
+            continue
+        if not (
+            _is_ga4_collect_hit(url)
+            or _is_ccm_pageview_hit(url, page_domain)
+            or _is_comscore_hit(url)
+            or _is_chartbeat_hit(url)
+        ):
+            continue
+
+        hit = {
+            "source": "resource_timing",
+            "url": url,
+            "request_url": url,
+            "method": "GET",
+            "status": entry.get("response_status") or "Observed",
+            "response_status": entry.get("response_status") or "Observed",
+            "content_type": "",
+            "headers": {},
+            "request_headers": {},
+            "response_headers": {},
+            "request_body": "",
+            "response_body": "",
+            "decoded_events": decode_ga4_collect_request(url, ""),
+        }
+
+        if _is_comscore_hit(url):
+            comscore_hits.append(hit)
+        elif _is_chartbeat_hit(url):
+            chartbeat_hits.append(hit)
+        elif _is_ccm_pageview_hit(url, page_domain):
+            ccm_pageviews.append(hit)
+        else:
+            ga4_collects.append(hit)
+
+    return ga4_collects, ccm_pageviews, comscore_hits, chartbeat_hits
+
+
 def detect_tag_scripts_in_dom(driver) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
         page_source = driver.execute_script("""
@@ -1640,6 +1708,12 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
     ccm_pageviews = merge_network_hits(ccm_pageviews, perf_ccm_pageviews)
     comscore_hits = merge_network_hits(comscore_hits, perf_comscore_hits)
     chartbeat_hits = merge_network_hits(chartbeat_hits, perf_chartbeat_hits)
+
+    timing_ga4_collects, timing_ccm_pageviews, timing_comscore_hits, timing_chartbeat_hits = extract_collect_hits_from_resource_timing(driver, page_domain)
+    ga4_collects = merge_network_hits(ga4_collects, timing_ga4_collects)
+    ccm_pageviews = merge_network_hits(ccm_pageviews, timing_ccm_pageviews)
+    comscore_hits = merge_network_hits(comscore_hits, timing_comscore_hits)
+    chartbeat_hits = merge_network_hits(chartbeat_hits, timing_chartbeat_hits)
 
     return {
         "gtm_present": bool(gtm_scripts),
@@ -5946,6 +6020,8 @@ def build_datalayer_snapshot_export(result: dict):
     execution_payload = snapshot_ga4_payload(matched_execution)
     network_payload = snapshot_ga4_payload(matched_network)
     event_payloads = build_event_payload_lookup(execution_events, network_events)
+    if not execution_payload and computed_state and selected_event:
+        execution_payload = dict(computed_state)
     ordered_keys = build_snapshot_ordered_keys(
         selected_event,
         computed_state,
@@ -6016,11 +6092,40 @@ def count_datalayer_events(result: dict, target_name: str) -> int:
     return count
 
 
+def build_datalayer_event_records(result: dict):
+    data_layer = load_json_payload(result.get("all_datalayer_json", ""), [])
+    if not isinstance(data_layer, list):
+        return []
+
+    events = []
+    for item in data_layer:
+        if not isinstance(item, dict):
+            continue
+        event_name = str(item.get("event") or "").strip()
+        if not event_name:
+            continue
+        events.append(
+            {
+                "event_name": event_name,
+                "params": {
+                    key: value
+                    for key, value in item.items()
+                    if key != "event" and not str(key).startswith("gtm")
+                },
+            }
+        )
+    return events
+
+
 def extract_event_names(result: dict):
     names = []
     seen = set()
-    for field in ("ga4_execution_events_json", "ga4_network_events_json"):
-        events = load_json_payload(result.get(field, ""), [])
+    event_groups = [
+        load_json_payload(result.get("ga4_execution_events_json", ""), []),
+        load_json_payload(result.get("ga4_network_events_json", ""), []),
+        build_datalayer_event_records(result),
+    ]
+    for events in event_groups:
         if not isinstance(events, list):
             continue
         for event in events:
@@ -7699,12 +7804,14 @@ def format_exact_value(value):
 def build_event_audit_rows(result: dict):
     execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
     network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
+    datalayer_events = build_datalayer_event_records(result)
 
     execution_groups = build_event_groups(execution_events)
     network_groups = build_event_groups(network_events)
+    datalayer_groups = build_event_groups(datalayer_events)
 
     ordered_event_keys = []
-    for event in network_events + execution_events:
+    for event in network_events + execution_events + datalayer_events:
         if not isinstance(event, dict):
             continue
         event_name = str(event.get("event_name") or "").strip() or "(unnamed event)"
@@ -7716,29 +7823,34 @@ def build_event_audit_rows(result: dict):
     for event_key in ordered_event_keys:
         execution_group = execution_groups.get(event_key, {})
         network_group = network_groups.get(event_key, {})
+        datalayer_group = datalayer_groups.get(event_key, {})
         event_name = (
             network_group.get("event_name")
             or execution_group.get("event_name")
+            or datalayer_group.get("event_name")
             or event_key
         )
 
         network_count = int(network_group.get("unique_count", 0) or network_group.get("count", 0) or 0)
         execution_count = int(execution_group.get("unique_count", 0) or execution_group.get("count", 0) or 0)
+        datalayer_count = int(datalayer_group.get("unique_count", 0) or datalayer_group.get("count", 0) or 0)
 
         if network_count:
             status = "Captured in network"
         elif execution_count:
             status = "Captured in execution"
+        elif datalayer_count:
+            status = "Captured in dataLayer"
         else:
             status = "Not observed"
 
-        display_count = network_count or execution_count
+        display_count = network_count or execution_count or datalayer_count
         if normalize_event_name(event_name) == "pageview":
-            datalayer_count = count_datalayer_events(result, "page_view")
-            if datalayer_count:
-                display_count = datalayer_count
+            pageview_datalayer_count = count_datalayer_events(result, "page_view")
+            if pageview_datalayer_count:
+                display_count = pageview_datalayer_count
 
-        event_values = network_group.get("values", {}) or execution_group.get("values", {})
+        event_values = network_group.get("values", {}) or execution_group.get("values", {}) or datalayer_group.get("values", {})
         scroll_percent_values = (
             extract_scroll_percent_values(event_values)
             if is_scroll_event_name(event_name)
@@ -7761,7 +7873,7 @@ def build_event_audit_rows(result: dict):
                 "event_name": event_name,
                 "status": status,
                 "times_fired": display_count,
-                "capture_layer": "Network" if network_count else "Execution only",
+                "capture_layer": "Network" if network_count else ("Execution only" if execution_count else "DataLayer"),
                 "key_values_seen": summary_text,
                 "details": details,
                 "technical_details": build_event_detail_rows(
