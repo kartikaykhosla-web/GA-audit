@@ -991,7 +991,8 @@ def _decode_ga_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def decode_ga4_collect_request(url: str, body_text: str = "") -> List[Dict[str, Any]]:
-    return [_decode_ga_payload(payload) for payload in _parse_ga_payloads(url, body_text)]
+    events = [_decode_ga_payload(payload) for payload in _parse_ga_payloads(url, body_text)]
+    return [event for event in events if str(event.get("event_name") or "").strip()]
 
 
 def install_preload_instrumentation(driver) -> Tuple[bool, str]:
@@ -5739,6 +5740,16 @@ def normalize_dimension_name(value) -> str:
     return name.replace("_", "").lower()
 
 
+FIELD_ALIAS_NORMALIZED = {
+    "author": {"author", "postedby"},
+    "category": {"category", "genre", "articlecategory"},
+    "subcategory": {"subcategory", "articlesubcategory"},
+    "eventname": {"eventname", "event"},
+    "userstatus": {"userstatus", "usertype", "loggeduserid", "registrationstatus"},
+    "tags": {"tags", "tag", "keywords", "keyword", "articletags", "articlekeywords"},
+}
+
+
 def stringify_value(value):
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False)
@@ -6156,6 +6167,8 @@ def build_datalayer_event_records(result: dict):
         event_name = str(item.get("event") or "").strip()
         if not event_name:
             continue
+        if event_name.lower().startswith("gtm."):
+            continue
         events.append(
             {
                 "event_name": event_name,
@@ -6414,8 +6427,9 @@ def find_payload_value(payload: dict, field_name: str):
         return target, format_exact_value(payload.get(target))
 
     target_norm = normalize_dimension_name(target)
+    target_aliases = {target_norm, *FIELD_ALIAS_NORMALIZED.get(target_norm, set())}
     for key, value in payload.items():
-        if normalize_dimension_name(key) == target_norm:
+        if normalize_dimension_name(key) in target_aliases:
             return str(key), format_exact_value(value)
 
     return "", ""
