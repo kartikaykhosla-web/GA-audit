@@ -2031,7 +2031,7 @@ def accept_common_consent(driver) -> List[Dict[str, Any]]:
     except Exception:
         return actions
 
-    for index, frame in enumerate(frames[:10]):
+    for index, frame in enumerate(frames[:3]):
         try:
             driver.switch_to.default_content()
             driver.switch_to.frame(frame)
