@@ -804,7 +804,7 @@ GA4_PRELOAD_SCRIPT = r"""
                     api: api,
                     url: String(url || ""),
                     method: String(method || "GET").toUpperCase(),
-                    bodyText: ""
+                    bodyText: asText(body)
                 });
             } catch (error) {}
         }
@@ -1012,14 +1012,17 @@ def normalize_transport_hits(preload_state: Dict[str, Any]) -> Tuple[List[Dict[s
             continue
         url = str(hit.get("url") or "")
         body_text = _truncate_text(str(hit.get("bodyText") or ""))
-        decoded_events = []
+        decoded_events = decode_ga4_collect_request(url, body_text)
         normalized_hit = {
             "transport": hit.get("api"),
             "request_url": url,
             "method": hit.get("method") or "GET",
+            "request_body": body_text,
             "timestamp": hit.get("timestamp"),
+            "decoded_events": decoded_events,
         }
         hits.append(normalized_hit)
+        events.extend(decoded_events)
 
     return hits, events
 
@@ -1411,7 +1414,7 @@ def extract_collect_hits_from_performance_logs(
     page_domain: str,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
-        raw_entries = driver.get_log("performance")[-60:]
+        raw_entries = driver.get_log("performance")[-250:]
         if not raw_entries:
             return [], [], [], []
     except Exception:
@@ -7953,6 +7956,9 @@ def build_audit_focus_summary(result: dict):
     elif execution_pageview:
         pageview_triggered = True
         pageview_source = "Execution only"
+    elif result.get("pageview_event_found"):
+        pageview_triggered = True
+        pageview_source = "DataLayer"
     else:
         pageview_triggered = False
         pageview_source = "Not fired"
@@ -8099,7 +8105,7 @@ This capture is split into three layers:
                 # making Chrome startup less reliable than the original fast path.
                 driver = create_driver(
                     headless=True,
-                    performance_logs=False,
+                    performance_logs=True,
                     capture_network=True,
                 )
                 try:
