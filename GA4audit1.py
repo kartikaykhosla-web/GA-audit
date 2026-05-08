@@ -5,7 +5,7 @@ GA4 / dataLayer Auditor – with GA4 execution + GA4 collect decoding
 
 Features (per URL):
 - HTTP status hint (requests.get).
-- Headless Chrome (selenium-wire) with:
+- Headless Chrome (Selenium) with:
   - Scroll-before-Taboola (avoid infinite Taboola feed).
   - window.dataLayer snapshot.
   - Last page_view/pageview event.
@@ -378,14 +378,14 @@ GA4_PRELOAD_SCRIPT = r"""
         };
 
         function trim(list) {
-            if (list.length > 500) {
-                list.splice(0, list.length - 500);
+            if (list.length > 100) {
+                list.splice(0, list.length - 100);
             }
         }
 
         function safeClone(value, depth) {
             depth = depth || 0;
-            if (depth > 5) {
+            if (depth > 2) {
                 return "[MaxDepth]";
             }
             if (value === null || value === undefined) {
@@ -427,7 +427,7 @@ GA4_PRELOAD_SCRIPT = r"""
             }
             if (type === "object") {
                 var output = {};
-                Object.keys(value).slice(0, 100).forEach(function (key) {
+                Object.keys(value).slice(0, 20).forEach(function (key) {
                     try {
                         output[key] = safeClone(value[key], depth + 1);
                     } catch (error) {}
@@ -613,23 +613,6 @@ GA4_PRELOAD_SCRIPT = r"""
             proto.__ga4AuditWrapped = true;
         }
 
-        try {
-            var proto = window.HTMLImageElement && window.HTMLImageElement.prototype;
-            if (proto) {
-                var descriptor = Object.getOwnPropertyDescriptor(proto, "src");
-                if (descriptor && descriptor.configurable && descriptor.set && !descriptor.set.__ga4AuditWrapped) {
-                    Object.defineProperty(proto, "src", {
-                        configurable: true,
-                        enumerable: descriptor.enumerable,
-                        get: descriptor.get,
-                        set: function (value) {
-                            recordTransport("image", value, "GET", "");
-                            return descriptor.set.call(this, value);
-                        }
-                    });
-                }
-            }
-        } catch (error) {}
     } catch (error) {}
 })();
 """
@@ -843,7 +826,7 @@ def _build_network_hit(request) -> Dict[str, Any]:
     decoded_events = decode_ga4_collect_request(getattr(request, "url", ""), request_body)
 
     return {
-        "source": "seleniumwire",
+        "source": "driver_requests",
         "url": getattr(request, "url", ""),
         "method": getattr(request, "method", "GET"),
         "status": getattr(response, "status_code", None),
@@ -872,7 +855,7 @@ def _try_get_response_body_from_cdp(driver, request_id: str) -> str:
 
 def extract_collect_hits_from_performance_logs(driver, page_domain: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
-        raw_entries = driver.get_log("performance")[-300:]
+        raw_entries = driver.get_log("performance")[-250:]
     except Exception:
         return [], []
 
@@ -1339,14 +1322,10 @@ def audit_single_url(driver, url: str, wait_seconds: int = 3) -> Dict[str, Any]:
         "audit_duration_seconds": 0.0,
     }
 
-    # HTTP hint
-    try:
-        resp = requests.get(url, timeout=8)
-        result["http_status_hint"] = resp.status_code
-    except Exception as e:
-        result["http_status_hint"] = f"Error: {e}"
+    # Avoid a blocking preflight request; the browser audit is the source of truth.
+    result["http_status_hint"] = "Skipped"
 
-    # Clear selenium-wire history
+    # Clear request history if this driver exposes it.
     try:
         del driver.requests
     except Exception:

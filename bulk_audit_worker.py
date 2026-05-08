@@ -228,21 +228,7 @@ def create_driver():
     driver = webdriver.Chrome(
         service=service,
         options=options,
-        seleniumwire_options={
-            "verify_ssl": False,
-            "disable_encoding": True,
-            "request_storage": "memory",
-            "request_storage_max_size": 200,
-        },
     )
-    driver.scopes = [
-        r".*google-analytics\.com/.*collect.*",
-        r".*analytics\.google\.com/.*collect.*",
-        r".*google\.com/ccm/collect.*",
-        r".*googletagmanager\.com/.*",
-        r".*scorecardresearch\.com/.*",
-        r".*chartbeat\.net/.*ping.*",
-    ]
     return driver
 
 
@@ -252,6 +238,9 @@ def install_datalayer_probe(driver):
   if (window.__gaAuditProbeInstalled) return;
   window.__gaAuditProbeInstalled = true;
   window.__gaAudit = window.__gaAudit || { pushes: [], state: {}, gtag: [], transportHits: [] };
+  const trim = (list) => {
+    if (list && list.length > 100) list.splice(0, list.length - 100);
+  };
   const clone = (value) => {
     try { return JSON.parse(JSON.stringify(value)); } catch (e) { return String(value); }
   };
@@ -272,7 +261,7 @@ def install_datalayer_probe(driver):
     }
   };
   const isGaUrl = (url) => {
-    return typeof url === "string" && /(google-analytics\.com\/(g|j|r)\/collect|analytics\.google\.com\/g\/collect|google\.com\/ccm\/collect)/i.test(url);
+    return typeof url === "string" && /(google-analytics\.com\/(g|j|r)\/collect|analytics\.google\.com\/g\/collect|google\.com\/ccm\/collect|scorecardresearch\.com\/(?:b|p)|chartbeat\.(?:net|com)\/ping)/i.test(url);
   };
   const recordTransport = (api, url, method, body) => {
     try {
@@ -284,6 +273,7 @@ def install_datalayer_probe(driver):
         method: String(method || "GET").toUpperCase(),
         bodyText: asText(body)
       });
+      trim(window.__gaAudit.transportHits);
     } catch (e) {}
   };
   const mergeState = (item) => {
@@ -297,11 +287,13 @@ def install_datalayer_probe(driver):
     const originalPush = window.dataLayer.push;
     window.dataLayer.forEach((item) => {
       window.__gaAudit.pushes.push(clone(item));
+      trim(window.__gaAudit.pushes);
       mergeState(item);
     });
     window.dataLayer.push = function() {
       Array.from(arguments).forEach((item) => {
         window.__gaAudit.pushes.push(clone(item));
+        trim(window.__gaAudit.pushes);
         mergeState(item);
       });
       return originalPush.apply(window.dataLayer, arguments);
@@ -313,6 +305,7 @@ def install_datalayer_probe(driver):
     if (typeof original !== 'function' || original.__gaAuditHooked) return;
     window.gtag = function() {
       window.__gaAudit.gtag.push(clone(Array.from(arguments)));
+      trim(window.__gaAudit.gtag);
       return original.apply(this, arguments);
     };
     window.gtag.__gaAuditHooked = true;
@@ -351,22 +344,6 @@ def install_datalayer_probe(driver):
     };
     proto.__gaAuditHooked = true;
   }
-  try {
-    const proto = window.HTMLImageElement && window.HTMLImageElement.prototype;
-    const descriptor = proto && Object.getOwnPropertyDescriptor(proto, "src");
-    if (descriptor && descriptor.configurable && descriptor.set && !descriptor.set.__gaAuditHooked) {
-      Object.defineProperty(proto, "src", {
-        configurable: true,
-        enumerable: descriptor.enumerable,
-        get: descriptor.get,
-        set: function(value) {
-          recordTransport("image", value, "GET", "");
-          return descriptor.set.call(this, value);
-        }
-      });
-      descriptor.set.__gaAuditHooked = true;
-    }
-  } catch (e) {}
   hookDataLayer();
   hookGtag();
   window.setInterval(() => { hookDataLayer(); hookGtag(); }, 100);
@@ -482,7 +459,8 @@ def is_comscore_request(url: str) -> bool:
 
 def is_chartbeat_request(url: str) -> bool:
     parsed = urlparse(url)
-    return "chartbeat.net" in parsed.netloc.lower() and "ping" in parsed.path.lower()
+    host = parsed.netloc.lower()
+    return ("chartbeat.net" in host or "chartbeat.com" in host) and "ping" in parsed.path.lower()
 
 
 def normalize_event_name(name: str) -> str:
@@ -844,7 +822,7 @@ def extract_network(driver) -> dict:
                 body_text = ""
             for payload in parse_ga_payloads(url, body_text):
                 collect_ids_from_params(payload, measurement_ids, container_ids)
-                ga_events.append(build_ga_event_from_payload(payload, status_code, url, "seleniumwire"))
+                ga_events.append(build_ga_event_from_payload(payload, status_code, url, "driver_requests"))
         elif is_comscore_request(url):
             comscore_hits.append({"status": status_code, "params": params, "url": url})
         elif is_chartbeat_request(url):
@@ -861,12 +839,14 @@ def extract_network(driver) -> dict:
 
 def extract_performance_log_network(driver) -> dict:
     ga_events: List[dict] = []
+    comscore_hits: List[dict] = []
+    chartbeat_hits: List[dict] = []
     measurement_ids = []
     container_ids = []
     try:
-        entries = driver.get_log("performance")
+        entries = driver.get_log("performance")[-250:]
     except Exception:
-        return {"ga_events": [], "measurement_id": "", "container_id": ""}
+        return {"ga_events": [], "comscore_hits": [], "chartbeat_hits": [], "measurement_id": "", "container_id": ""}
 
     for entry in entries or []:
         try:
@@ -877,16 +857,21 @@ def extract_performance_log_network(driver) -> dict:
             continue
         request = message.get("params", {}).get("request", {})
         url = str(request.get("url") or "")
-        if not is_ga_request(url):
-            continue
         params = parse_query(url)
-        body_text = str(request.get("postData") or "")
-        for payload in parse_ga_payloads(url, body_text):
-            collect_ids_from_params(payload, measurement_ids, container_ids)
-            ga_events.append(build_ga_event_from_payload(payload, "", url, "performance_log"))
+        if is_ga_request(url):
+            body_text = str(request.get("postData") or "")
+            for payload in parse_ga_payloads(url, body_text):
+                collect_ids_from_params(payload, measurement_ids, container_ids)
+                ga_events.append(build_ga_event_from_payload(payload, "", url, "performance_log"))
+        elif is_comscore_request(url):
+            comscore_hits.append({"status": "Observed", "params": params, "url": url, "source": "performance_log"})
+        elif is_chartbeat_request(url):
+            chartbeat_hits.append({"status": "Observed", "params": params, "url": url, "source": "performance_log"})
 
     return {
         "ga_events": ga_events,
+        "comscore_hits": comscore_hits,
+        "chartbeat_hits": chartbeat_hits,
         "measurement_id": ", ".join(measurement_ids),
         "container_id": ", ".join(container_ids),
     }
@@ -894,20 +879,28 @@ def extract_performance_log_network(driver) -> dict:
 
 def extract_probe_transport(probe: dict) -> dict:
     ga_events: List[dict] = []
+    comscore_hits: List[dict] = []
+    chartbeat_hits: List[dict] = []
     measurement_ids = []
     container_ids = []
     for hit in probe.get("transportHits", []) or []:
         if not isinstance(hit, dict):
             continue
         url = str(hit.get("url") or "")
-        if not is_ga_request(url):
-            continue
-        body_text = str(hit.get("bodyText") or "")
-        for payload in parse_ga_payloads(url, body_text):
-            collect_ids_from_params(payload, measurement_ids, container_ids)
-            ga_events.append(build_ga_event_from_payload(payload, "Observed", url, f"probe_{hit.get('api') or 'transport'}"))
+        source = f"probe_{hit.get('api') or 'transport'}"
+        if is_ga_request(url):
+            body_text = str(hit.get("bodyText") or "")
+            for payload in parse_ga_payloads(url, body_text):
+                collect_ids_from_params(payload, measurement_ids, container_ids)
+                ga_events.append(build_ga_event_from_payload(payload, "Observed", url, source))
+        elif is_comscore_request(url):
+            comscore_hits.append({"status": "Observed", "params": parse_query(url), "url": url, "source": source})
+        elif is_chartbeat_request(url):
+            chartbeat_hits.append({"status": "Observed", "params": parse_query(url), "url": url, "source": source})
     return {
         "ga_events": ga_events,
+        "comscore_hits": comscore_hits,
+        "chartbeat_hits": chartbeat_hits,
         "measurement_id": ", ".join(measurement_ids),
         "container_id": ", ".join(container_ids),
     }
@@ -958,6 +951,25 @@ def join_nonempty_unique(*values: str) -> str:
             if text and text != "Not found" and text not in output:
                 output.append(text)
     return ", ".join(output) or "Not found"
+
+
+def merge_hit_rows(*groups: List[dict]) -> List[dict]:
+    seen = set()
+    merged = []
+    for group in groups:
+        for hit in group or []:
+            if not isinstance(hit, dict):
+                continue
+            key = (
+                hit.get("url"),
+                json.dumps(hit.get("params") or {}, sort_keys=True, ensure_ascii=False),
+                hit.get("source"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(hit)
+    return merged
 
 
 def normalize_compare_text(value: Any) -> str:
@@ -1126,7 +1138,7 @@ def select_primary_execution_event(ga_events: List[dict]) -> Optional[dict]:
     if not ga_events:
         return None
     preferred_names = ("page_view", "pageview")
-    preferred_sources = ("seleniumwire", "performance_log", "probe_sendBeacon", "probe_fetch", "probe_xhr", "probe_image", "gtag")
+    preferred_sources = ("driver_requests", "performance_log", "probe_sendBeacon", "probe_fetch", "probe_xhr", "gtag")
     for event_name in preferred_names:
         for source in preferred_sources:
             for event in ga_events:
@@ -1492,6 +1504,16 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         transport_network["ga_events"],
         gtag_events,
     )
+    comscore_hits = merge_hit_rows(
+        network["comscore_hits"],
+        performance_network["comscore_hits"],
+        transport_network["comscore_hits"],
+    )
+    chartbeat_hits = merge_hit_rows(
+        network["chartbeat_hits"],
+        performance_network["chartbeat_hits"],
+        transport_network["chartbeat_hits"],
+    )
     selected_event = {}
     if isinstance(data_layer, list):
         for item in reversed(data_layer):
@@ -1520,7 +1542,7 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
             for event in ga_events
             if normalize_event_name(event.get("event_name") or "") == "page_view"
         }
-        if any(source in {"seleniumwire", "performance_log"} or source.startswith("probe_") for source in pageview_sources):
+        if any(source in {"driver_requests", "performance_log"} or source.startswith("probe_") for source in pageview_sources):
             pageview_source = "Network"
         elif "gtag" in pageview_sources:
             pageview_source = "Execution"
@@ -1604,8 +1626,8 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         "events_fired": ", ".join(event_set) or "None",
         "container_id": container_id,
         "measurement_id": measurement_id,
-        "comscore_present": bool(network["comscore_hits"]),
-        "chartbeat_present": bool(network["chartbeat_hits"]),
+        "comscore_present": bool(comscore_hits),
+        "chartbeat_present": bool(chartbeat_hits),
         "issues": "; ".join(issues) or "None",
         "execution_failures": execution_failures,
         "event_failures": event_failures,
@@ -1613,8 +1635,8 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         "detail_payload": {
             "execution_values": execution_values,
             "events": build_event_summary(ga_events),
-            "comscore_hits": network["comscore_hits"][:5],
-            "chartbeat_hits": network["chartbeat_hits"][:5],
+            "comscore_hits": comscore_hits[:5],
+            "chartbeat_hits": chartbeat_hits[:5],
             "dataLayer_state": state,
         },
     }

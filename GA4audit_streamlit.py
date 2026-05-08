@@ -471,14 +471,6 @@ COMMON_CONSENT_SELECTORS = [
 
 # Embedded GA4 audit engine
 
-NETWORK_CAPTURE_SCOPES = [
-    r".*googletagmanager\.com/.*",
-    r".*google-analytics\.com/.*collect.*",
-    r".*google\.com/ccm/collect.*",
-    r".*scorecardresearch\.com/.*",
-    r".*chartbeat\.net/.*",
-]
-
 
 def create_driver(
     headless: bool = True,
@@ -557,11 +549,6 @@ def create_driver(
             driver = driver_module.Chrome(
                 options=chrome_options,
             )
-        if capture_network:
-            try:
-                driver.scopes = NETWORK_CAPTURE_SCOPES
-            except Exception:
-                pass
         try:
             driver.execute_cdp_cmd("Network.enable", {})
             driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
@@ -714,14 +701,14 @@ GA4_PRELOAD_SCRIPT = r"""
         };
 
         function trim(list) {
-            if (list.length > 500) {
-                list.splice(0, list.length - 500);
+            if (list.length > 100) {
+                list.splice(0, list.length - 100);
             }
         }
 
         function safeClone(value, depth) {
             depth = depth || 0;
-            if (depth > 5) {
+            if (depth > 2) {
                 return "[MaxDepth]";
             }
             if (value === null || value === undefined) {
@@ -763,7 +750,7 @@ GA4_PRELOAD_SCRIPT = r"""
             }
             if (type === "object") {
                 var output = {};
-                Object.keys(value).slice(0, 100).forEach(function (key) {
+                Object.keys(value).slice(0, 20).forEach(function (key) {
                     try {
                         output[key] = safeClone(value[key], depth + 1);
                     } catch (error) {}
@@ -960,23 +947,6 @@ GA4_PRELOAD_SCRIPT = r"""
             proto.__ga4AuditWrapped = true;
         }
 
-        try {
-            var proto = window.HTMLImageElement && window.HTMLImageElement.prototype;
-            if (proto) {
-                var descriptor = Object.getOwnPropertyDescriptor(proto, "src");
-                if (descriptor && descriptor.configurable && descriptor.set && !descriptor.set.__ga4AuditWrapped) {
-                    Object.defineProperty(proto, "src", {
-                        configurable: true,
-                        enumerable: descriptor.enumerable,
-                        get: descriptor.get,
-                        set: function (value) {
-                            recordTransport("image", value, "GET", "");
-                            return descriptor.set.call(this, value);
-                        }
-                    });
-                }
-            }
-        } catch (error) {}
     } catch (error) {}
 })();
 """
@@ -1591,7 +1561,7 @@ def _build_network_hit(request) -> Dict[str, Any]:
     decoded_events = decode_ga4_collect_request(getattr(request, "url", ""), request_body)
 
     return {
-        "source": "seleniumwire",
+        "source": "driver_requests",
         "url": getattr(request, "url", ""),
         "method": getattr(request, "method", "GET"),
         "status": getattr(response, "status_code", None),
@@ -1623,7 +1593,7 @@ def extract_collect_hits_from_performance_logs(
     page_domain: str,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     try:
-        raw_entries = driver.get_log("performance")
+        raw_entries = driver.get_log("performance")[-250:]
     except Exception:
         return [], [], [], []
 
@@ -1863,6 +1833,12 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
             comscore_hits.append(hit)
         elif _is_chartbeat_hit(url):
             chartbeat_hits.append(hit)
+
+    perf_ga4_collects, perf_ccm_pageviews, perf_comscore_hits, perf_chartbeat_hits = extract_collect_hits_from_performance_logs(driver, page_domain)
+    ga4_collects = merge_network_hits(ga4_collects, perf_ga4_collects)
+    ccm_pageviews = merge_network_hits(ccm_pageviews, perf_ccm_pageviews)
+    comscore_hits = merge_network_hits(comscore_hits, perf_comscore_hits)
+    chartbeat_hits = merge_network_hits(chartbeat_hits, perf_chartbeat_hits)
 
     if not gtm_scripts and not gtag_scripts:
         dom_gtm_scripts, dom_gtag_scripts = detect_tag_scripts_in_dom(driver)
@@ -2657,14 +2633,10 @@ def audit_single_url(
         "audit_duration_seconds": 0.0,
     }
 
-    # HTTP hint
-    try:
-        resp = requests.get(url, timeout=0.5)
-        result["http_status_hint"] = resp.status_code
-    except Exception as e:
-        result["http_status_hint"] = f"Error: {e}"
+    # Avoid a blocking preflight request; the browser audit is the source of truth.
+    result["http_status_hint"] = "Skipped"
 
-    # Clear selenium-wire history
+    # Clear request history if this driver exposes it.
     try:
         del driver.requests
     except Exception:
@@ -2826,13 +2798,21 @@ def audit_single_url(
     result["ga4_execution_hits_json"] = "" if compact else safe_json(execution_hits)
     result["ga4_execution_events_json"] = safe_json(execution_events)
 
-    # Network hits. Reuse preload transport hits when available because plain Selenium
-    # single-audit runs do not populate driver.requests.
+    # Network hits. In plain Selenium, CDP performance logs are the primary source
+    # and preload transport hits supplement sendBeacon/fetch/xhr/image capture.
     page_domain = urlparse(url).netloc
-    if compact or execution_hits:
+    if compact:
         net_info = categorize_preload_transport_hits(execution_hits, page_domain)
     else:
         net_info = categorize_network_requests(driver, page_domain)
+        if execution_hits:
+            preload_net_info = categorize_preload_transport_hits(execution_hits, page_domain)
+            for hits_key in ("ga4_collects", "ccm_pageviews", "comscore_hits", "chartbeat_hits"):
+                net_info[hits_key] = merge_network_hits(net_info[hits_key], preload_net_info[hits_key])
+            net_info["ga4_collect_present"] = bool(net_info["ga4_collects"])
+            net_info["ccm_pageview_present"] = bool(net_info["ccm_pageviews"])
+            net_info["comscore_present"] = bool(net_info["comscore_hits"])
+            net_info["chartbeat_present"] = bool(net_info["chartbeat_hits"])
 
     result["gtm_present"] = net_info["gtm_present"]
     result["gtag_present"] = net_info["gtag_present"]
@@ -8282,7 +8262,7 @@ This capture is split into three layers:
                 # making Chrome startup less reliable than the original fast path.
                 driver = create_driver(
                     headless=True,
-                    performance_logs=False,
+                    performance_logs=True,
                     capture_network=True,
                 )
                 try:
