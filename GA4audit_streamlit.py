@@ -795,7 +795,7 @@ GA4_PRELOAD_SCRIPT = r"""
         }
 
         function isGaUrl(url) {
-            return typeof url === "string" && /(google-analytics\.com\/(g|j|r)\/collect|analytics\.google\.com\/g\/collect|google\.com\/ccm\/collect)/i.test(url);
+            return typeof url === "string" && /(google-analytics\.com\/(g|j|r)\/collect|analytics\.google\.com\/g\/collect|google\.com\/ccm\/collect|scorecardresearch\.com\/(?:b|p)|chartbeat\.(?:net|com)\/ping)/i.test(url);
         }
 
         function asText(data) {
@@ -1864,6 +1864,12 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
         elif _is_chartbeat_hit(url):
             chartbeat_hits.append(hit)
 
+    perf_ga4_collects, perf_ccm_pageviews, perf_comscore_hits, perf_chartbeat_hits = extract_collect_hits_from_performance_logs(driver, page_domain)
+    ga4_collects = merge_network_hits(ga4_collects, perf_ga4_collects)
+    ccm_pageviews = merge_network_hits(ccm_pageviews, perf_ccm_pageviews)
+    comscore_hits = merge_network_hits(comscore_hits, perf_comscore_hits)
+    chartbeat_hits = merge_network_hits(chartbeat_hits, perf_chartbeat_hits)
+
     if not gtm_scripts and not gtag_scripts:
         dom_gtm_scripts, dom_gtag_scripts = detect_tag_scripts_in_dom(driver)
         gtm_scripts = dom_gtm_scripts
@@ -2826,9 +2832,10 @@ def audit_single_url(
     result["ga4_execution_hits_json"] = "" if compact else safe_json(execution_hits)
     result["ga4_execution_events_json"] = safe_json(execution_events)
 
-    # Network hits. Domain-scale compact mode avoids Selenium Wire and uses the preload transport hook.
+    # Network hits. Reuse preload transport hits when available because plain Selenium
+    # single-audit runs do not populate driver.requests.
     page_domain = urlparse(url).netloc
-    if compact:
+    if compact or execution_hits:
         net_info = categorize_preload_transport_hits(execution_hits, page_domain)
     else:
         net_info = categorize_network_requests(driver, page_domain)
