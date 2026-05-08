@@ -107,7 +107,7 @@ def run_with_timeout(func, seconds: int, label: str):
             future.cancel()
             raise AuditTimeoutError(f"{label} after {timeout_seconds} seconds.") from exc
         finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
 
     previous_handler = signal.getsignal(signal.SIGALRM)
 
@@ -847,7 +847,9 @@ GA4_PRELOAD_SCRIPT = r"""
             });
             list.push = function () {
                 var args = Array.prototype.slice.call(arguments);
-                push("dataLayerPushes", { args: safeClone(args) });
+                push("dataLayerPushes", {
+                  event: args[0] && args[0].event ? args[0].event : ""
+                });
                 return originalPush.apply(this, arguments);
             };
             return list;
