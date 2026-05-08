@@ -3846,7 +3846,8 @@ def append_audit_log(email_id: str, result: dict, audit_summary: dict):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def load_templates_and_rules():
+def load_templates_and_rules(cache_version: str = "requests-import-v2"):
+    _ = cache_version
     if not supabase_is_configured():
         return [], [], "Supabase is not configured yet. Add `supabase.url` and `supabase.service_role_key` to Streamlit secrets."
 
