@@ -5614,11 +5614,13 @@ tab_labels = ["Audit URLs", "Domain Audit", "Compare Prod vs Stage"]
 if is_template_admin(logged_in_email):
     tab_labels.append("Template Manager")
 
-tabs = st.tabs(tab_labels)
-tab_main = tabs[0]
-tab_domain_audit = tabs[1]
-tab_compare = tabs[2]
-tab_template_manager = tabs[3] if len(tabs) > 3 else None
+active_section = st.radio(
+    "Section",
+    tab_labels,
+    horizontal=True,
+    label_visibility="collapsed",
+    key="active_section",
+)
 
 
 def load_json_payload(raw_value, fallback):
@@ -8165,7 +8167,7 @@ def build_audit_focus_summary(result: dict):
     }
 
 
-with tab_main:
+if active_section == "Audit URLs":
     st.markdown(
         """
 Paste one URL and run the audit.
@@ -8738,7 +8740,7 @@ This capture is split into three layers:
                         )
 
 
-with tab_domain_audit:
+if active_section == "Domain Audit":
     st.markdown(
         """
 Run a domain-level audit from saved templates.
@@ -9095,7 +9097,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     st.warning(f"PDF report could not be generated. {exc}")
 
 
-with tab_compare:
+if active_section == "Compare Prod vs Stage":
     st.markdown("Compare tagging between two URLs, typically Prod vs Stage.")
 
     prod_col, stage_col = st.columns(2)
@@ -9148,8 +9150,8 @@ with tab_compare:
             )
 
 
-if tab_template_manager is not None:
-    with tab_template_manager:
+if active_section == "Template Manager":
+    with st.container():
         st.markdown("Manage audit templates and expected values for execution fields and events.")
 
         if template_load_error:
