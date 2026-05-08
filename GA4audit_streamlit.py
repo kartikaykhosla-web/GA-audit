@@ -4029,21 +4029,27 @@ def append_audit_log(email_id: str, result: dict, audit_summary: dict):
         return False, str(exc)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def load_templates_and_rules():
     if not supabase_is_configured():
         return [], [], "Supabase is not configured yet. Add `supabase.url` and `supabase.service_role_key` to Streamlit secrets."
 
     try:
-        template_rows = supabase_request(
-            "GET",
-            SUPABASE_TEMPLATE_TABLE,
-            params={"select": "*", "order": "template_name.asc"},
-        )
-        rule_rows = supabase_request(
-            "GET",
-            SUPABASE_TEMPLATE_RULE_TABLE,
-            params={"select": "*", "order": "field_name.asc"},
-        )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            template_future = executor.submit(
+                supabase_request,
+                "GET",
+                SUPABASE_TEMPLATE_TABLE,
+                params={"select": "*", "order": "template_name.asc"},
+            )
+            rule_future = executor.submit(
+                supabase_request,
+                "GET",
+                SUPABASE_TEMPLATE_RULE_TABLE,
+                params={"select": "*", "order": "field_name.asc"},
+            )
+            template_rows = template_future.result()
+            rule_rows = rule_future.result()
     except Exception as exc:
         return [], [], str(exc)
 
@@ -4063,6 +4069,13 @@ def load_templates_and_rules():
     return templates, rules, ""
 
 
+def clear_template_data_cache():
+    try:
+        load_templates_and_rules.clear()
+    except Exception:
+        pass
+
+
 def append_template_record(email_id: str, template_payload: dict):
     if not supabase_is_configured():
         return False, "Supabase is not configured yet."
@@ -4075,7 +4088,9 @@ def append_template_record(email_id: str, template_payload: dict):
             prefer="return=representation",
         )
         if isinstance(response, list) and response:
+            clear_template_data_cache()
             return True, str(response[0].get("template_id") or row_map["template_id"])
+        clear_template_data_cache()
         return True, row_map["template_id"]
     except Exception as exc:
         return False, str(exc)
@@ -4102,6 +4117,7 @@ def update_template_record(email_id: str, template_id: str, template_payload: di
             payload=row_map,
             prefer="return=minimal",
         )
+        clear_template_data_cache()
         return True, template_id_text
     except Exception as exc:
         return False, str(exc)
@@ -4119,7 +4135,9 @@ def append_template_rule(email_id: str, rule_payload: dict):
             prefer="return=representation",
         )
         if isinstance(response, list) and response:
+            clear_template_data_cache()
             return True, str(response[0].get("rule_id") or row_map["rule_id"])
+        clear_template_data_cache()
         return True, row_map["rule_id"]
     except Exception as exc:
         return False, str(exc)
@@ -4139,6 +4157,7 @@ def append_template_rules(email_id: str, rule_payloads: List[dict]):
             payload=rows,
             prefer="return=minimal",
         )
+        clear_template_data_cache()
         return True, str(len(rows))
     except Exception as exc:
         return False, str(exc)
@@ -4165,6 +4184,7 @@ def update_template_rule(email_id: str, rule_id: str, rule_payload: dict):
             payload=row_map,
             prefer="return=minimal",
         )
+        clear_template_data_cache()
         return True, rule_id_text
     except Exception as exc:
         return False, str(exc)
@@ -4183,6 +4203,7 @@ def delete_template_rule(rule_id: str):
             params={"rule_id": f"eq.{rule_id_text}"},
             prefer="return=minimal",
         )
+        clear_template_data_cache()
         return True, rule_id_text
     except Exception as exc:
         return False, str(exc)
@@ -4230,6 +4251,7 @@ def reset_templates_to_homepage_only(email_id: str):
             )
         if rule_rows:
             supabase_request("POST", SUPABASE_TEMPLATE_RULE_TABLE, payload=rule_rows, prefer="return=minimal")
+        clear_template_data_cache()
         return True, "Template Manager reset. Only the Home Page template remains."
     except Exception as exc:
         return False, str(exc)
@@ -8909,7 +8931,17 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     else:
                         st.error(trigger_message)
 
-            jobs, jobs_error = load_bulk_audit_jobs(selected_domain, limit=12)
+            bulk_history_key = f"domain_audit_show_jobs_{domain_state_key}"
+            if st.session_state.get("bulk_audit_force_latest_job_id"):
+                st.session_state[bulk_history_key] = True
+            history_cols = st.columns([1, 4])
+            if history_cols[0].button("Load recent jobs", key=f"load_bulk_jobs_{domain_state_key}"):
+                st.session_state[bulk_history_key] = True
+            history_cols[1].caption("Recent bulk jobs are loaded on demand so the main app stays responsive.")
+            if st.session_state.get(bulk_history_key):
+                jobs, jobs_error = load_bulk_audit_jobs(selected_domain, limit=12)
+            else:
+                jobs, jobs_error = [], ""
             if jobs_error:
                 st.warning(jobs_error)
             elif jobs:
