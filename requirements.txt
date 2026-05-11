@@ -2,6 +2,7 @@ streamlit
 pandas
 gspread
 google-auth
+psycopg[binary]
 openpyxl
 requests
 beautifulsoup4

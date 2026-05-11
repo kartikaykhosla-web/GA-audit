@@ -24,6 +24,14 @@ except Exception:
     gspread = None
     Credentials = None
 try:
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+except Exception:
+    psycopg = None
+    dict_row = None
+    Jsonb = None
+try:
     from streamlit_autorefresh import st_autorefresh
 except Exception:
     st_autorefresh = None
@@ -3859,6 +3867,548 @@ def sheet_storage_is_configured() -> bool:
 
 
 # -------------------------
+# Neon/Postgres persistence
+# -------------------------
+
+NEON_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS ga_audit_templates (
+    template_id text PRIMARY KEY,
+    template_name text,
+    domain_name text,
+    measurement_id text,
+    container_id text,
+    url_pattern text,
+    active boolean DEFAULT true,
+    created_by text,
+    created_at text
+);
+
+CREATE TABLE IF NOT EXISTS ga_audit_template_rules (
+    rule_id text PRIMARY KEY,
+    template_id text,
+    rule_scope text,
+    field_name text,
+    rule_type text,
+    expected_values text,
+    notes text,
+    created_by text,
+    created_at text
+);
+
+CREATE TABLE IF NOT EXISTS ga_audit_logs (
+    id bigserial PRIMARY KEY,
+    date text,
+    email_id text,
+    url_checked text,
+    pageview_trigger_found boolean,
+    execution_custom_dimensions text,
+    execution_dimensions jsonb,
+    created_at text DEFAULT now()::text
+);
+
+CREATE TABLE IF NOT EXISTS bulk_audit_jobs (
+    job_id text PRIMARY KEY,
+    domain_name text,
+    status text,
+    total_count integer DEFAULT 0,
+    completed_count integer DEFAULT 0,
+    failed_count integer DEFAULT 0,
+    requested_by text,
+    payload jsonb,
+    error_message text,
+    created_at text DEFAULT now()::text,
+    started_at text,
+    completed_at text
+);
+
+CREATE TABLE IF NOT EXISTS bulk_audit_results (
+    result_id text PRIMARY KEY,
+    job_id text,
+    template_id text,
+    template_name text,
+    sample_url text,
+    audit_outcome text,
+    implementation_status text,
+    ga_present boolean,
+    pageview_triggered boolean,
+    pageview_source text,
+    events_count integer DEFAULT 0,
+    events_fired text,
+    measurement_id text,
+    container_id text,
+    comscore_present boolean,
+    chartbeat_present boolean,
+    issues text,
+    result_json jsonb,
+    created_at text DEFAULT now()::text
+);
+
+CREATE INDEX IF NOT EXISTS idx_ga_audit_template_rules_template_id
+    ON ga_audit_template_rules(template_id);
+CREATE INDEX IF NOT EXISTS idx_bulk_audit_jobs_domain_created
+    ON bulk_audit_jobs(domain_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_bulk_audit_results_job_created
+    ON bulk_audit_results(job_id, created_at);
+"""
+
+
+def get_neon_settings() -> Dict[str, str]:
+    settings = {
+        "database_url": (
+            os.environ.get("NEON_DATABASE_URL")
+            or os.environ.get("DATABASE_URL")
+            or os.environ.get("POSTGRES_URL")
+            or ""
+        ).strip(),
+    }
+    try:
+        secrets = st.secrets
+    except Exception:
+        secrets = {}
+    for section_name in ("neon", "postgres", "database"):
+        try:
+            raw = secrets.get(section_name, {})
+        except Exception:
+            raw = {}
+        if raw:
+            raw_settings = dict(raw)
+            settings["database_url"] = settings["database_url"] or str(
+                raw_settings.get("database_url")
+                or raw_settings.get("url")
+                or raw_settings.get("connection_string")
+                or ""
+            ).strip()
+    try:
+        settings["database_url"] = settings["database_url"] or str(
+            secrets.get("NEON_DATABASE_URL")
+            or secrets.get("DATABASE_URL")
+            or secrets.get("POSTGRES_URL")
+            or ""
+        ).strip()
+    except Exception:
+        pass
+    return settings
+
+
+def neon_is_configured() -> bool:
+    return bool(psycopg and dict_row and Jsonb and get_neon_settings().get("database_url"))
+
+
+def neon_connect():
+    database_url = get_neon_settings().get("database_url")
+    if not database_url:
+        raise RuntimeError("Neon is not configured. Add NEON_DATABASE_URL or DATABASE_URL.")
+    if not psycopg or not dict_row:
+        raise RuntimeError("psycopg is not installed.")
+    return psycopg.connect(database_url, row_factory=dict_row)
+
+
+@st.cache_resource(show_spinner=False)
+def ensure_neon_schema(database_url: str) -> bool:
+    if not database_url:
+        return False
+    if not psycopg or not dict_row:
+        raise RuntimeError("psycopg is not installed.")
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(NEON_SCHEMA_SQL)
+    return True
+
+
+def ensure_neon_ready():
+    database_url = get_neon_settings().get("database_url")
+    ensure_neon_schema(database_url)
+
+
+def _jsonb(value):
+    return Jsonb(value if value is not None else {})
+
+
+def _compact_plan_for_storage(domain_name: str, plan_rows: List[dict]) -> List[dict]:
+    compact_plan = []
+    for row in compact_domain_audit_plan(plan_rows):
+        template = dict(row.get("template") or {})
+        rules = get_rules_for_validation_template(template, template_rules_by_template)
+        compact_plan.append(
+            {
+                **row,
+                "domain_name": domain_name,
+                "rules": rules,
+            }
+        )
+    return compact_plan
+
+
+def neon_append_audit_log(email_id: str, result: dict, audit_summary: dict):
+    ensure_neon_ready()
+    execution_dimension_map = build_execution_dimension_map(audit_summary)
+    execution_dimensions = [
+        f"{dimension}={value}"
+        for dimension, value in execution_dimension_map.items()
+    ]
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ga_audit_logs (
+                    date, email_id, url_checked, pageview_trigger_found,
+                    execution_custom_dimensions, execution_dimensions, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
+                    email_id,
+                    result.get("page_url") or "",
+                    bool(audit_summary.get("pageview_triggered")),
+                    "\n".join(execution_dimensions) if execution_dimensions else "None",
+                    _jsonb(execution_dimension_map),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+    return True, ""
+
+
+def neon_load_templates_and_rules():
+    ensure_neon_ready()
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM ga_audit_templates ORDER BY template_name ASC")
+            template_rows = cur.fetchall()
+            cur.execute("SELECT * FROM ga_audit_template_rules ORDER BY field_name ASC")
+            rule_rows = cur.fetchall()
+    templates = [_supabase_clean_record(record, TEMPLATE_HEADERS) for record in template_rows]
+    rules = [_supabase_clean_record(record, TEMPLATE_RULE_HEADERS) for record in rule_rows]
+    active_template_ids = {
+        str(template.get("template_id") or "").strip()
+        for template in templates
+        if template.get("active")
+    }
+    rules = [
+        rule
+        for rule in rules
+        if str(rule.get("template_id") or "").strip() in active_template_ids
+    ]
+    return templates, rules, ""
+
+
+def neon_append_template_record(email_id: str, template_payload: dict):
+    ensure_neon_ready()
+    row_map = _template_payload_for_supabase(email_id, template_payload)
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ga_audit_templates (
+                    template_id, template_name, domain_name, measurement_id,
+                    container_id, url_pattern, active, created_by, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING template_id
+                """,
+                tuple(row_map.get(header) for header in TEMPLATE_HEADERS),
+            )
+            template_id = str(cur.fetchone().get("template_id") or row_map["template_id"])
+    clear_template_data_cache()
+    return True, template_id
+
+
+def neon_update_template_record(email_id: str, template_id: str, template_payload: dict):
+    ensure_neon_ready()
+    template_id_text = str(template_id or "").strip()
+    if not template_id_text:
+        return False, "Template ID is missing."
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM ga_audit_templates WHERE template_id = %s LIMIT 1",
+                (template_id_text,),
+            )
+            existing = cur.fetchone() or {}
+            row_map = _template_payload_for_supabase(email_id, template_payload, template_id_text, existing)
+            cur.execute(
+                """
+                UPDATE ga_audit_templates
+                SET template_name = %s,
+                    domain_name = %s,
+                    measurement_id = %s,
+                    container_id = %s,
+                    url_pattern = %s,
+                    active = %s,
+                    created_by = %s,
+                    created_at = %s
+                WHERE template_id = %s
+                """,
+                (
+                    row_map["template_name"],
+                    row_map["domain_name"],
+                    row_map["measurement_id"],
+                    row_map["container_id"],
+                    row_map["url_pattern"],
+                    row_map["active"],
+                    row_map["created_by"],
+                    row_map["created_at"],
+                    template_id_text,
+                ),
+            )
+    clear_template_data_cache()
+    return True, template_id_text
+
+
+def neon_append_template_rule(email_id: str, rule_payload: dict):
+    ensure_neon_ready()
+    row_map = _rule_payload_for_supabase(email_id, rule_payload)
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ga_audit_template_rules (
+                    rule_id, template_id, rule_scope, field_name, rule_type,
+                    expected_values, notes, created_by, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING rule_id
+                """,
+                tuple(row_map.get(header) for header in TEMPLATE_RULE_HEADERS),
+            )
+            rule_id = str(cur.fetchone().get("rule_id") or row_map["rule_id"])
+    clear_template_data_cache()
+    return True, rule_id
+
+
+def neon_append_template_rules(email_id: str, rule_payloads: List[dict]):
+    ensure_neon_ready()
+    payloads = [payload for payload in (rule_payloads or []) if isinstance(payload, dict)]
+    if not payloads:
+        return False, "No rules to save."
+    rows = [_rule_payload_for_supabase(email_id, payload) for payload in payloads]
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO ga_audit_template_rules (
+                    rule_id, template_id, rule_scope, field_name, rule_type,
+                    expected_values, notes, created_by, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                [tuple(row.get(header) for header in TEMPLATE_RULE_HEADERS) for row in rows],
+            )
+    clear_template_data_cache()
+    return True, str(len(rows))
+
+
+def neon_update_template_rule(email_id: str, rule_id: str, rule_payload: dict):
+    ensure_neon_ready()
+    rule_id_text = str(rule_id or "").strip()
+    if not rule_id_text:
+        return False, "Rule ID is missing."
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM ga_audit_template_rules WHERE rule_id = %s LIMIT 1",
+                (rule_id_text,),
+            )
+            existing = cur.fetchone() or {}
+            row_map = _rule_payload_for_supabase(email_id, rule_payload, rule_id_text, existing)
+            cur.execute(
+                """
+                UPDATE ga_audit_template_rules
+                SET template_id = %s,
+                    rule_scope = %s,
+                    field_name = %s,
+                    rule_type = %s,
+                    expected_values = %s,
+                    notes = %s,
+                    created_by = %s,
+                    created_at = %s
+                WHERE rule_id = %s
+                """,
+                (
+                    row_map["template_id"],
+                    row_map["rule_scope"],
+                    row_map["field_name"],
+                    row_map["rule_type"],
+                    row_map["expected_values"],
+                    row_map["notes"],
+                    row_map["created_by"],
+                    row_map["created_at"],
+                    rule_id_text,
+                ),
+            )
+    clear_template_data_cache()
+    return True, rule_id_text
+
+
+def neon_delete_template_rule(rule_id: str):
+    ensure_neon_ready()
+    rule_id_text = str(rule_id or "").strip()
+    if not rule_id_text:
+        return False, "Rule ID is missing."
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM ga_audit_template_rules WHERE rule_id = %s",
+                (rule_id_text,),
+            )
+    clear_template_data_cache()
+    return True, rule_id_text
+
+
+def neon_reset_templates_to_homepage_only(email_id: str):
+    ensure_neon_ready()
+    homepage_seed = get_homepage_starter_template()
+    homepage_template_id = "tpl_home_page"
+    timestamp = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM ga_audit_template_rules")
+            cur.execute("DELETE FROM ga_audit_templates")
+            cur.execute(
+                """
+                INSERT INTO ga_audit_templates (
+                    template_id, template_name, domain_name, measurement_id,
+                    container_id, url_pattern, active, created_by, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    homepage_template_id,
+                    homepage_seed.get("template_name"),
+                    homepage_seed.get("domain_name"),
+                    homepage_seed.get("measurement_id"),
+                    homepage_seed.get("container_id"),
+                    homepage_seed.get("url_pattern"),
+                    True,
+                    email_id,
+                    timestamp,
+                ),
+            )
+            rule_rows = []
+            for index, rule in enumerate(homepage_seed.get("rules", []), start=1):
+                rule_rows.append(
+                    (
+                        f"rule_home_page_{index:02d}",
+                        homepage_template_id,
+                        str(rule.get("rule_scope") or "").strip(),
+                        str(rule.get("field_name") or "").strip(),
+                        str(rule.get("rule_type") or "").strip(),
+                        str(rule.get("expected_values") or "").strip(),
+                        str(rule.get("notes") or "").strip(),
+                        email_id,
+                        timestamp,
+                    )
+                )
+            if rule_rows:
+                cur.executemany(
+                    """
+                    INSERT INTO ga_audit_template_rules (
+                        rule_id, template_id, rule_scope, field_name, rule_type,
+                        expected_values, notes, created_by, created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    rule_rows,
+                )
+    clear_template_data_cache()
+    return True, "Template Manager reset. Only the Home Page template remains."
+
+
+def neon_create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict], wait_seconds: int) -> Tuple[bool, str]:
+    ensure_neon_ready()
+    job_id = f"job_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
+    compact_plan = _compact_plan_for_storage(domain_name, plan_rows)
+    payload = {
+        "domain_name": domain_name,
+        "wait_seconds": int(wait_seconds or 8),
+        "plan": compact_plan,
+    }
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO bulk_audit_jobs (
+                    job_id, domain_name, status, total_count, completed_count,
+                    failed_count, requested_by, payload, error_message,
+                    created_at, started_at, completed_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    job_id,
+                    domain_name,
+                    "queued",
+                    len(compact_plan),
+                    0,
+                    0,
+                    email_id,
+                    _jsonb(payload),
+                    "",
+                    datetime.now(timezone.utc).isoformat(),
+                    "",
+                    "",
+                ),
+            )
+    return True, job_id
+
+
+def neon_load_bulk_audit_jobs(domain_name: str = "", limit: int = 10) -> Tuple[List[dict], str]:
+    ensure_neon_ready()
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            if domain_name:
+                cur.execute(
+                    """
+                    SELECT * FROM bulk_audit_jobs
+                    WHERE domain_name = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (domain_name, int(limit or 10)),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM bulk_audit_jobs ORDER BY created_at DESC LIMIT %s",
+                    (int(limit or 10),),
+                )
+            return list(cur.fetchall()), ""
+
+
+def neon_cancel_bulk_audit_job(job_id: str) -> Tuple[bool, str]:
+    ensure_neon_ready()
+    if not str(job_id or "").strip():
+        return False, "Job ID is missing."
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE bulk_audit_jobs
+                SET status = %s, completed_at = %s
+                WHERE job_id = %s
+                """,
+                ("cancelled", datetime.now(timezone.utc).isoformat(), job_id),
+            )
+    return True, "Bulk audit stop requested."
+
+
+def neon_load_bulk_audit_results(job_id: str) -> Tuple[List[dict], str]:
+    ensure_neon_ready()
+    if not job_id:
+        return [], "Job ID is missing."
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM bulk_audit_results
+                WHERE job_id = %s
+                ORDER BY created_at ASC
+                """,
+                (job_id,),
+            )
+            return list(cur.fetchall()), ""
+
+
+# -------------------------
 # Supabase persistence
 # -------------------------
 
@@ -4020,6 +4570,12 @@ def _rule_payload_for_supabase(email_id: str, rule_payload: dict, rule_id: str =
 
 
 def append_audit_log(email_id: str, result: dict, audit_summary: dict):
+    if neon_is_configured():
+        try:
+            return neon_append_audit_log(email_id, result, audit_summary)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
     if sheet_storage_is_configured() or not supabase_is_configured():
         return SHEET_APPEND_AUDIT_LOG(email_id, result, audit_summary)
 
@@ -4049,6 +4605,12 @@ def append_audit_log(email_id: str, result: dict, audit_summary: dict):
 @st.cache_data(ttl=300, show_spinner=False)
 def load_templates_and_rules(cache_version: str = "requests-import-v2"):
     _ = cache_version
+    if neon_is_configured():
+        try:
+            return neon_load_templates_and_rules()
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return [], [], str(exc)
     if sheet_storage_is_configured() or not supabase_is_configured():
         return SHEET_LOAD_TEMPLATES_AND_RULES()
 
@@ -4093,6 +4655,12 @@ def clear_template_data_cache():
 
 
 def append_template_record(email_id: str, template_payload: dict):
+    if neon_is_configured():
+        try:
+            return neon_append_template_record(email_id, template_payload)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
     if sheet_storage_is_configured() or not supabase_is_configured():
         return SHEET_APPEND_TEMPLATE_RECORD(email_id, template_payload)
     row_map = _template_payload_for_supabase(email_id, template_payload)
@@ -4113,6 +4681,12 @@ def append_template_record(email_id: str, template_payload: dict):
 
 
 def update_template_record(email_id: str, template_id: str, template_payload: dict):
+    if neon_is_configured():
+        try:
+            return neon_update_template_record(email_id, template_id, template_payload)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
     if sheet_storage_is_configured() or not supabase_is_configured():
         return SHEET_UPDATE_TEMPLATE_RECORD(email_id, template_id, template_payload)
     template_id_text = str(template_id or "").strip()
@@ -4140,6 +4714,12 @@ def update_template_record(email_id: str, template_id: str, template_payload: di
 
 
 def append_template_rule(email_id: str, rule_payload: dict):
+    if neon_is_configured():
+        try:
+            return neon_append_template_rule(email_id, rule_payload)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
     if sheet_storage_is_configured() or not supabase_is_configured():
         return SHEET_APPEND_TEMPLATE_RULE(email_id, rule_payload)
     row_map = _rule_payload_for_supabase(email_id, rule_payload)
@@ -4160,6 +4740,12 @@ def append_template_rule(email_id: str, rule_payload: dict):
 
 
 def append_template_rules(email_id: str, rule_payloads: List[dict]):
+    if neon_is_configured():
+        try:
+            return neon_append_template_rules(email_id, rule_payloads)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
     if sheet_storage_is_configured() or not supabase_is_configured():
         return SHEET_APPEND_TEMPLATE_RULES(email_id, rule_payloads)
     payloads = [payload for payload in (rule_payloads or []) if isinstance(payload, dict)]
@@ -4180,6 +4766,12 @@ def append_template_rules(email_id: str, rule_payloads: List[dict]):
 
 
 def update_template_rule(email_id: str, rule_id: str, rule_payload: dict):
+    if neon_is_configured():
+        try:
+            return neon_update_template_rule(email_id, rule_id, rule_payload)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
     if sheet_storage_is_configured() or not supabase_is_configured():
         return SHEET_UPDATE_TEMPLATE_RULE(email_id, rule_id, rule_payload)
     rule_id_text = str(rule_id or "").strip()
@@ -4207,6 +4799,12 @@ def update_template_rule(email_id: str, rule_id: str, rule_payload: dict):
 
 
 def delete_template_rule(rule_id: str):
+    if neon_is_configured():
+        try:
+            return neon_delete_template_rule(rule_id)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
     if sheet_storage_is_configured() or not supabase_is_configured():
         return SHEET_DELETE_TEMPLATE_RULE(rule_id)
     rule_id_text = str(rule_id or "").strip()
@@ -4432,19 +5030,15 @@ def _update_sheet_row(worksheet, headers: List[str], row_index: int, values: dic
 
 
 def create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict], wait_seconds: int) -> Tuple[bool, str]:
+    if neon_is_configured():
+        try:
+            return neon_create_bulk_audit_job(email_id, domain_name, plan_rows, wait_seconds)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
     if sheet_storage_is_configured():
         job_id = f"job_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
-        compact_plan = []
-        for row in compact_domain_audit_plan(plan_rows):
-            template = dict(row.get("template") or {})
-            rules = get_rules_for_validation_template(template, template_rules_by_template)
-            compact_plan.append(
-                {
-                    **row,
-                    "domain_name": domain_name,
-                    "rules": rules,
-                }
-            )
+        compact_plan = _compact_plan_for_storage(domain_name, plan_rows)
         payload = {
             "domain_name": domain_name,
             "wait_seconds": int(wait_seconds or 8),
@@ -4512,6 +5106,12 @@ def create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict]
 
 
 def load_bulk_audit_jobs(domain_name: str = "", limit: int = 10) -> Tuple[List[dict], str]:
+    if neon_is_configured():
+        try:
+            return neon_load_bulk_audit_jobs(domain_name, limit)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return [], str(exc)
     if sheet_storage_is_configured():
         try:
             worksheet = get_bulk_jobs_worksheet()
@@ -4539,6 +5139,12 @@ def load_bulk_audit_jobs(domain_name: str = "", limit: int = 10) -> Tuple[List[d
 
 
 def cancel_bulk_audit_job(job_id: str) -> Tuple[bool, str]:
+    if neon_is_configured():
+        try:
+            return neon_cancel_bulk_audit_job(job_id)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
     if sheet_storage_is_configured():
         if not str(job_id or "").strip():
             return False, "Job ID is missing."
@@ -4581,6 +5187,12 @@ def cancel_bulk_audit_job(job_id: str) -> Tuple[bool, str]:
 
 
 def load_bulk_audit_results(job_id: str) -> Tuple[List[dict], str]:
+    if neon_is_configured():
+        try:
+            return neon_load_bulk_audit_results(job_id)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return [], str(exc)
     if sheet_storage_is_configured():
         if not job_id:
             return [], "Job ID is missing."
@@ -5752,6 +6364,12 @@ def should_auto_cleanup_homepage_templates(template_records: List[dict]) -> bool
 
 
 def reset_templates_to_homepage_only(email_id: str):
+    if neon_is_configured():
+        try:
+            return neon_reset_templates_to_homepage_only(email_id)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
     if sheet_storage_is_configured() or not supabase_is_configured():
         return SHEET_RESET_TEMPLATES_TO_HOMEPAGE_ONLY(email_id)
 
@@ -5808,13 +6426,15 @@ def render_sidebar_session(email_id: str):
             st.rerun()
 
         st.markdown("### Storage")
-        if sheet_storage_is_configured():
+        if neon_is_configured():
+            st.success("Neon Postgres configured")
+        elif sheet_storage_is_configured():
             st.success("Google Sheets storage configured")
         elif supabase_is_configured():
             st.warning("Supabase configured")
         else:
             st.warning("Storage not configured")
-            st.caption("Add `gcp_service_account` and `sheets.spreadsheet_id` to Streamlit secrets.")
+            st.caption("Add `neon.database_url` to Streamlit secrets.")
 
 
 logged_in_email = require_login()
@@ -9196,7 +9816,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
             run_clicked = run_cols[0].button(
                 "Run audit",
                 key=f"start_github_domain_audit_{domain_state_key}",
-                disabled=not audit_plan or not (sheet_storage_is_configured() or supabase_is_configured()) or not github_is_configured(),
+                disabled=not audit_plan or not (neon_is_configured() or sheet_storage_is_configured() or supabase_is_configured()) or not github_is_configured(),
                 type="primary",
             )
             run_cols[1].caption(

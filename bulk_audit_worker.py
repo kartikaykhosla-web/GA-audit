@@ -15,6 +15,14 @@ try:
 except Exception:
     gspread = None
     Credentials = None
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+except Exception:
+    psycopg = None
+    dict_row = None
+    Jsonb = None
 from selenium import webdriver
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
@@ -174,6 +182,194 @@ def page_has_video_candidate(driver) -> bool:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+NEON_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS bulk_audit_jobs (
+    job_id text PRIMARY KEY,
+    domain_name text,
+    status text,
+    total_count integer DEFAULT 0,
+    completed_count integer DEFAULT 0,
+    failed_count integer DEFAULT 0,
+    requested_by text,
+    payload jsonb,
+    error_message text,
+    created_at text DEFAULT now()::text,
+    started_at text,
+    completed_at text
+);
+
+CREATE TABLE IF NOT EXISTS bulk_audit_results (
+    result_id text PRIMARY KEY,
+    job_id text,
+    template_id text,
+    template_name text,
+    sample_url text,
+    audit_outcome text,
+    implementation_status text,
+    ga_present boolean,
+    pageview_triggered boolean,
+    pageview_source text,
+    events_count integer DEFAULT 0,
+    events_fired text,
+    measurement_id text,
+    container_id text,
+    comscore_present boolean,
+    chartbeat_present boolean,
+    issues text,
+    result_json jsonb,
+    created_at text DEFAULT now()::text
+);
+
+CREATE INDEX IF NOT EXISTS idx_bulk_audit_jobs_domain_created
+    ON bulk_audit_jobs(domain_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_bulk_audit_results_job_created
+    ON bulk_audit_results(job_id, created_at);
+"""
+
+
+NEON_SCHEMA_READY = False
+
+
+def get_neon_settings() -> Dict[str, str]:
+    return {
+        "database_url": (
+            os.environ.get("NEON_DATABASE_URL")
+            or os.environ.get("DATABASE_URL")
+            or os.environ.get("POSTGRES_URL")
+            or ""
+        ).strip(),
+    }
+
+
+def neon_is_configured() -> bool:
+    return bool(psycopg and dict_row and Jsonb and get_neon_settings().get("database_url"))
+
+
+def neon_connect():
+    database_url = get_neon_settings().get("database_url")
+    if not database_url:
+        raise RuntimeError("NEON_DATABASE_URL or DATABASE_URL is required.")
+    if not psycopg or not dict_row:
+        raise RuntimeError("psycopg is not installed.")
+    return psycopg.connect(database_url, row_factory=dict_row)
+
+
+def ensure_neon_ready():
+    global NEON_SCHEMA_READY
+    if NEON_SCHEMA_READY:
+        return
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(NEON_SCHEMA_SQL)
+    NEON_SCHEMA_READY = True
+
+
+def neon_jsonb(value):
+    return Jsonb(value if value is not None else {})
+
+
+def neon_update_job(job_id: str, values: dict):
+    ensure_neon_ready()
+    if not values:
+        return
+    allowed_columns = {
+        "status",
+        "total_count",
+        "completed_count",
+        "failed_count",
+        "error_message",
+        "started_at",
+        "completed_at",
+    }
+    filtered = {key: value for key, value in values.items() if key in allowed_columns}
+    if not filtered:
+        return
+    assignments = ", ".join(f"{key} = %s" for key in filtered)
+    params = list(filtered.values()) + [job_id]
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE bulk_audit_jobs SET {assignments} WHERE job_id = %s",
+                params,
+            )
+
+
+def neon_load_job(job_id: str) -> dict:
+    ensure_neon_ready()
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM bulk_audit_jobs WHERE job_id = %s LIMIT 1",
+                (job_id,),
+            )
+            row = cur.fetchone()
+    if not row:
+        raise RuntimeError(f"Bulk audit job not found: {job_id}")
+    return row
+
+
+def neon_insert_result(job_id: str, plan_row: dict, result: dict):
+    ensure_neon_ready()
+    template = plan_row.get("template") or {}
+    row = {
+        "result_id": f"res_{uuid.uuid4().hex}",
+        "job_id": job_id,
+        "template_id": str(template.get("template_id") or plan_row.get("template_id") or ""),
+        "template_name": result.get("template_name") or "",
+        "sample_url": result.get("sample_url") or "",
+        "audit_outcome": result.get("audit_outcome") or "",
+        "implementation_status": result.get("implementation_status") or "",
+        "ga_present": bool(result.get("ga_present")),
+        "pageview_triggered": bool(result.get("pageview_triggered")),
+        "pageview_source": result.get("pageview_source") or "",
+        "events_count": int(result.get("events_count") or 0),
+        "events_fired": result.get("events_fired") or "",
+        "measurement_id": result.get("measurement_id") or "",
+        "container_id": result.get("container_id") or "",
+        "comscore_present": bool(result.get("comscore_present")),
+        "chartbeat_present": bool(result.get("chartbeat_present")),
+        "issues": result.get("issues") or "",
+        "result_json": result,
+        "created_at": utc_now(),
+    }
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO bulk_audit_results (
+                    result_id, job_id, template_id, template_name, sample_url,
+                    audit_outcome, implementation_status, ga_present,
+                    pageview_triggered, pageview_source, events_count,
+                    events_fired, measurement_id, container_id,
+                    comscore_present, chartbeat_present, issues,
+                    result_json, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    row["result_id"],
+                    row["job_id"],
+                    row["template_id"],
+                    row["template_name"],
+                    row["sample_url"],
+                    row["audit_outcome"],
+                    row["implementation_status"],
+                    row["ga_present"],
+                    row["pageview_triggered"],
+                    row["pageview_source"],
+                    row["events_count"],
+                    row["events_fired"],
+                    row["measurement_id"],
+                    row["container_id"],
+                    row["comscore_present"],
+                    row["chartbeat_present"],
+                    row["issues"],
+                    neon_jsonb(row["result_json"]),
+                    row["created_at"],
+                ),
+            )
 
 
 def get_service_account_info() -> Dict[str, Any]:
@@ -404,6 +600,9 @@ def supabase_request(method: str, table: str, params: Optional[dict] = None, pay
 
 
 def update_job(job_id: str, values: dict):
+    if neon_is_configured():
+        neon_update_job(job_id, values)
+        return
     if sheet_storage_is_configured():
         worksheet = get_bulk_jobs_worksheet()
         row_index = find_sheet_row_by_first_column(worksheet, job_id)
@@ -421,6 +620,8 @@ def update_job(job_id: str, values: dict):
 
 
 def load_job(job_id: str) -> dict:
+    if neon_is_configured():
+        return neon_load_job(job_id)
     if sheet_storage_is_configured():
         worksheet = get_bulk_jobs_worksheet()
         rows = [bulk_job_from_sheet(record) for record in worksheet.get_all_records(default_blank="")]
@@ -1887,6 +2088,9 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
 
 
 def insert_result(job_id: str, plan_row: dict, result: dict):
+    if neon_is_configured():
+        neon_insert_result(job_id, plan_row, result)
+        return
     template = plan_row.get("template") or {}
     row = {
         "result_id": f"res_{uuid.uuid4().hex}",
