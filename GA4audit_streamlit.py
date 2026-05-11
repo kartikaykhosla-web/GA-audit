@@ -5839,11 +5839,13 @@ if is_template_admin(logged_in_email):
 
 active_section_state = st.session_state.get("active_section", tab_labels[0])
 active_section_index = tab_labels.index(active_section_state) if active_section_state in tab_labels else 0
-active_section = st.selectbox(
+active_section = st.radio(
     "Section",
     tab_labels,
     index=active_section_index,
     key="active_section",
+    horizontal=True,
+    label_visibility="collapsed",
 )
 
 
