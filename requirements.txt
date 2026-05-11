@@ -1,5 +1,7 @@
 streamlit
 pandas
+gspread
+google-auth
 openpyxl
 requests
 beautifulsoup4

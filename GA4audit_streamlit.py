@@ -18,6 +18,12 @@ import pandas as pd
 import requests
 import streamlit as st
 try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+except Exception:
+    gspread = None
+    Credentials = None
+try:
     from streamlit_autorefresh import st_autorefresh
 except Exception:
     st_autorefresh = None
@@ -2826,6 +2832,8 @@ DEFAULT_LOG_SHEET_ID = "1e_fp0fAOeEAHaRtFJUv-rt-i0sqUOhszYOrOk7Cv5QU"
 DEFAULT_LOG_WORKSHEET = "Audit Logs"
 DEFAULT_TEMPLATE_WORKSHEET = "Audit Templates"
 DEFAULT_TEMPLATE_RULES_WORKSHEET = "Audit Template Rules"
+DEFAULT_BULK_JOBS_WORKSHEET = "Bulk Audit Jobs"
+DEFAULT_BULK_RESULTS_WORKSHEET = "Bulk Audit Results"
 FIXED_LOG_HEADERS = [
     "date",
     "email_id",
@@ -2860,6 +2868,41 @@ TEMPLATE_RULE_HEADERS = [
     "expected_values",
     "notes",
     "created_by",
+    "created_at",
+]
+BULK_JOB_HEADERS = [
+    "job_id",
+    "domain_name",
+    "status",
+    "total_count",
+    "completed_count",
+    "failed_count",
+    "requested_by",
+    "payload",
+    "error_message",
+    "created_at",
+    "started_at",
+    "completed_at",
+]
+BULK_RESULT_HEADERS = [
+    "result_id",
+    "job_id",
+    "template_id",
+    "template_name",
+    "sample_url",
+    "audit_outcome",
+    "implementation_status",
+    "ga_present",
+    "pageview_triggered",
+    "pageview_source",
+    "events_count",
+    "events_fired",
+    "measurement_id",
+    "container_id",
+    "comscore_present",
+    "chartbeat_present",
+    "issues",
+    "result_json",
     "created_at",
 ]
 RULE_SCOPE_OPTIONS = {
@@ -3224,6 +3267,8 @@ def get_template_sheet_settings():
         "spreadsheet_id": settings.get("spreadsheet_id") or DEFAULT_LOG_SHEET_ID,
         "template_worksheet_name": settings.get("template_worksheet_name") or DEFAULT_TEMPLATE_WORKSHEET,
         "template_rules_worksheet_name": settings.get("template_rules_worksheet_name") or DEFAULT_TEMPLATE_RULES_WORKSHEET,
+        "bulk_jobs_worksheet_name": settings.get("bulk_jobs_worksheet_name") or DEFAULT_BULK_JOBS_WORKSHEET,
+        "bulk_results_worksheet_name": settings.get("bulk_results_worksheet_name") or DEFAULT_BULK_RESULTS_WORKSHEET,
     }
 
 
@@ -3442,6 +3487,21 @@ def get_template_worksheets(
     ensure_fixed_headers(template_ws, TEMPLATE_HEADERS)
     ensure_fixed_headers(rules_ws, TEMPLATE_RULE_HEADERS)
     return template_ws, rules_ws
+
+
+@st.cache_resource
+def get_fixed_worksheet(service_account_json: str, spreadsheet_id: str, worksheet_name: str, headers: Tuple[str, ...], rows: int = 1000):
+    spreadsheet = get_spreadsheet(service_account_json, spreadsheet_id)
+    try:
+        worksheet = spreadsheet.worksheet(worksheet_name)
+    except gspread.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(
+            title=worksheet_name,
+            rows=rows,
+            cols=len(headers),
+        )
+    ensure_fixed_headers(worksheet, list(headers))
+    return worksheet
 
 
 def append_audit_log(email_id: str, result: dict, audit_summary: dict):
@@ -3784,6 +3844,20 @@ def delete_template_rule(rule_id: str):
     return True, rule_id_text
 
 
+SHEET_APPEND_AUDIT_LOG = append_audit_log
+SHEET_LOAD_TEMPLATES_AND_RULES = load_templates_and_rules
+SHEET_APPEND_TEMPLATE_RECORD = append_template_record
+SHEET_UPDATE_TEMPLATE_RECORD = update_template_record
+SHEET_APPEND_TEMPLATE_RULE = append_template_rule
+SHEET_APPEND_TEMPLATE_RULES = append_template_rules
+SHEET_UPDATE_TEMPLATE_RULE = update_template_rule
+SHEET_DELETE_TEMPLATE_RULE = delete_template_rule
+
+
+def sheet_storage_is_configured() -> bool:
+    return bool(gspread and Credentials and get_service_account_info())
+
+
 # -------------------------
 # Supabase persistence
 # -------------------------
@@ -3946,8 +4020,8 @@ def _rule_payload_for_supabase(email_id: str, rule_payload: dict, rule_id: str =
 
 
 def append_audit_log(email_id: str, result: dict, audit_summary: dict):
-    if not supabase_is_configured():
-        return False, "Supabase is not configured yet."
+    if sheet_storage_is_configured() or not supabase_is_configured():
+        return SHEET_APPEND_AUDIT_LOG(email_id, result, audit_summary)
 
     execution_dimension_map = build_execution_dimension_map(audit_summary)
     execution_dimensions = [
@@ -3966,14 +4040,17 @@ def append_audit_log(email_id: str, result: dict, audit_summary: dict):
         supabase_request("POST", SUPABASE_LOG_TABLE, payload=payload, prefer="return=minimal")
         return True, ""
     except Exception as exc:
-        return False, str(exc)
+        sheet_success, sheet_response = SHEET_APPEND_AUDIT_LOG(email_id, result, audit_summary)
+        if sheet_success:
+            return True, ""
+        return False, sheet_response or str(exc)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_templates_and_rules(cache_version: str = "requests-import-v2"):
     _ = cache_version
-    if not supabase_is_configured():
-        return [], [], "Supabase is not configured yet. Add `supabase.url` and `supabase.service_role_key` to Streamlit secrets."
+    if sheet_storage_is_configured() or not supabase_is_configured():
+        return SHEET_LOAD_TEMPLATES_AND_RULES()
 
     try:
         template_rows = supabase_request(
@@ -3987,7 +4064,10 @@ def load_templates_and_rules(cache_version: str = "requests-import-v2"):
             params={"select": "*", "order": "field_name.asc"},
         )
     except Exception as exc:
-        return [], [], str(exc)
+        templates, rules, sheet_error = SHEET_LOAD_TEMPLATES_AND_RULES()
+        if templates:
+            return templates, rules, sheet_error
+        return [], [], sheet_error or str(exc)
 
     templates = [_supabase_clean_record(record, TEMPLATE_HEADERS) for record in template_rows]
     rules = [_supabase_clean_record(record, TEMPLATE_RULE_HEADERS) for record in rule_rows]
@@ -4013,8 +4093,8 @@ def clear_template_data_cache():
 
 
 def append_template_record(email_id: str, template_payload: dict):
-    if not supabase_is_configured():
-        return False, "Supabase is not configured yet."
+    if sheet_storage_is_configured() or not supabase_is_configured():
+        return SHEET_APPEND_TEMPLATE_RECORD(email_id, template_payload)
     row_map = _template_payload_for_supabase(email_id, template_payload)
     try:
         response = supabase_request(
@@ -4029,12 +4109,12 @@ def append_template_record(email_id: str, template_payload: dict):
         clear_template_data_cache()
         return True, row_map["template_id"]
     except Exception as exc:
-        return False, str(exc)
+        return SHEET_APPEND_TEMPLATE_RECORD(email_id, template_payload)
 
 
 def update_template_record(email_id: str, template_id: str, template_payload: dict):
-    if not supabase_is_configured():
-        return False, "Supabase is not configured yet."
+    if sheet_storage_is_configured() or not supabase_is_configured():
+        return SHEET_UPDATE_TEMPLATE_RECORD(email_id, template_id, template_payload)
     template_id_text = str(template_id or "").strip()
     if not template_id_text:
         return False, "Template ID is missing."
@@ -4056,12 +4136,12 @@ def update_template_record(email_id: str, template_id: str, template_payload: di
         clear_template_data_cache()
         return True, template_id_text
     except Exception as exc:
-        return False, str(exc)
+        return SHEET_UPDATE_TEMPLATE_RECORD(email_id, template_id, template_payload)
 
 
 def append_template_rule(email_id: str, rule_payload: dict):
-    if not supabase_is_configured():
-        return False, "Supabase is not configured yet."
+    if sheet_storage_is_configured() or not supabase_is_configured():
+        return SHEET_APPEND_TEMPLATE_RULE(email_id, rule_payload)
     row_map = _rule_payload_for_supabase(email_id, rule_payload)
     try:
         response = supabase_request(
@@ -4076,12 +4156,12 @@ def append_template_rule(email_id: str, rule_payload: dict):
         clear_template_data_cache()
         return True, row_map["rule_id"]
     except Exception as exc:
-        return False, str(exc)
+        return SHEET_APPEND_TEMPLATE_RULE(email_id, rule_payload)
 
 
 def append_template_rules(email_id: str, rule_payloads: List[dict]):
-    if not supabase_is_configured():
-        return False, "Supabase is not configured yet."
+    if sheet_storage_is_configured() or not supabase_is_configured():
+        return SHEET_APPEND_TEMPLATE_RULES(email_id, rule_payloads)
     payloads = [payload for payload in (rule_payloads or []) if isinstance(payload, dict)]
     if not payloads:
         return False, "No rules to save."
@@ -4096,12 +4176,12 @@ def append_template_rules(email_id: str, rule_payloads: List[dict]):
         clear_template_data_cache()
         return True, str(len(rows))
     except Exception as exc:
-        return False, str(exc)
+        return SHEET_APPEND_TEMPLATE_RULES(email_id, rule_payloads)
 
 
 def update_template_rule(email_id: str, rule_id: str, rule_payload: dict):
-    if not supabase_is_configured():
-        return False, "Supabase is not configured yet."
+    if sheet_storage_is_configured() or not supabase_is_configured():
+        return SHEET_UPDATE_TEMPLATE_RULE(email_id, rule_id, rule_payload)
     rule_id_text = str(rule_id or "").strip()
     if not rule_id_text:
         return False, "Rule ID is missing."
@@ -4123,12 +4203,12 @@ def update_template_rule(email_id: str, rule_id: str, rule_payload: dict):
         clear_template_data_cache()
         return True, rule_id_text
     except Exception as exc:
-        return False, str(exc)
+        return SHEET_UPDATE_TEMPLATE_RULE(email_id, rule_id, rule_payload)
 
 
 def delete_template_rule(rule_id: str):
-    if not supabase_is_configured():
-        return False, "Supabase is not configured yet."
+    if sheet_storage_is_configured() or not supabase_is_configured():
+        return SHEET_DELETE_TEMPLATE_RULE(rule_id)
     rule_id_text = str(rule_id or "").strip()
     if not rule_id_text:
         return False, "Rule ID is missing."
@@ -4142,7 +4222,7 @@ def delete_template_rule(rule_id: str):
         clear_template_data_cache()
         return True, rule_id_text
     except Exception as exc:
-        return False, str(exc)
+        return SHEET_DELETE_TEMPLATE_RULE(rule_id)
 
 
 def reset_templates_to_homepage_only(email_id: str):
@@ -4244,7 +4324,157 @@ def trigger_bulk_audit_workflow(job_id: str) -> Tuple[bool, str]:
     return True, "GitHub bulk audit workflow started."
 
 
+def get_bulk_jobs_worksheet():
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        raise RuntimeError("Google Sheets storage is not configured yet.")
+    settings = get_template_sheet_settings()
+    return get_fixed_worksheet(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["bulk_jobs_worksheet_name"],
+        tuple(BULK_JOB_HEADERS),
+        rows=1000,
+    )
+
+
+def get_bulk_results_worksheet():
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        raise RuntimeError("Google Sheets storage is not configured yet.")
+    settings = get_template_sheet_settings()
+    return get_fixed_worksheet(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["bulk_results_worksheet_name"],
+        tuple(BULK_RESULT_HEADERS),
+        rows=5000,
+    )
+
+
+def _sheet_storage_value(value):
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (dict, list)):
+        return safe_json(value)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _sheet_bool(value) -> bool:
+    return str(value or "").strip().lower() in {"true", "1", "yes"}
+
+
+def _sheet_int(value) -> int:
+    try:
+        return int(float(str(value or "0").strip() or "0"))
+    except Exception:
+        return 0
+
+
+def _sheet_json(value, fallback):
+    if isinstance(value, (dict, list)):
+        return value
+    if not str(value or "").strip():
+        return fallback
+    try:
+        return json.loads(str(value))
+    except Exception:
+        return fallback
+
+
+def _bulk_job_from_sheet(record: dict) -> dict:
+    row = _clean_sheet_record(record, BULK_JOB_HEADERS)
+    row["total_count"] = _sheet_int(row.get("total_count"))
+    row["completed_count"] = _sheet_int(row.get("completed_count"))
+    row["failed_count"] = _sheet_int(row.get("failed_count"))
+    row["payload"] = _sheet_json(row.get("payload"), {})
+    return row
+
+
+def _bulk_result_from_sheet(record: dict) -> dict:
+    row = _clean_sheet_record(record, BULK_RESULT_HEADERS)
+    row["ga_present"] = _sheet_bool(row.get("ga_present"))
+    row["pageview_triggered"] = _sheet_bool(row.get("pageview_triggered"))
+    row["events_count"] = _sheet_int(row.get("events_count"))
+    row["comscore_present"] = _sheet_bool(row.get("comscore_present"))
+    row["chartbeat_present"] = _sheet_bool(row.get("chartbeat_present"))
+    row["result_json"] = _sheet_json(row.get("result_json"), {})
+    return row
+
+
+def _find_sheet_row_by_first_column(worksheet, key_value: str) -> Optional[int]:
+    key_text = str(key_value or "").strip()
+    if not key_text:
+        return None
+    values = worksheet.col_values(1)
+    for index, value in enumerate(values[1:], start=2):
+        if str(value or "").strip() == key_text:
+            return index
+    return None
+
+
+def _update_sheet_row(worksheet, headers: List[str], row_index: int, values: dict):
+    existing_row = worksheet.row_values(row_index)
+    existing_map = {
+        header: (existing_row[idx] if idx < len(existing_row) else "")
+        for idx, header in enumerate(headers)
+    }
+    existing_map.update(values)
+    ordered_row = [_sheet_storage_value(existing_map.get(header, "")) for header in headers]
+    last_cell = f"{sheet_column_label(len(headers))}{row_index}"
+    worksheet.update(
+        range_name=f"A{row_index}:{last_cell}",
+        values=[ordered_row],
+        value_input_option="USER_ENTERED",
+    )
+
+
 def create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict], wait_seconds: int) -> Tuple[bool, str]:
+    if sheet_storage_is_configured():
+        job_id = f"job_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
+        compact_plan = []
+        for row in compact_domain_audit_plan(plan_rows):
+            template = dict(row.get("template") or {})
+            rules = get_rules_for_validation_template(template, template_rules_by_template)
+            compact_plan.append(
+                {
+                    **row,
+                    "domain_name": domain_name,
+                    "rules": rules,
+                }
+            )
+        payload = {
+            "domain_name": domain_name,
+            "wait_seconds": int(wait_seconds or 8),
+            "plan": compact_plan,
+        }
+        now_text = datetime.now(timezone.utc).isoformat()
+        row = {
+            "job_id": job_id,
+            "domain_name": domain_name,
+            "status": "queued",
+            "total_count": len(compact_plan),
+            "completed_count": 0,
+            "failed_count": 0,
+            "requested_by": email_id,
+            "payload": payload,
+            "error_message": "",
+            "created_at": now_text,
+            "started_at": "",
+            "completed_at": "",
+        }
+        try:
+            worksheet = get_bulk_jobs_worksheet()
+            worksheet.append_row(
+                [_sheet_storage_value(row.get(header, "")) for header in BULK_JOB_HEADERS],
+                value_input_option="USER_ENTERED",
+            )
+            return True, job_id
+        except Exception as exc:
+            return False, str(exc)
+
     if not supabase_is_configured():
         return False, "Supabase is not configured yet."
     job_id = f"job_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
@@ -4282,6 +4512,21 @@ def create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict]
 
 
 def load_bulk_audit_jobs(domain_name: str = "", limit: int = 10) -> Tuple[List[dict], str]:
+    if sheet_storage_is_configured():
+        try:
+            worksheet = get_bulk_jobs_worksheet()
+            rows = [_bulk_job_from_sheet(record) for record in worksheet.get_all_records(default_blank="")]
+            if domain_name:
+                rows = [
+                    row
+                    for row in rows
+                    if str(row.get("domain_name") or "").strip() == str(domain_name or "").strip()
+                ]
+            rows = sorted(rows, key=lambda row: str(row.get("created_at") or ""), reverse=True)
+            return rows[: int(limit or 10)], ""
+        except Exception as exc:
+            return [], str(exc)
+
     if not supabase_is_configured():
         return [], "Supabase is not configured yet."
     params = {"select": "*", "order": "created_at.desc", "limit": str(limit)}
@@ -4294,6 +4539,27 @@ def load_bulk_audit_jobs(domain_name: str = "", limit: int = 10) -> Tuple[List[d
 
 
 def cancel_bulk_audit_job(job_id: str) -> Tuple[bool, str]:
+    if sheet_storage_is_configured():
+        if not str(job_id or "").strip():
+            return False, "Job ID is missing."
+        try:
+            worksheet = get_bulk_jobs_worksheet()
+            row_index = _find_sheet_row_by_first_column(worksheet, job_id)
+            if row_index is None:
+                return False, "Bulk audit job not found."
+            _update_sheet_row(
+                worksheet,
+                BULK_JOB_HEADERS,
+                row_index,
+                {
+                    "status": "cancelled",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return True, "Bulk audit stop requested."
+        except Exception as exc:
+            return False, str(exc)
+
     if not supabase_is_configured():
         return False, "Supabase is not configured yet."
     if not str(job_id or "").strip():
@@ -4315,6 +4581,22 @@ def cancel_bulk_audit_job(job_id: str) -> Tuple[bool, str]:
 
 
 def load_bulk_audit_results(job_id: str) -> Tuple[List[dict], str]:
+    if sheet_storage_is_configured():
+        if not job_id:
+            return [], "Job ID is missing."
+        try:
+            worksheet = get_bulk_results_worksheet()
+            rows = [_bulk_result_from_sheet(record) for record in worksheet.get_all_records(default_blank="")]
+            rows = [
+                row
+                for row in rows
+                if str(row.get("job_id") or "").strip() == str(job_id or "").strip()
+            ]
+            rows = sorted(rows, key=lambda row: str(row.get("created_at") or ""))
+            return rows, ""
+        except Exception as exc:
+            return [], str(exc)
+
     if not supabase_is_configured():
         return [], "Supabase is not configured yet."
     if not job_id:
@@ -5450,6 +5732,9 @@ def reset_templates_to_homepage_only(email_id: str):
     return True, "Template Manager reset. Only the Home Page template remains."
 
 
+SHEET_RESET_TEMPLATES_TO_HOMEPAGE_ONLY = reset_templates_to_homepage_only
+
+
 def should_auto_cleanup_homepage_templates(template_records: List[dict]) -> bool:
     starter_template_names = {
         _normalize_template_name_key(seed.get("template_name"))
@@ -5467,8 +5752,8 @@ def should_auto_cleanup_homepage_templates(template_records: List[dict]) -> bool
 
 
 def reset_templates_to_homepage_only(email_id: str):
-    if not supabase_is_configured():
-        return False, "Supabase is not configured yet."
+    if sheet_storage_is_configured() or not supabase_is_configured():
+        return SHEET_RESET_TEMPLATES_TO_HOMEPAGE_ONLY(email_id)
 
     homepage_seed = get_homepage_starter_template()
     homepage_template_id = "tpl_home_page"
@@ -5510,7 +5795,7 @@ def reset_templates_to_homepage_only(email_id: str):
             supabase_request("POST", SUPABASE_TEMPLATE_RULE_TABLE, payload=rule_rows, prefer="return=minimal")
         return True, "Template Manager reset. Only the Home Page template remains."
     except Exception as exc:
-        return False, str(exc)
+        return SHEET_RESET_TEMPLATES_TO_HOMEPAGE_ONLY(email_id)
 
 
 def render_sidebar_session(email_id: str):
@@ -5523,11 +5808,13 @@ def render_sidebar_session(email_id: str):
             st.rerun()
 
         st.markdown("### Storage")
-        if supabase_is_configured():
-            st.success("Supabase configured")
+        if sheet_storage_is_configured():
+            st.success("Google Sheets storage configured")
+        elif supabase_is_configured():
+            st.warning("Supabase configured")
         else:
-            st.warning("Supabase not configured")
-            st.caption("Add `supabase.url` and `supabase.service_role_key` to Streamlit secrets.")
+            st.warning("Storage not configured")
+            st.caption("Add `gcp_service_account` and `sheets.spreadsheet_id` to Streamlit secrets.")
 
 
 logged_in_email = require_login()
@@ -8895,7 +9182,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
 
             st.markdown("### Run Bulk Audit")
             st.caption(
-                "This now runs in GitHub Actions. Streamlit only creates the job and reads Supabase results, "
+                "This runs in GitHub Actions. Streamlit creates the job and reads stored results, "
                 "so the app should not hit Selenium memory limits."
             )
             if not github_is_configured():
@@ -8907,7 +9194,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
             run_clicked = run_cols[0].button(
                 "Run audit",
                 key=f"start_github_domain_audit_{domain_state_key}",
-                disabled=not audit_plan or not supabase_is_configured() or not github_is_configured(),
+                disabled=not audit_plan or not (sheet_storage_is_configured() or supabase_is_configured()) or not github_is_configured(),
                 type="primary",
             )
             run_cols[1].caption(

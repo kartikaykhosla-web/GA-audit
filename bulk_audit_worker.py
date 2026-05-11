@@ -9,6 +9,12 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 import requests
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+except Exception:
+    gspread = None
+    Credentials = None
 from selenium import webdriver
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
@@ -18,6 +24,44 @@ from selenium.webdriver.chrome.service import Service
 
 SUPABASE_JOB_TABLE = "bulk_audit_jobs"
 SUPABASE_RESULT_TABLE = "bulk_audit_results"
+DEFAULT_LOG_SHEET_ID = "1e_fp0fAOeEAHaRtFJUv-rt-i0sqUOhszYOrOk7Cv5QU"
+DEFAULT_BULK_JOBS_WORKSHEET = "Bulk Audit Jobs"
+DEFAULT_BULK_RESULTS_WORKSHEET = "Bulk Audit Results"
+BULK_JOB_HEADERS = [
+    "job_id",
+    "domain_name",
+    "status",
+    "total_count",
+    "completed_count",
+    "failed_count",
+    "requested_by",
+    "payload",
+    "error_message",
+    "created_at",
+    "started_at",
+    "completed_at",
+]
+BULK_RESULT_HEADERS = [
+    "result_id",
+    "job_id",
+    "template_id",
+    "template_name",
+    "sample_url",
+    "audit_outcome",
+    "implementation_status",
+    "ga_present",
+    "pageview_triggered",
+    "pageview_source",
+    "events_count",
+    "events_fired",
+    "measurement_id",
+    "container_id",
+    "comscore_present",
+    "chartbeat_present",
+    "issues",
+    "result_json",
+    "created_at",
+]
 GA4_EVENT_PARAM_KEYS = ("en", "event_name")
 FIELD_NAME_ALIASES = {
     "scroll_percent": ["scroll_percent", "scroll_percentage", "percent_scrolled"],
@@ -132,6 +176,192 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def get_service_account_info() -> Dict[str, Any]:
+    raw_json = (
+        os.environ.get("GCP_SERVICE_ACCOUNT_JSON")
+        or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+        or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        or ""
+    ).strip()
+    if not raw_json:
+        return {}
+    try:
+        info = json.loads(raw_json)
+    except Exception:
+        return {}
+    cleaned = {}
+    for key, value in info.items():
+        cleaned[key] = value.strip() if isinstance(value, str) else value
+    private_key = cleaned.get("private_key")
+    if isinstance(private_key, str):
+        normalized_key = private_key
+        if len(normalized_key) >= 2 and normalized_key[0] == normalized_key[-1] and normalized_key[0] in {"'", '"'}:
+            normalized_key = normalized_key[1:-1]
+        normalized_key = normalized_key.replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n").strip()
+        begin_marker = "-----BEGIN PRIVATE KEY-----"
+        if begin_marker in normalized_key:
+            normalized_key = normalized_key[normalized_key.index(begin_marker):]
+        cleaned["private_key"] = normalized_key
+    return cleaned
+
+
+def get_sheet_settings() -> Dict[str, str]:
+    return {
+        "spreadsheet_id": (
+            os.environ.get("GOOGLE_SHEET_ID")
+            or os.environ.get("SHEETS_SPREADSHEET_ID")
+            or os.environ.get("SPREADSHEET_ID")
+            or DEFAULT_LOG_SHEET_ID
+        ).strip(),
+        "bulk_jobs_worksheet_name": (
+            os.environ.get("BULK_JOBS_WORKSHEET_NAME")
+            or DEFAULT_BULK_JOBS_WORKSHEET
+        ).strip(),
+        "bulk_results_worksheet_name": (
+            os.environ.get("BULK_RESULTS_WORKSHEET_NAME")
+            or DEFAULT_BULK_RESULTS_WORKSHEET
+        ).strip(),
+    }
+
+
+def sheet_storage_is_configured() -> bool:
+    return bool(gspread and Credentials and get_service_account_info() and get_sheet_settings().get("spreadsheet_id"))
+
+
+def sheet_column_label(index: int) -> str:
+    label = ""
+    while index > 0:
+        index, remainder = divmod(index - 1, 26)
+        label = chr(65 + remainder) + label
+    return label
+
+
+def get_spreadsheet():
+    if not gspread or not Credentials:
+        raise RuntimeError("Google Sheets libraries are not installed.")
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        raise RuntimeError("GCP_SERVICE_ACCOUNT_JSON is required for Google Sheets storage.")
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    credentials = Credentials.from_service_account_info(service_account_info, scopes=scopes)
+    client = gspread.authorize(credentials)
+    return client.open_by_key(get_sheet_settings()["spreadsheet_id"])
+
+
+def ensure_fixed_headers(worksheet, headers: List[str]):
+    existing_headers = worksheet.row_values(1)
+    target_headers = list(headers)
+    if len(target_headers) > worksheet.col_count:
+        worksheet.add_cols(len(target_headers) - worksheet.col_count)
+    if existing_headers[: len(target_headers)] != target_headers:
+        last_cell = f"{sheet_column_label(len(target_headers))}1"
+        worksheet.update(
+            range_name=f"A1:{last_cell}",
+            values=[target_headers],
+            value_input_option="USER_ENTERED",
+        )
+
+
+def get_fixed_worksheet(worksheet_name: str, headers: List[str], rows: int = 1000):
+    spreadsheet = get_spreadsheet()
+    try:
+        worksheet = spreadsheet.worksheet(worksheet_name)
+    except gspread.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(
+            title=worksheet_name,
+            rows=rows,
+            cols=len(headers),
+        )
+    ensure_fixed_headers(worksheet, headers)
+    return worksheet
+
+
+def get_bulk_jobs_worksheet():
+    return get_fixed_worksheet(get_sheet_settings()["bulk_jobs_worksheet_name"], BULK_JOB_HEADERS, rows=1000)
+
+
+def get_bulk_results_worksheet():
+    return get_fixed_worksheet(get_sheet_settings()["bulk_results_worksheet_name"], BULK_RESULT_HEADERS, rows=5000)
+
+
+def sheet_storage_value(value):
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if value is None:
+        return ""
+    return str(value)
+
+
+def sheet_bool(value) -> bool:
+    return str(value or "").strip().lower() in {"true", "1", "yes"}
+
+
+def sheet_int(value) -> int:
+    try:
+        return int(float(str(value or "0").strip() or "0"))
+    except Exception:
+        return 0
+
+
+def sheet_json(value, fallback):
+    if isinstance(value, (dict, list)):
+        return value
+    if not str(value or "").strip():
+        return fallback
+    try:
+        return json.loads(str(value))
+    except Exception:
+        return fallback
+
+
+def clean_sheet_record(record: dict, headers: List[str]) -> dict:
+    cleaned = {header: "" for header in headers}
+    for key, value in (record or {}).items():
+        cleaned[str(key)] = "" if value is None else value
+    return cleaned
+
+
+def bulk_job_from_sheet(record: dict) -> dict:
+    row = clean_sheet_record(record, BULK_JOB_HEADERS)
+    row["total_count"] = sheet_int(row.get("total_count"))
+    row["completed_count"] = sheet_int(row.get("completed_count"))
+    row["failed_count"] = sheet_int(row.get("failed_count"))
+    row["payload"] = sheet_json(row.get("payload"), {})
+    return row
+
+
+def find_sheet_row_by_first_column(worksheet, key_value: str) -> Optional[int]:
+    key_text = str(key_value or "").strip()
+    if not key_text:
+        return None
+    values = worksheet.col_values(1)
+    for index, value in enumerate(values[1:], start=2):
+        if str(value or "").strip() == key_text:
+            return index
+    return None
+
+
+def update_sheet_row(worksheet, headers: List[str], row_index: int, values: dict):
+    existing_row = worksheet.row_values(row_index)
+    existing_map = {
+        header: (existing_row[idx] if idx < len(existing_row) else "")
+        for idx, header in enumerate(headers)
+    }
+    existing_map.update(values)
+    ordered_row = [sheet_storage_value(existing_map.get(header, "")) for header in headers]
+    last_cell = f"{sheet_column_label(len(headers))}{row_index}"
+    worksheet.update(
+        range_name=f"A{row_index}:{last_cell}",
+        values=[ordered_row],
+        value_input_option="USER_ENTERED",
+    )
+
+
 def get_supabase_settings() -> Dict[str, str]:
     return {
         "url": os.environ.get("SUPABASE_URL", "").strip().rstrip("/"),
@@ -174,6 +404,13 @@ def supabase_request(method: str, table: str, params: Optional[dict] = None, pay
 
 
 def update_job(job_id: str, values: dict):
+    if sheet_storage_is_configured():
+        worksheet = get_bulk_jobs_worksheet()
+        row_index = find_sheet_row_by_first_column(worksheet, job_id)
+        if row_index is None:
+            raise RuntimeError(f"Bulk audit job not found: {job_id}")
+        update_sheet_row(worksheet, BULK_JOB_HEADERS, row_index, values)
+        return
     supabase_request(
         "PATCH",
         SUPABASE_JOB_TABLE,
@@ -184,6 +421,13 @@ def update_job(job_id: str, values: dict):
 
 
 def load_job(job_id: str) -> dict:
+    if sheet_storage_is_configured():
+        worksheet = get_bulk_jobs_worksheet()
+        rows = [bulk_job_from_sheet(record) for record in worksheet.get_all_records(default_blank="")]
+        for row in rows:
+            if str(row.get("job_id") or "").strip() == str(job_id or "").strip():
+                return row
+        raise RuntimeError(f"Bulk audit job not found: {job_id}")
     rows = supabase_request(
         "GET",
         SUPABASE_JOB_TABLE,
@@ -1664,6 +1908,14 @@ def insert_result(job_id: str, plan_row: dict, result: dict):
         "issues": result.get("issues") or "",
         "result_json": result,
     }
+    if sheet_storage_is_configured():
+        row["created_at"] = utc_now()
+        worksheet = get_bulk_results_worksheet()
+        worksheet.append_row(
+            [sheet_storage_value(row.get(header, "")) for header in BULK_RESULT_HEADERS],
+            value_input_option="USER_ENTERED",
+        )
+        return
     supabase_request("POST", SUPABASE_RESULT_TABLE, payload=row, prefer="return=minimal")
 
 
