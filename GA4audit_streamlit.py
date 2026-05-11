@@ -7430,6 +7430,7 @@ def build_execution_validation_rows(
         field_name = str(rule.get("field_name") or "").strip()
         if not field_name:
             continue
+        normalized_field_name = normalize_dimension_name(field_name)
 
         payload_for_rule = select_payload_for_execution_rule(snapshot, rule)
         actual_key, actual_value = find_payload_value(payload_for_rule, field_name)
