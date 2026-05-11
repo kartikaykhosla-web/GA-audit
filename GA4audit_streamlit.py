@@ -6652,7 +6652,7 @@ def normalize_dimension_name(value) -> str:
 
 FIELD_ALIAS_NORMALIZED = {
     "author": {"author", "postedby"},
-    "category": {"category", "genre", "articlecategory"},
+    "category": {"category", "genre", "articlecategory", "pagecat", "pagecategory"},
     "subcategory": {"subcategory", "articlesubcategory"},
     "eventname": {"eventname", "event"},
     "userstatus": {"userstatus", "usertype", "loggeduserid", "registrationstatus"},
@@ -7434,10 +7434,21 @@ def build_execution_validation_rows(
         payload_for_rule = select_payload_for_execution_rule(snapshot, rule)
         actual_key, actual_value = find_payload_value(payload_for_rule, field_name)
         used_fields.add(actual_key or field_name)
+        expected_values_for_validation = rule.get("expected_values")
+        actual_value_for_validation = actual_value
+        rule_type_for_validation = str(rule.get("rule_type") or "").strip().lower()
+        if normalized_field_name in {"event", "eventname"} and rule_type_for_validation in {"exact", "one_of"}:
+            expected_values_for_validation = "|".join(
+                canonical_event_name(value)
+                for value in parse_expected_values(rule.get("expected_values"))
+                if canonical_event_name(value)
+            )
+            actual_value_for_validation = canonical_event_name(actual_value)
+
         matched, validation_label = evaluate_value_rule(
             rule.get("rule_type"),
-            rule.get("expected_values"),
-            actual_value,
+            expected_values_for_validation,
+            actual_value_for_validation,
         )
         display_value = actual_value or "Not observed"
         expected_text = str(rule.get("expected_values") or "").strip()
