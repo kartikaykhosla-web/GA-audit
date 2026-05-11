@@ -2165,7 +2165,7 @@ def _attempt_video_start_in_current_context(driver) -> bool:
     return attempted
 
 
-def _attempt_video_start_in_frames(driver, depth: int = 0, max_depth: int = 1) -> bool:
+def _attempt_video_start_in_frames(driver, depth: int = 0, max_depth: int = 0) -> bool:
     if depth > max_depth:
         return False
     attempted = False
@@ -2174,7 +2174,7 @@ def _attempt_video_start_in_frames(driver, depth: int = 0, max_depth: int = 1) -
     except Exception:
         return False
 
-    for frame_index, frame in enumerate(frames[:3]):
+    for frame_index, frame in enumerate(frames[:1]):
         try:
             frames = driver.find_elements(By.TAG_NAME, "iframe")
             if not frames:
@@ -2237,7 +2237,7 @@ def _seek_visible_videos_in_current_context(driver, target_percent: float = 26.0
         return False
 
 
-def _seek_visible_videos_in_frames(driver, target_percent: float = 26.0, depth: int = 0, max_depth: int = 1) -> bool:
+def _seek_visible_videos_in_frames(driver, target_percent: float = 26.0, depth: int = 0, max_depth: int = 0) -> bool:
     if depth > max_depth:
         return False
     updated = False
@@ -2246,7 +2246,7 @@ def _seek_visible_videos_in_frames(driver, target_percent: float = 26.0, depth: 
     except Exception:
         return False
 
-    for frame_index, frame in enumerate(frames[:2]):
+    for frame_index, frame in enumerate(frames[:1]):
         try:
             frames = driver.find_elements(By.TAG_NAME, "iframe")
             driver.switch_to.frame(frames[frame_index])
@@ -2271,7 +2271,7 @@ def trigger_video_playback(driver) -> bool:
         return False
 
     # Try the hero media near the top of the article before we scroll past it.
-    for percent in (0, 8, 18):
+    for percent in (0, 12):
         try:
             driver.execute_script(
                 """
@@ -2350,15 +2350,30 @@ def _single_audit_observed_event_names(driver) -> set[str]:
     return event_names
 
 
+def single_audit_datalayer_has_pageview(driver) -> bool:
+    try:
+        return bool(
+            driver.execute_script(
+                """
+                return (window.dataLayer || []).some(function(item) {
+                    if (!item || typeof item !== "object") return false;
+                    return String(item.event || "").toLowerCase().replace(/_/g, "") === "pageview";
+                });
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
 def single_audit_signals_ready(
     driver,
     requires_scroll_capture: bool,
     requires_video_playback: bool,
 ) -> bool:
-    dl_list, _ = extract_datalayer(driver)
     observed_event_names = _single_audit_observed_event_names(driver)
 
-    pageview_ready = bool(find_pageview_event(dl_list)) or "pageview" in observed_event_names
+    pageview_ready = single_audit_datalayer_has_pageview(driver) or "pageview" in observed_event_names
     if not pageview_ready:
         return False
 
@@ -2650,7 +2665,7 @@ def audit_single_url(
 
     configured_wait = max(1, int(wait_seconds or 8))
     if requires_video_playback:
-        effective_wait_budget = min(configured_wait, 3)
+        effective_wait_budget = min(configured_wait, 2)
     elif requires_scroll_capture:
         effective_wait_budget = min(configured_wait, 2)
     else:
