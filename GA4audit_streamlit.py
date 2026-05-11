@@ -43,7 +43,7 @@ except Exception:
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import JavascriptException
+from selenium.common.exceptions import JavascriptException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 
@@ -535,7 +535,7 @@ def create_driver(
         except Exception:
             pass
         try:
-            driver.set_page_load_timeout(25)
+            driver.set_page_load_timeout(12)
         except Exception:
             pass
         return driver
@@ -2584,6 +2584,12 @@ def audit_single_url(
     # Load page
     try:
         driver.get(url)
+    except TimeoutException as e:
+        result["datalayer_error"] = f"Page load timed out in Selenium; continuing with loaded DOM: {e}"
+        try:
+            driver.execute_script("window.stop();")
+        except Exception:
+            pass
     except Exception as e:
         result["datalayer_error"] = f"Error loading page in Selenium: {e}"
         result["audit_duration_seconds"] = round(time.time() - audit_start, 2)
