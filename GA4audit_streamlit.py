@@ -452,6 +452,7 @@ def create_driver(
     headless: bool = True,
     performance_logs: bool = False,
     capture_network: bool = True,
+    page_load_timeout: int = 12,
 ):
     selected_binary, chromedriver_path = _resolve_chrome_paths()
 
@@ -535,7 +536,7 @@ def create_driver(
         except Exception:
             pass
         try:
-            driver.set_page_load_timeout(12)
+            driver.set_page_load_timeout(page_load_timeout)
         except Exception:
             pass
         return driver
@@ -1770,18 +1771,19 @@ def categorize_network_requests(driver, page_domain: str) -> Dict[str, Any]:
     ccm_pageviews: List[Dict[str, Any]] = []
     comscore_hits: List[Dict[str, Any]] = []
     chartbeat_hits: List[Dict[str, Any]] = []
-   
-    perf_ga4_collects, perf_ccm_pageviews, perf_comscore_hits, perf_chartbeat_hits = extract_collect_hits_from_performance_logs(driver, page_domain)
-    ga4_collects = merge_network_hits(ga4_collects, perf_ga4_collects)
-    ccm_pageviews = merge_network_hits(ccm_pageviews, perf_ccm_pageviews)
-    comscore_hits = merge_network_hits(comscore_hits, perf_comscore_hits)
-    chartbeat_hits = merge_network_hits(chartbeat_hits, perf_chartbeat_hits)
 
     timing_ga4_collects, timing_ccm_pageviews, timing_comscore_hits, timing_chartbeat_hits = extract_collect_hits_from_resource_timing(driver, page_domain)
     ga4_collects = merge_network_hits(ga4_collects, timing_ga4_collects)
     ccm_pageviews = merge_network_hits(ccm_pageviews, timing_ccm_pageviews)
     comscore_hits = merge_network_hits(comscore_hits, timing_comscore_hits)
     chartbeat_hits = merge_network_hits(chartbeat_hits, timing_chartbeat_hits)
+
+    if not (ga4_collects and comscore_hits and chartbeat_hits):
+        perf_ga4_collects, perf_ccm_pageviews, perf_comscore_hits, perf_chartbeat_hits = extract_collect_hits_from_performance_logs(driver, page_domain)
+        ga4_collects = merge_network_hits(ga4_collects, perf_ga4_collects)
+        ccm_pageviews = merge_network_hits(ccm_pageviews, perf_ccm_pageviews)
+        comscore_hits = merge_network_hits(comscore_hits, perf_comscore_hits)
+        chartbeat_hits = merge_network_hits(chartbeat_hits, perf_chartbeat_hits)
 
     return {
         "gtm_present": bool(gtm_scripts),
@@ -9218,6 +9220,10 @@ This capture is split into three layers:
                     for rule_set in companion_rule_sets
                 )
             )
+            article_detail_fast_path = is_article_detail_template(
+                selected_template,
+                template_rules_by_template,
+            )
             total_audit_passes = 1
             completed_audit_passes = 0
 
@@ -9228,8 +9234,9 @@ This capture is split into three layers:
                 # making Chrome startup less reliable than the original fast path.
                 driver = create_driver(
                     headless=True,
-                    performance_logs=True,
+                    performance_logs=not article_detail_fast_path,
                     capture_network=True,
+                    page_load_timeout=8 if article_detail_fast_path else 12,
                 )
                 try:
                     progress.progress(0.2)
