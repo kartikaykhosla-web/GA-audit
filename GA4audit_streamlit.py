@@ -579,6 +579,40 @@ def create_driver(
     raise RuntimeError(message)
 
 
+def safe_quit_driver(driver, timeout_seconds: float = 2.0) -> None:
+    if not driver:
+        return
+
+    service_process = None
+    try:
+        service_process = getattr(getattr(driver, "service", None), "process", None)
+    except Exception:
+        service_process = None
+
+    finished = threading.Event()
+
+    def _quit():
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        finally:
+            finished.set()
+
+    quit_thread = threading.Thread(target=_quit, daemon=True)
+    quit_thread.start()
+    quit_thread.join(max(0.1, float(timeout_seconds or 0)))
+
+    if finished.is_set():
+        return
+
+    try:
+        if service_process:
+            service_process.kill()
+    except Exception:
+        pass
+
+
 def extract_datalayer(driver) -> Tuple[list, Optional[str]]:
     try:
         dl = driver.execute_script(
@@ -2103,16 +2137,11 @@ def _click_element(driver, element) -> bool:
     except Exception:
         pass
     time.sleep(0.01)
-    for click_attempt in (
-        lambda: element.click(),
-        lambda: driver.execute_script("arguments[0].click();", element),
-    ):
-        try:
-            click_attempt()
-            return True
-        except Exception:
-            continue
-    return False
+    try:
+        driver.execute_script("arguments[0].click();", element)
+        return True
+    except Exception:
+        return False
 
 
 def _play_visible_videos_in_current_context(driver) -> bool:
@@ -9308,15 +9337,7 @@ This capture is split into three layers:
                     results.append(primary_result)
                 finally:
                     status_box.write("Closing browser...")
-                    try:
-                        driver.quit()
-                    except Exception:
-                        try:
-                            service_process = getattr(getattr(driver, "service", None), "process", None)
-                            if service_process:
-                                service_process.kill()
-                        except Exception:
-                            pass
+                    safe_quit_driver(driver)
                 completed_audit_passes += 1
                 progress.progress(completed_audit_passes / total_audit_passes)
             except Exception as exc:
@@ -10118,7 +10139,7 @@ if active_section == "Compare Prod vs Stage":
                 prod = audit_single_url(driver, prod_url, wait_cmp)
                 stage = audit_single_url(driver, stage_url, wait_cmp)
             finally:
-                driver.quit()
+                safe_quit_driver(driver)
 
             st.subheader("Comparison summary")
             st.dataframe(
