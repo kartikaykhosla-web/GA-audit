@@ -442,7 +442,6 @@ COMMON_CONSENT_SELECTORS = [
     "[id*='accept']",
     "button",
     "[role='button']",
-    "a",
 ]
 
 # Embedded GA4 audit engine
@@ -539,6 +538,11 @@ def create_driver(
             driver.set_page_load_timeout(page_load_timeout)
         except Exception:
             pass
+        try:
+            driver.implicitly_wait(0)
+            driver.set_script_timeout(5)
+        except Exception:
+            pass
         return driver
 
     startup_errors = []
@@ -578,8 +582,59 @@ def create_driver(
 def extract_datalayer(driver) -> Tuple[list, Optional[str]]:
     try:
         dl = driver.execute_script(
-            "try { return JSON.parse(JSON.stringify(window.dataLayer || [])); } "
-            "catch (error) { return window.dataLayer || []; }"
+            """
+            const source = Array.isArray(window.dataLayer) ? window.dataLayer : [];
+            const indexes = [];
+            const seen = new Set();
+
+            function addIndex(index) {
+                if (index < 0 || index >= source.length || seen.has(index)) return;
+                seen.add(index);
+                indexes.push(index);
+            }
+
+            for (let i = 0; i < Math.min(source.length, 60); i++) {
+                addIndex(i);
+            }
+            for (let i = Math.max(0, source.length - 20); i < source.length; i++) {
+                addIndex(i);
+            }
+            for (let i = 0; i < source.length; i++) {
+                const item = source[i];
+                if (!item || typeof item !== "object") continue;
+                const eventName = String(item.event || "").toLowerCase().replace(/_/g, "");
+                if (["pageview", "pagescroll", "scroll", "videointeraction"].includes(eventName)) {
+                    addIndex(i);
+                }
+            }
+
+            function clone(value, depth) {
+                depth = depth || 0;
+                if (depth > 2) return "[MaxDepth]";
+                if (value === null || value === undefined) return value;
+                const type = typeof value;
+                if (type === "string" || type === "number" || type === "boolean") return value;
+                if (type === "function") return "[Function]";
+                if (typeof Element !== "undefined" && value instanceof Element) {
+                    return "<" + value.tagName.toLowerCase() + ">";
+                }
+                if (Array.isArray(value)) {
+                    return value.slice(0, 20).map((entry) => clone(entry, depth + 1));
+                }
+                if (type === "object") {
+                    const output = {};
+                    Object.keys(value).slice(0, 80).forEach((key) => {
+                        try {
+                            output[key] = clone(value[key], depth + 1);
+                        } catch (error) {}
+                    });
+                    return output;
+                }
+                return String(value);
+            }
+
+            return indexes.sort((a, b) => a - b).map((index) => clone(source[index], 0));
+            """
         )
         if not isinstance(dl, list):
             dl = [dl]
