@@ -452,6 +452,7 @@ def create_driver(
     performance_logs: bool = False,
     capture_network: bool = True,
     page_load_timeout: int = 12,
+    prefer_safe_mode: bool = False,
 ):
     selected_binary, chromedriver_path = _resolve_chrome_paths()
 
@@ -546,15 +547,17 @@ def create_driver(
         return driver
 
     startup_errors = []
-    try:
-        return _launch_driver(_build_chrome_options(safe_mode=False))
-    except Exception as exc:
-        startup_errors.append(f"Primary launch failed: {exc}")
+    launch_attempts = [True, False] if prefer_safe_mode else [False, True]
+    launch_labels = {
+        False: "Primary launch failed",
+        True: "Fallback launch failed",
+    }
 
-    try:
-        return _launch_driver(_build_chrome_options(safe_mode=True))
-    except Exception as exc:
-        startup_errors.append(f"Fallback launch failed: {exc}")
+    for safe_mode in launch_attempts:
+        try:
+            return _launch_driver(_build_chrome_options(safe_mode=safe_mode))
+        except Exception as exc:
+            startup_errors.append(f"{launch_labels[safe_mode]}: {exc}")
 
     browser_version = _read_version(browser_cmd)
     driver_version = _read_version(chromedriver_path or shutil.which("chromedriver") or "")
@@ -9331,6 +9334,7 @@ This capture is split into three layers:
                     performance_logs=not article_detail_fast_path,
                     capture_network=True,
                     page_load_timeout=6 if article_detail_fast_path else 12,
+                    prefer_safe_mode=article_detail_fast_path,
                 )
                 try:
                     progress.progress(0.2)
