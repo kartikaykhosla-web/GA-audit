@@ -9290,24 +9290,28 @@ This capture is split into three layers:
                 )
                 for companion_template in companion_validation_templates
             ]
-            requires_video_playback = (
-                single_audit_requires_video_playback(selected_template_rules)
-                or any(
-                    single_audit_requires_video_playback(rule_set)
-                    for rule_set in companion_rule_sets
-                )
-            )
-            requires_scroll_capture = (
-                single_audit_requires_scroll_capture(selected_template_rules)
-                or any(
-                    single_audit_requires_scroll_capture(rule_set)
-                    for rule_set in companion_rule_sets
-                )
-            )
             article_detail_fast_path = is_article_detail_template(
                 selected_template,
                 template_rules_by_template,
             )
+            if article_detail_fast_path:
+                requires_video_playback = single_audit_requires_video_playback(selected_template_rules)
+                requires_scroll_capture = single_audit_requires_scroll_capture(selected_template_rules)
+            else:
+                requires_video_playback = (
+                    single_audit_requires_video_playback(selected_template_rules)
+                    or any(
+                        single_audit_requires_video_playback(rule_set)
+                        for rule_set in companion_rule_sets
+                    )
+                )
+                requires_scroll_capture = (
+                    single_audit_requires_scroll_capture(selected_template_rules)
+                    or any(
+                        single_audit_requires_scroll_capture(rule_set)
+                        for rule_set in companion_rule_sets
+                    )
+                )
             total_audit_passes = 1
             completed_audit_passes = 0
 
@@ -9320,7 +9324,7 @@ This capture is split into three layers:
                     headless=True,
                     performance_logs=not article_detail_fast_path,
                     capture_network=True,
-                    page_load_timeout=8 if article_detail_fast_path else 12,
+                    page_load_timeout=6 if article_detail_fast_path else 12,
                 )
                 try:
                     progress.progress(0.2)
