@@ -2606,6 +2606,7 @@ def audit_single_url(
     template_rules: Optional[List[dict]] = None,
     force_video_playback: bool = False,
     force_scroll_capture: bool = False,
+    quick_video_probe: bool = False,
 ) -> Dict[str, Any]:
     print(f"\n🔍 Auditing: {url}")
 
@@ -2722,7 +2723,7 @@ def audit_single_url(
     interaction_start = time.time()
 
     # Scroll only when this audit path actually needs interaction-driven signals.
-    if requires_video_playback:
+    if requires_video_playback or quick_video_probe:
         try:
             video_started = trigger_video_playback(driver)
         except Exception:
@@ -9297,6 +9298,10 @@ This capture is split into three layers:
             if article_detail_fast_path:
                 requires_video_playback = single_audit_requires_video_playback(selected_template_rules)
                 requires_scroll_capture = single_audit_requires_scroll_capture(selected_template_rules)
+                quick_video_probe = any(
+                    single_audit_requires_video_playback(rule_set)
+                    for rule_set in companion_rule_sets
+                )
             else:
                 requires_video_playback = (
                     single_audit_requires_video_playback(selected_template_rules)
@@ -9305,6 +9310,7 @@ This capture is split into three layers:
                         for rule_set in companion_rule_sets
                     )
                 )
+                quick_video_probe = False
                 requires_scroll_capture = (
                     single_audit_requires_scroll_capture(selected_template_rules)
                     or any(
@@ -9337,6 +9343,7 @@ This capture is split into three layers:
                         template_rules=selected_template_rules,
                         force_video_playback=requires_video_playback,
                         force_scroll_capture=requires_scroll_capture,
+                        quick_video_probe=quick_video_probe,
                     )
                     results.append(primary_result)
                 finally:
