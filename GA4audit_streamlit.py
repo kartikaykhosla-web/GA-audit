@@ -5434,6 +5434,7 @@ def get_rules_for_validation_template(
 
 
 VIDEO_INTERACTION_FIELD_NAMES = {
+    "dynamic_video_embed_type",
     "player_type",
     "position_fold",
     "section_name",
@@ -5444,6 +5445,7 @@ VIDEO_INTERACTION_FIELD_NAMES = {
     "scroll_percent",
 }
 VIDEO_INTERACTION_FIELD_NORMALIZED = {
+    "dynamicvideoembedtype",
     "playertype",
     "positionfold",
     "sectionname",
@@ -8011,7 +8013,7 @@ def summarize_validation_failures(
     template: dict,
     selected_template_rules: List[dict],
 ) -> Dict[str, Any]:
-    audit_summary = build_audit_focus_summary(result)
+    audit_summary = build_audit_focus_summary(result, template)
     snapshot = build_datalayer_snapshot_export(result)
     _, execution_validation_rows = build_execution_validation_rows(snapshot, selected_template_rules)
     event_df = build_event_validation_rows(audit_summary["event_rows"], selected_template_rules)
@@ -9184,7 +9186,7 @@ def build_chartbeat_preview(rows: List[Dict[str, Any]]) -> str:
     return " | ".join(highlights[:2])
 
 
-def build_audit_focus_summary(result: dict):
+def build_audit_focus_summary(result: dict, template: Optional[dict] = None):
     execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
     network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
     comscore_rows = load_json_payload(result.get("comscore_hits_json", ""), [])
@@ -9213,11 +9215,22 @@ def build_audit_focus_summary(result: dict):
     mapping_rows = build_audit_mapping_rows(result)
     captured_network, captured_execution, trigger_only = summarize_mapping_values(mapping_rows)
 
+    container_id = extract_container_id(result)
+    measurement_id = extract_measurement_id(result)
+    if container_id == "Not found":
+        template_container_id = str((template or {}).get("container_id") or "").strip()
+        if template_container_id:
+            container_id = template_container_id
+    if measurement_id == "Not found":
+        template_measurement_id = str((template or {}).get("measurement_id") or "").strip()
+        if template_measurement_id:
+            measurement_id = template_measurement_id
+
     return {
         "pageview_triggered": pageview_triggered,
         "pageview_source": pageview_source,
-        "container_id": extract_container_id(result),
-        "measurement_id": extract_measurement_id(result),
+        "container_id": container_id,
+        "measurement_id": measurement_id,
         "events_fired": extract_event_names(result),
         "event_rows": build_event_audit_rows(result),
         "mapping_rows": mapping_rows,
@@ -9395,7 +9408,7 @@ This capture is split into three layers:
             if results:
                 summary_rows = []
                 for result in results:
-                    audit_summary = build_audit_focus_summary(result)
+                    audit_summary = build_audit_focus_summary(result, selected_template)
                     summary_rows.append(
                         {
                             "status": result.get("status"),
@@ -9440,7 +9453,7 @@ This capture is split into three layers:
 
                 if len(results) == 1:
                     result = results[0]
-                    audit_summary = build_audit_focus_summary(result)
+                    audit_summary = build_audit_focus_summary(result, selected_template)
 
                     log_written = False
                     log_error = ""
@@ -9646,7 +9659,11 @@ This capture is split into three layers:
 
                                 with companion_event_col:
                                     st.markdown("##### Event checks")
-                                    if companion_event_df.empty:
+                                    if not matched_companion_event:
+                                        st.info(
+                                            "Video interaction was not captured in this run, so companion event checks are skipped."
+                                        )
+                                    elif companion_event_df.empty:
                                         st.info("No event rules were defined for this companion validation.")
                                     else:
                                         companion_event_display_columns = [
