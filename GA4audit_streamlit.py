@@ -6895,7 +6895,7 @@ FIELD_ALIAS_NORMALIZED = {
     "subcategory": {"subcategory", "articlesubcategory"},
     "eventname": {"eventname", "event"},
     "userstatus": {"userstatus", "usertype", "loggeduserid", "registrationstatus"},
-    "tags": {"tags", "tag", "keywords", "keyword", "articletags", "articlekeywords"},
+    "tags": {"tags", "tag", "keywords", "keyword", "articletags", "articaltags", "articlekeywords"},
 }
 
 
@@ -7577,9 +7577,29 @@ def find_payload_value(payload: dict, field_name: str):
 
     target_norm = normalize_dimension_name(target)
     target_aliases = {target_norm, *FIELD_ALIAS_NORMALIZED.get(target_norm, set())}
+    preferred_prefixes = ("tvc_", "user.", "ep.", "epn.", "epf.", "up.", "upn.")
+
     for key, value in payload.items():
-        if normalize_dimension_name(key) in target_aliases:
+        if normalize_dimension_name(key) == target_norm:
             return str(key), format_exact_value(value)
+
+    preferred_alias_match = None
+    fallback_alias_match = None
+    for key, value in payload.items():
+        normalized_key = normalize_dimension_name(key)
+        if normalized_key == target_norm or normalized_key not in target_aliases:
+            continue
+        match = (str(key), format_exact_value(value))
+        if str(key).startswith(preferred_prefixes):
+            preferred_alias_match = match
+            break
+        if fallback_alias_match is None:
+            fallback_alias_match = match
+
+    if preferred_alias_match:
+        return preferred_alias_match
+    if fallback_alias_match:
+        return fallback_alias_match
 
     return "", ""
 
