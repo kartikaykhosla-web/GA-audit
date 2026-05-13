@@ -9616,30 +9616,36 @@ This capture is split into three layers:
                             st.dataframe(event_display_df, use_container_width=True, hide_index=True)
 
                     if companion_validation_templates and not capture_failed:
-                        st.markdown("### Additional Template Validations")
-                        st.caption(
-                            "Base article detail checks stay separate from companion validations like video interaction."
-                        )
+                        renderable_companion_rows = []
                         for companion_template, companion_rules in zip(companion_validation_templates, companion_rule_sets):
-                            companion_template_name = str(companion_template.get("template_name") or "Unnamed template")
-                            with st.container(border=True):
-                                st.markdown(f"#### {companion_template_name}")
-                                if not companion_rules:
-                                    st.info("This companion template has no rules yet.")
-                                    continue
+                            if not companion_rules:
+                                continue
+                            companion_event_df = build_event_validation_rows(
+                                audit_summary["event_rows"],
+                                companion_rules,
+                            )
+                            matched_companion_event = companion_template_has_matched_event(
+                                companion_event_df,
+                                companion_rules,
+                            )
+                            if not matched_companion_event:
+                                continue
+                            renderable_companion_rows.append(
+                                (companion_template, companion_rules, companion_event_df)
+                            )
 
-                                companion_event_df = build_event_validation_rows(
-                                    audit_summary["event_rows"],
-                                    companion_rules,
-                                )
-                                matched_companion_event = companion_template_has_matched_event(
-                                    companion_event_df,
-                                    companion_rules,
-                                )
-                                companion_exec_col, companion_event_col = st.columns(2)
-                                with companion_exec_col:
-                                    st.markdown("##### Execution checks")
-                                    if matched_companion_event:
+                        if renderable_companion_rows:
+                            st.markdown("### Additional Template Validations")
+                            st.caption(
+                                "Base article detail checks stay separate from companion validations like video interaction."
+                            )
+                            for companion_template, companion_rules, companion_event_df in renderable_companion_rows:
+                                companion_template_name = str(companion_template.get("template_name") or "Unnamed template")
+                                with st.container(border=True):
+                                    st.markdown(f"#### {companion_template_name}")
+                                    companion_exec_col, companion_event_col = st.columns(2)
+                                    with companion_exec_col:
+                                        st.markdown("##### Execution checks")
                                         companion_execution_df, _ = build_execution_validation_rows(
                                             snapshot,
                                             companion_rules,
@@ -9652,49 +9658,41 @@ This capture is split into three layers:
                                                 use_container_width=True,
                                                 hide_index=True,
                                             )
-                                    else:
-                                        st.info(
-                                            "No matching video interaction event was captured in this run, so video-field execution values are unavailable."
-                                        )
 
-                                with companion_event_col:
-                                    st.markdown("##### Event checks")
-                                    if not matched_companion_event:
-                                        st.info(
-                                            "Video interaction was not captured in this run, so companion event checks are skipped."
-                                        )
-                                    elif companion_event_df.empty:
-                                        st.info("No event rules were defined for this companion validation.")
-                                    else:
-                                        companion_event_display_columns = [
-                                            "event_name",
-                                            "status",
-                                            "times_fired",
-                                            "capture_layer",
-                                        ]
-                                        if "expected" in companion_event_df.columns:
-                                            companion_event_display_columns.append("expected")
-                                        if "validation" in companion_event_df.columns:
-                                            companion_event_display_columns.append("validation")
-                                        companion_event_display_df = companion_event_df[
-                                            companion_event_display_columns
-                                        ].rename(
-                                            columns={
-                                                "event_name": "Event",
-                                                "status": "Status",
-                                                "times_fired": "Times Fired",
-                                                "capture_layer": "Seen In",
-                                                "expected": "Expected",
-                                                "validation": "Validation",
-                                            }
-                                        )
-                                        st.dataframe(
-                                            style_validation_table(companion_event_display_df, "Validation")
-                                            if "Validation" in companion_event_display_df.columns
-                                            else companion_event_display_df,
-                                            use_container_width=True,
-                                            hide_index=True,
-                                        )
+                                    with companion_event_col:
+                                        st.markdown("##### Event checks")
+                                        if companion_event_df.empty:
+                                            st.info("No event rules were defined for this companion validation.")
+                                        else:
+                                            companion_event_display_columns = [
+                                                "event_name",
+                                                "status",
+                                                "times_fired",
+                                                "capture_layer",
+                                            ]
+                                            if "expected" in companion_event_df.columns:
+                                                companion_event_display_columns.append("expected")
+                                            if "validation" in companion_event_df.columns:
+                                                companion_event_display_columns.append("validation")
+                                            companion_event_display_df = companion_event_df[
+                                                companion_event_display_columns
+                                            ].rename(
+                                                columns={
+                                                    "event_name": "Event",
+                                                    "status": "Status",
+                                                    "times_fired": "Times Fired",
+                                                    "capture_layer": "Seen In",
+                                                    "expected": "Expected",
+                                                    "validation": "Validation",
+                                                }
+                                            )
+                                            st.dataframe(
+                                                style_validation_table(companion_event_display_df, "Validation")
+                                                if "Validation" in companion_event_display_df.columns
+                                                else companion_event_display_df,
+                                                use_container_width=True,
+                                                hide_index=True,
+                                            )
 
                     st.markdown("### Comscore")
                     if capture_failed:
