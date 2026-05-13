@@ -5447,6 +5447,39 @@ def get_starter_template_seed(template: Optional[dict]) -> Optional[dict]:
     return None
 
 
+ARTICLE_DETAIL_BASE_VIDEO_FIELD_NORMALIZED = {
+    "dynamicvideoembedtype",
+    "scrollpercent",
+}
+
+ARTICLE_DETAIL_SUPPLEMENTAL_RULES = [
+    {"rule_scope": "execution", "field_name": "article_subcategory", "rule_type": "regex", "expected_values": "^[A-Za-z][A-Za-z\\- ]*$"},
+    {"rule_scope": "execution", "field_name": "scroll_percent", "rule_type": "one_of", "expected_values": "25%|50%|75%|100%"},
+    {"rule_scope": "execution", "field_name": "article_age", "rule_type": "regex", "expected_values": "^\\d{1,4}\\s+days\\s+ago$"},
+    {"rule_scope": "execution", "field_name": "dynamic_video_embed_type", "rule_type": "one_of", "expected_values": "in-house video|youtube embed"},
+    {"rule_scope": "execution", "field_name": "embed_count", "rule_type": "regex", "expected_values": "^\\d+$"},
+    {"rule_scope": "execution", "field_name": "genre", "rule_type": "regex", "expected_values": "^[A-Za-z ]+$"},
+    {"rule_scope": "execution", "field_name": "loggeduser_id", "rule_type": "regex", "expected_values": "^(guest|[A-Za-z0-9_]+)$"},
+    {"rule_scope": "execution", "field_name": "posted_by_id", "rule_type": "regex", "expected_values": "^[A-Za-z_ ]+$"},
+    {"rule_scope": "execution", "field_name": "detail_page", "rule_type": "regex", "expected_values": "^[A-Za-z ]+$"},
+    {"rule_scope": "execution", "field_name": "edited_by", "rule_type": "regex", "expected_values": "^[A-Za-z_ ]+$"},
+    {"rule_scope": "execution", "field_name": "video_embed", "rule_type": "one_of", "expected_values": "yes|no"},
+]
+
+
+def _rule_field_merge_key(rule: dict) -> Tuple[str, str]:
+    return (
+        str(rule.get("rule_scope") or "").strip().lower(),
+        normalize_dimension_name(rule.get("field_name") or ""),
+    )
+
+
+def keep_article_detail_base_rule(rule: dict) -> bool:
+    if not is_video_related_rule(rule):
+        return True
+    return normalize_dimension_name(rule.get("field_name") or "") in ARTICLE_DETAIL_BASE_VIDEO_FIELD_NORMALIZED
+
+
 def get_augmented_template_rules(
     template: Optional[dict],
     rules_by_template: Optional[Dict[str, List[dict]]] = None,
@@ -5460,32 +5493,39 @@ def get_augmented_template_rules(
     if not seed_rules:
         return template_rules_list
 
-    existing_signatures = {
-        _normalize_rule_signature(
-            rule.get("rule_scope"),
-            rule.get("field_name"),
-            rule.get("rule_type"),
-            rule.get("expected_values"),
-        )
-        for rule in template_rules_list
-    }
     merged_rules = list(template_rules_list)
     template_id = str((template or {}).get("template_id") or "").strip()
+    existing_field_keys = {
+        _rule_field_merge_key(rule)
+        for rule in merged_rules
+    }
 
     for rule in seed_rules:
-        signature = _normalize_rule_signature(
-            rule.get("rule_scope"),
-            rule.get("field_name"),
-            rule.get("rule_type"),
-            rule.get("expected_values"),
-        )
-        if signature in existing_signatures:
+        field_key = _rule_field_merge_key(rule)
+        if field_key in existing_field_keys:
             continue
         merged_rule = dict(rule)
         if template_id:
             merged_rule["template_id"] = template_id
         merged_rules.append(merged_rule)
-        existing_signatures.add(signature)
+        existing_field_keys.add(field_key)
+
+    if is_article_detail_template(template, rules_by_template):
+        indexed_rules = {
+            _rule_field_merge_key(rule): index
+            for index, rule in enumerate(merged_rules)
+        }
+        for rule in ARTICLE_DETAIL_SUPPLEMENTAL_RULES:
+            merged_rule = dict(rule)
+            if template_id:
+                merged_rule["template_id"] = template_id
+            field_key = _rule_field_merge_key(merged_rule)
+            existing_index = indexed_rules.get(field_key)
+            if existing_index is None:
+                merged_rules.append(merged_rule)
+                indexed_rules[field_key] = len(merged_rules) - 1
+            else:
+                merged_rules[existing_index] = merged_rule
 
     return merged_rules
 
@@ -5828,7 +5868,7 @@ def get_effective_template_rules(
         return []
 
     if is_article_detail_template(template, rules_by_template):
-        return [rule for rule in template_rules_list if not is_video_related_rule(rule)]
+        return [rule for rule in template_rules_list if keep_article_detail_base_rule(rule)]
 
     return template_rules_list
 
@@ -5841,7 +5881,7 @@ def get_single_audit_template_rules(
     template_rules_list = get_augmented_template_rules(template, rules_by_template)
     if template_rules_list:
         if is_article_detail_template(template, rules_by_template):
-            return [rule for rule in template_rules_list if not is_video_related_rule(rule)]
+            return [rule for rule in template_rules_list if keep_article_detail_base_rule(rule)]
         if is_video_interaction_template(template, rules_by_template):
             video_rules = [rule for rule in template_rules_list if is_video_related_rule(rule)]
             if video_rules:
