@@ -5433,6 +5433,63 @@ def get_rules_for_validation_template(
     return get_rules_for_template(template_id, rules_by_template)
 
 
+def get_starter_template_seed(template: Optional[dict]) -> Optional[dict]:
+    if not template:
+        return None
+
+    template_name = _normalize_template_name_key(template.get("template_name") or "")
+    template_name = template_name.removeprefix("jagran ").strip()
+    for seed in JAGRAN_STARTER_TEMPLATES:
+        seed_name = _normalize_template_name_key(seed.get("template_name") or "")
+        seed_name = seed_name.removeprefix("jagran ").strip()
+        if seed_name == template_name:
+            return seed
+    return None
+
+
+def get_augmented_template_rules(
+    template: Optional[dict],
+    rules_by_template: Optional[Dict[str, List[dict]]] = None,
+) -> List[dict]:
+    template_rules_list = get_rules_for_validation_template(template, rules_by_template)
+    seed = get_starter_template_seed(template)
+    if not seed:
+        return template_rules_list
+
+    seed_rules = seed.get("rules") or []
+    if not seed_rules:
+        return template_rules_list
+
+    existing_signatures = {
+        _normalize_rule_signature(
+            rule.get("rule_scope"),
+            rule.get("field_name"),
+            rule.get("rule_type"),
+            rule.get("expected_values"),
+        )
+        for rule in template_rules_list
+    }
+    merged_rules = list(template_rules_list)
+    template_id = str((template or {}).get("template_id") or "").strip()
+
+    for rule in seed_rules:
+        signature = _normalize_rule_signature(
+            rule.get("rule_scope"),
+            rule.get("field_name"),
+            rule.get("rule_type"),
+            rule.get("expected_values"),
+        )
+        if signature in existing_signatures:
+            continue
+        merged_rule = dict(rule)
+        if template_id:
+            merged_rule["template_id"] = template_id
+        merged_rules.append(merged_rule)
+        existing_signatures.add(signature)
+
+    return merged_rules
+
+
 VIDEO_INTERACTION_FIELD_NAMES = {
     "dynamic_video_embed_type",
     "player_type",
@@ -5641,10 +5698,31 @@ def build_runtime_video_companion_template(
     if not is_article_detail_template(base_template, rules_by_template):
         return None
 
-    template_rules_list = get_rules_for_validation_template(base_template, rules_by_template)
+    template_rules_list = get_augmented_template_rules(base_template, rules_by_template)
     video_rules = [rule for rule in template_rules_list if is_video_related_rule(rule)]
     if not video_rules:
-        return None
+        video_rules = build_default_article_detail_video_rules(base_template)
+    else:
+        existing_signatures = {
+            _normalize_rule_signature(
+                rule.get("rule_scope"),
+                rule.get("field_name"),
+                rule.get("rule_type"),
+                rule.get("expected_values"),
+            )
+            for rule in video_rules
+        }
+        for default_rule in build_default_article_detail_video_rules(base_template):
+            signature = _normalize_rule_signature(
+                default_rule.get("rule_scope"),
+                default_rule.get("field_name"),
+                default_rule.get("rule_type"),
+                default_rule.get("expected_values"),
+            )
+            if signature in existing_signatures:
+                continue
+            video_rules.append(dict(default_rule))
+            existing_signatures.add(signature)
 
     template_name = str(base_template.get("template_name") or "Unnamed template").strip()
     companion_template = dict(base_template)
@@ -5699,9 +5777,29 @@ def derive_video_rules_from_article_detail_template(
             candidates.append(candidate)
 
     for candidate in candidates:
-        candidate_rules = get_rules_for_validation_template(candidate, rules_by_template)
+        candidate_rules = get_augmented_template_rules(candidate, rules_by_template)
         video_rules = [rule for rule in candidate_rules if is_video_related_rule(rule)]
         if video_rules:
+            existing_signatures = {
+                _normalize_rule_signature(
+                    rule.get("rule_scope"),
+                    rule.get("field_name"),
+                    rule.get("rule_type"),
+                    rule.get("expected_values"),
+                )
+                for rule in video_rules
+            }
+            for default_rule in build_default_article_detail_video_rules(video_template):
+                signature = _normalize_rule_signature(
+                    default_rule.get("rule_scope"),
+                    default_rule.get("field_name"),
+                    default_rule.get("rule_type"),
+                    default_rule.get("expected_values"),
+                )
+                if signature in existing_signatures:
+                    continue
+                video_rules.append(dict(default_rule))
+                existing_signatures.add(signature)
             return video_rules
 
     return build_default_article_detail_video_rules(video_template)
@@ -5725,7 +5823,7 @@ def get_effective_template_rules(
     all_templates: Optional[List[dict]] = None,
     rules_by_template: Optional[Dict[str, List[dict]]] = None,
 ) -> List[dict]:
-    template_rules_list = get_rules_for_validation_template(template, rules_by_template)
+    template_rules_list = get_augmented_template_rules(template, rules_by_template)
     if not template_rules_list:
         return []
 
@@ -5740,7 +5838,7 @@ def get_single_audit_template_rules(
     all_templates: Optional[List[dict]] = None,
     rules_by_template: Optional[Dict[str, List[dict]]] = None,
 ) -> List[dict]:
-    template_rules_list = get_rules_for_validation_template(template, rules_by_template)
+    template_rules_list = get_augmented_template_rules(template, rules_by_template)
     if template_rules_list:
         if is_article_detail_template(template, rules_by_template):
             return [rule for rule in template_rules_list if not is_video_related_rule(rule)]
@@ -9624,12 +9722,6 @@ This capture is split into three layers:
                                 audit_summary["event_rows"],
                                 companion_rules,
                             )
-                            matched_companion_event = companion_template_has_matched_event(
-                                companion_event_df,
-                                companion_rules,
-                            )
-                            if not matched_companion_event:
-                                continue
                             renderable_companion_rows.append(
                                 (companion_template, companion_rules, companion_event_df)
                             )
