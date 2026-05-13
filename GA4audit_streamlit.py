@@ -5465,6 +5465,10 @@ ARTICLE_DETAIL_SUPPLEMENTAL_RULES = [
     {"rule_scope": "execution", "field_name": "edited_by", "rule_type": "regex", "expected_values": "^[A-Za-z_ ]+$"},
     {"rule_scope": "execution", "field_name": "video_embed", "rule_type": "one_of", "expected_values": "yes|no"},
 ]
+ARTICLE_DETAIL_SUPPLEMENTAL_RULES_BY_NORMALIZED = {
+    normalize_dimension_name(rule.get("field_name") or ""): dict(rule)
+    for rule in ARTICLE_DETAIL_SUPPLEMENTAL_RULES
+}
 
 
 def _rule_field_merge_key(rule: dict) -> Tuple[str, str]:
@@ -7724,6 +7728,17 @@ def build_execution_validation_rows(
     value_rows = []
     used_fields = set()
     validation_rows = []
+    has_article_detail_context = any(
+        str(rule.get("rule_scope") or "").strip().lower() == "execution"
+        and normalize_dimension_name(rule.get("field_name") or "") in {
+            "articletype",
+            "pagetype",
+            "subcategory",
+            "articlesubcategory",
+            "dynamicvideoembedtype",
+        }
+        for rule in template_rules or []
+    )
 
     for rule in field_rules:
         field_name = str(rule.get("field_name") or "").strip()
@@ -7781,6 +7796,44 @@ def build_execution_validation_rows(
         for _, row in execution_df.iterrows():
             field = str(row.get("Field") or "").strip()
             if field in used_fields:
+                continue
+            normalized_field = normalize_dimension_name(field)
+            supplemental_rule = (
+                ARTICLE_DETAIL_SUPPLEMENTAL_RULES_BY_NORMALIZED.get(normalized_field)
+                if has_article_detail_context
+                else None
+            )
+            if supplemental_rule:
+                raw_value = row.get("Value") or ""
+                matched, validation_label = evaluate_value_rule(
+                    supplemental_rule.get("rule_type"),
+                    supplemental_rule.get("expected_values"),
+                    raw_value,
+                )
+                expected_text = str(supplemental_rule.get("expected_values") or "").strip()
+                if supplemental_rule.get("rule_type") == "required" and not expected_text:
+                    expected_text = "Required"
+                elif supplemental_rule.get("rule_type") == "optional" and not expected_text:
+                    expected_text = "Optional"
+                value_rows.append(
+                    {
+                        "Field": field,
+                        "Value": raw_value,
+                        "Expected": expected_text,
+                        "Validation": validation_label,
+                    }
+                )
+                validation_rows.append(
+                    {
+                        "field_name": supplemental_rule.get("field_name"),
+                        "actual_key": field,
+                        "actual_value": raw_value,
+                        "expected": expected_text,
+                        "matched": matched,
+                        "validation": validation_label,
+                        "rule_type": supplemental_rule.get("rule_type"),
+                    }
+                )
                 continue
             value_rows.append(
                 {
