@@ -5465,8 +5465,14 @@ ARTICLE_DETAIL_SUPPLEMENTAL_RULES = [
     {"rule_scope": "execution", "field_name": "edited_by", "rule_type": "regex", "expected_values": "^[A-Za-z_ ]+$"},
     {"rule_scope": "execution", "field_name": "video_embed", "rule_type": "one_of", "expected_values": "yes|no"},
 ]
+
+
+def _normalize_supplemental_rule_field_name(value: str) -> str:
+    return str(value or "").strip().replace("_", "").lower()
+
+
 ARTICLE_DETAIL_SUPPLEMENTAL_RULES_BY_NORMALIZED = {
-    normalize_dimension_name(rule.get("field_name") or ""): dict(rule)
+    _normalize_supplemental_rule_field_name(rule.get("field_name") or ""): dict(rule)
     for rule in ARTICLE_DETAIL_SUPPLEMENTAL_RULES
 }
 
