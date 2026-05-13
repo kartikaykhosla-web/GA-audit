@@ -9368,7 +9368,6 @@ This capture is split into three layers:
                     performance_logs=not article_detail_fast_path,
                     capture_network=True,
                     page_load_timeout=6 if article_detail_fast_path else 12,
-                    prefer_safe_mode=article_detail_fast_path,
                 )
                 try:
                     progress.progress(0.2)
