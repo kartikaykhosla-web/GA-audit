@@ -5471,10 +5471,11 @@ def _normalize_supplemental_rule_field_name(value: str) -> str:
     return str(value or "").strip().replace("_", "").lower()
 
 
-ARTICLE_DETAIL_SUPPLEMENTAL_RULES_BY_NORMALIZED = {
-    _normalize_supplemental_rule_field_name(rule.get("field_name") or ""): dict(rule)
-    for rule in ARTICLE_DETAIL_SUPPLEMENTAL_RULES
-}
+def get_article_detail_supplemental_rules_by_normalized() -> Dict[str, dict]:
+    return {
+        _normalize_supplemental_rule_field_name(rule.get("field_name") or ""): dict(rule)
+        for rule in ARTICLE_DETAIL_SUPPLEMENTAL_RULES
+    }
 
 
 def _rule_field_merge_key(rule: dict) -> Tuple[str, str]:
@@ -7721,6 +7722,7 @@ def build_execution_validation_rows(
     include_unmatched_fields: bool = True,
 ):
     execution_df = snapshot.get("execution_df", pd.DataFrame(columns=["Field", "Value"]))
+    article_detail_supplemental_rules = get_article_detail_supplemental_rules_by_normalized()
 
     field_rules = [
         rule
@@ -7805,7 +7807,7 @@ def build_execution_validation_rows(
                 continue
             normalized_field = normalize_dimension_name(field)
             supplemental_rule = (
-                ARTICLE_DETAIL_SUPPLEMENTAL_RULES_BY_NORMALIZED.get(normalized_field)
+                article_detail_supplemental_rules.get(normalized_field)
                 if has_article_detail_context
                 else None
             )
