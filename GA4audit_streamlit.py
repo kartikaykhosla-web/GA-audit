@@ -517,7 +517,16 @@ def create_driver(
         except Exception:
             return ""
 
-    service = Service(executable_path=chromedriver_path) if chromedriver_path else None
+    resolved_driver = chromedriver_path or shutil.which("chromedriver") or ""
+    browser_version = _read_version(browser_cmd)
+    driver_version = _read_version(resolved_driver)
+
+    service = None
+    if chromedriver_path:
+        browser_major = _major_version(browser_version)
+        driver_major = _major_version(driver_version)
+        if not browser_major or not driver_major or browser_major == driver_major:
+            service = Service(executable_path=chromedriver_path)
 
     def _launch_driver(chrome_options):
         driver_module = webdriver
@@ -558,10 +567,6 @@ def create_driver(
             return _launch_driver(_build_chrome_options(safe_mode=safe_mode))
         except Exception as exc:
             startup_errors.append(f"{launch_labels[safe_mode]}: {exc}")
-
-    browser_version = _read_version(browser_cmd)
-    driver_version = _read_version(chromedriver_path or shutil.which("chromedriver") or "")
-    resolved_driver = chromedriver_path or shutil.which("chromedriver")
 
     details = []
     if browser_version:
@@ -2123,6 +2128,9 @@ VIDEO_PLAY_SELECTORS = [
 ]
 
 ARTICLE_HERO_VIDEO_SELECTORS = [
+    ".loop-div .point1",
+    ".loop-div .point2",
+    ".loop-container",
     ".ArticleDetail_relatedvideo__wvgRP img",
     ".ArticleDetail_relatedvideo__wvgRP .article",
     ".ArticleDetail_relatedvideo__wvgRP i.videoImage",
@@ -2136,13 +2144,39 @@ ARTICLE_HERO_VIDEO_SELECTORS = [
 
 def _click_element(driver, element) -> bool:
     try:
-        driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", element)
-    except Exception:
-        pass
-    time.sleep(0.01)
-    try:
-        driver.execute_script("arguments[0].click();", element)
-        return True
+        clicked = driver.execute_script(
+            """
+            const element = arguments[0];
+            if (!element) return false;
+            let target = element;
+            if (typeof element.closest === "function") {
+              target = element.closest("a[href], button, [role='button'], [onclick], [tabindex]") || element;
+            }
+            try {
+              target.scrollIntoView({block: "center", inline: "center"});
+            } catch (e) {}
+            try {
+              ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((eventName) => {
+                try {
+                  target.dispatchEvent(new MouseEvent(eventName, {
+                    view: window,
+                    bubbles: true,
+                    cancelable: true,
+                    buttons: 1
+                  }));
+                } catch (e) {}
+              });
+              if (typeof target.click === "function") {
+                target.click();
+              }
+              return true;
+            } catch (e) {
+              return false;
+            }
+            """,
+            element,
+        )
+        return bool(clicked)
     except Exception:
         return False
 
