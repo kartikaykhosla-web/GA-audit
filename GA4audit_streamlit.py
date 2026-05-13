@@ -67,8 +67,8 @@ def _resolve_chrome_paths() -> Tuple[str, str]:
 
     driver_candidates = [
         os.environ.get("CHROMEDRIVER_PATH"),
-        "/usr/bin/chromedriver",
         shutil.which("chromedriver"),
+        "/usr/bin/chromedriver",
     ]
     selected_driver = next(
         (candidate for candidate in driver_candidates if candidate and os.path.exists(candidate)),
@@ -522,11 +522,11 @@ def create_driver(
     driver_version = _read_version(resolved_driver)
 
     service = None
-    if chromedriver_path:
+    if resolved_driver:
         browser_major = _major_version(browser_version)
         driver_major = _major_version(driver_version)
         if not browser_major or not driver_major or browser_major == driver_major:
-            service = Service(executable_path=chromedriver_path)
+            service = Service(executable_path=resolved_driver)
 
     def _launch_driver(chrome_options):
         driver_module = webdriver
