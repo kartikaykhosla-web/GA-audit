@@ -2396,7 +2396,7 @@ def _seek_visible_videos_in_frames(driver, target_percent: float = 26.0, depth: 
     return updated
 
 
-def trigger_video_playback(driver) -> bool:
+def trigger_video_playback(driver, quick: bool = False) -> bool:
     started = False
     try:
         driver.switch_to.default_content()
@@ -2404,7 +2404,8 @@ def trigger_video_playback(driver) -> bool:
         return False
 
     # Try the hero media near the top of the article before we scroll past it.
-    for percent in (0, 12):
+    scroll_points = (0,) if quick else (0, 12)
+    for percent in scroll_points:
         try:
             driver.execute_script(
                 """
@@ -2420,7 +2421,8 @@ def trigger_video_playback(driver) -> bool:
         except Exception:
             pass
         started = _attempt_video_start_in_current_context(driver) or started
-        started = _attempt_video_start_in_frames(driver) or started
+        if not quick:
+            started = _attempt_video_start_in_frames(driver) or started
     return started
 
 
@@ -2776,10 +2778,10 @@ def audit_single_url(
     # Scroll only when this audit path actually needs interaction-driven signals.
     if requires_video_playback or quick_video_probe:
         try:
-            video_started = trigger_video_playback(driver)
+            video_started = trigger_video_playback(driver, quick=quick_video_probe and not requires_video_playback)
         except Exception:
             video_started = False
-        if video_started:
+        if video_started and not quick_video_probe:
             try:
                 seek_video_progress(driver, target_percent=26.0)
             except Exception:
@@ -2806,6 +2808,8 @@ def audit_single_url(
         effective_wait_budget = min(configured_wait, 2)
     elif requires_scroll_capture:
         effective_wait_budget = min(configured_wait, 1)
+    elif quick_video_probe:
+        effective_wait_budget = min(configured_wait, 0.35)
     else:
         effective_wait_budget = min(configured_wait, 1)
 
