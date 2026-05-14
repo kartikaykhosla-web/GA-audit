@@ -2660,6 +2660,7 @@ def audit_single_url(
     force_video_playback: bool = False,
     force_scroll_capture: bool = False,
     quick_video_probe: bool = False,
+    lightweight_capture: bool = False,
 ) -> Dict[str, Any]:
     print(f"\n🔍 Auditing: {url}")
 
@@ -2853,9 +2854,7 @@ def audit_single_url(
     if pageview_event is not None:
         try:
             safe_pageview = sanitize_for_json(pageview_event)
-            result["pageview_event_json"] = json.dumps(
-                safe_pageview, ensure_ascii=False, indent=2, sort_keys=True
-            )
+            result["pageview_event_json"] = safe_json(safe_pageview)
         except Exception as e:
             result["pageview_event_json"] = f"Error serializing pageview event: {e}"
 
@@ -2868,9 +2867,7 @@ def audit_single_url(
     else:
         try:
             safe_dl_list = sanitize_for_json(dl_list)
-            result["all_datalayer_json"] = json.dumps(
-                safe_dl_list, ensure_ascii=False, indent=2, sort_keys=True
-            )
+            result["all_datalayer_json"] = safe_json(safe_dl_list)
         except Exception as e:
             result["all_datalayer_json"] = f"Error serializing dataLayer: {e}"
 
@@ -2880,9 +2877,7 @@ def audit_single_url(
         result["scroll_event_found"] = True
         try:
             safe_scroll = sanitize_for_json(scroll_events[-1])
-            result["scroll_event_json"] = json.dumps(
-                safe_scroll, ensure_ascii=False, indent=2, sort_keys=True
-            )
+            result["scroll_event_json"] = safe_json(safe_scroll)
         except Exception as e:
             result["scroll_event_json"] = f"Error serializing scroll event: {e}"
 
@@ -2949,13 +2944,16 @@ def audit_single_url(
     result.update(flat_pv)
 
     execution_for_mapping = execution_events or gtag_events
-    result["mapping_table"] = safe_json(
-        map_dl_to_execution_and_ga4(
-            result.get("pageview_event_json") or "{}",
-            execution_for_mapping,
-            decoded_events,
+    if lightweight_capture:
+        result["mapping_table"] = "[]"
+    else:
+        result["mapping_table"] = safe_json(
+            map_dl_to_execution_and_ga4(
+                result.get("pageview_event_json") or "{}",
+                execution_for_mapping,
+                decoded_events,
+            )
         )
-    )
 
     # Scorecard
     status, issues = compute_implementation_score(result, pageview_event)
@@ -9643,6 +9641,7 @@ This capture is split into three layers:
                         force_video_playback=requires_video_playback,
                         force_scroll_capture=requires_scroll_capture,
                         quick_video_probe=quick_video_probe,
+                        lightweight_capture=article_detail_fast_path,
                     )
                     results.append(primary_result)
                 finally:
