@@ -1703,7 +1703,17 @@ def extract_collect_hits_from_resource_timing(
         entries = driver.execute_script(
             """
             return (performance.getEntriesByType("resource") || [])
-              .slice(-500)
+              .filter(function(entry) {
+                var url = String((entry && entry.name) || "");
+                return (
+                  url.indexOf("google-analytics.com") !== -1 ||
+                  url.indexOf("/ccm/collect") !== -1 ||
+                  url.indexOf("scorecardresearch.com") !== -1 ||
+                  url.indexOf("chartbeat.net/ping") !== -1 ||
+                  url.indexOf("chartbeat.com/ping") !== -1
+                );
+              })
+              .slice(-200)
               .map(function(entry) {
                 return {
                   url: entry.name || "",
