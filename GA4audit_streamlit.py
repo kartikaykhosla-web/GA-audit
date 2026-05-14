@@ -2790,8 +2790,8 @@ def audit_single_url(
 
     try:
         if requires_scroll_capture:
-            scroll_points = (0, 25, 50, 75, 100)
-            scroll_pause = 0.12
+            scroll_points = (0, 50, 100)
+            scroll_pause = 0.06
             for p in scroll_points:
                 driver.execute_script(
                     "window.scrollTo(0, document.body.scrollHeight * arguments[0] / 100);",
@@ -2805,7 +2805,7 @@ def audit_single_url(
     if requires_video_playback:
         effective_wait_budget = min(configured_wait, 2)
     elif requires_scroll_capture:
-        effective_wait_budget = min(configured_wait, 2)
+        effective_wait_budget = min(configured_wait, 1)
     else:
         effective_wait_budget = min(configured_wait, 1)
 
