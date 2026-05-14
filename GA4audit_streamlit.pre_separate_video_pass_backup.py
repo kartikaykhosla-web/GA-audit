@@ -9626,14 +9626,8 @@ This capture is split into three layers:
                         for rule_set in companion_rule_sets
                     )
                 )
-            video_companion_templates = [
-                companion_template
-                for companion_template in companion_validation_templates
-                if is_video_interaction_template(companion_template, template_rules_by_template)
-            ]
-            total_audit_passes = 1 + len(video_companion_templates)
+            total_audit_passes = 1
             completed_audit_passes = 0
-            companion_results_by_template_id: Dict[str, Dict[str, Any]] = {}
 
             status_box.write("Launching browser...")
             try:
@@ -9666,35 +9660,6 @@ This capture is split into three layers:
                     safe_quit_driver(driver)
                 completed_audit_passes += 1
                 progress.progress(completed_audit_passes / total_audit_passes)
-
-                for companion_template in video_companion_templates:
-                    companion_template_id = str(companion_template.get("template_id") or "").strip()
-                    status_box.write(
-                        f"Auditing video interaction {normalized_url} ({completed_audit_passes + 1}/{total_audit_passes})"
-                    )
-                    video_driver = create_driver(
-                        headless=True,
-                        performance_logs=False,
-                        capture_network=True,
-                        page_load_timeout=6,
-                    )
-                    try:
-                        companion_results_by_template_id[companion_template_id] = audit_single_url(
-                            video_driver,
-                            normalized_url,
-                            wait_seconds,
-                            compact=False,
-                            template_rules=[],
-                            force_video_playback=False,
-                            force_scroll_capture=False,
-                            quick_video_probe=True,
-                            lightweight_capture=True,
-                        )
-                    finally:
-                        status_box.write("Closing browser...")
-                        safe_quit_driver(video_driver)
-                    completed_audit_passes += 1
-                    progress.progress(completed_audit_passes / total_audit_passes)
             except Exception as exc:
                 st.error(f"Error auditing {normalized_url}")
                 st.exception(exc)
@@ -9917,16 +9882,13 @@ This capture is split into three layers:
                         for companion_template, companion_rules in zip(companion_validation_templates, companion_rule_sets):
                             if not companion_rules:
                                 continue
-                            companion_template_id = str(companion_template.get("template_id") or "").strip()
-                            companion_result = companion_results_by_template_id.get(companion_template_id, result)
-                            companion_summary = build_audit_focus_summary(companion_result, companion_template)
                             companion_event_df = build_event_validation_rows(
-                                companion_summary["event_rows"],
+                                audit_summary["event_rows"],
                                 companion_rules,
                                 include_unmatched_observed_events=False,
                             )
                             renderable_companion_rows.append(
-                                (companion_template, companion_rules, companion_event_df, companion_result)
+                                (companion_template, companion_rules, companion_event_df)
                             )
 
                         if renderable_companion_rows:
@@ -9934,16 +9896,15 @@ This capture is split into three layers:
                             st.caption(
                                 "Base article detail checks stay separate from companion validations like video interaction."
                             )
-                            for companion_template, companion_rules, companion_event_df, companion_result in renderable_companion_rows:
+                            for companion_template, companion_rules, companion_event_df in renderable_companion_rows:
                                 companion_template_name = str(companion_template.get("template_name") or "Unnamed template")
                                 with st.container(border=True):
                                     st.markdown(f"#### {companion_template_name}")
                                     companion_exec_col, companion_event_col = st.columns(2)
                                     with companion_exec_col:
                                         st.markdown("##### Execution checks")
-                                        companion_snapshot = build_datalayer_snapshot_export(companion_result)
                                         companion_execution_df, _ = build_execution_validation_rows(
-                                            companion_snapshot,
+                                            snapshot,
                                             companion_rules,
                                             include_unmatched_fields=False,
                                         )
