@@ -5875,12 +5875,15 @@ def build_companion_validation_templates(
     all_templates: List[dict],
     rules_by_template: Optional[Dict[str, List[dict]]] = None,
 ) -> List[dict]:
+    real_companions = find_companion_templates(base_template, all_templates, rules_by_template)
+    if real_companions:
+        return real_companions
+
     runtime_companion = build_runtime_video_companion_template(base_template, rules_by_template)
     if runtime_companion:
         return [runtime_companion]
 
-    real_companions = find_companion_templates(base_template, all_templates, rules_by_template)
-    return real_companions
+    return []
 
 
 def get_effective_template_rules(
@@ -7873,7 +7876,12 @@ def build_execution_validation_rows(
     return display_df, validation_rows
 
 
-def build_event_validation_rows(event_rows: List[dict], template_rules: List[dict]):
+def build_event_validation_rows(
+    event_rows: List[dict],
+    template_rules: List[dict],
+    *,
+    include_unmatched_observed_events: bool = True,
+):
     event_rules = [
         rule
         for rule in template_rules or []
@@ -7890,11 +7898,12 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
     display_rows = []
     handled_event_names = set()
 
-    for row in event_rows or []:
-        row_copy = dict(row)
-        row_copy["expected"] = ""
-        row_copy["validation"] = ""
-        display_rows.append(row_copy)
+    if include_unmatched_observed_events:
+        for row in event_rows or []:
+            row_copy = dict(row)
+            row_copy["expected"] = ""
+            row_copy["validation"] = ""
+            display_rows.append(row_copy)
 
     for rule in event_rules:
         configured_event_names = parse_expected_values(rule.get("field_name"))
@@ -7947,11 +7956,17 @@ def build_event_validation_rows(event_rows: List[dict], template_rules: List[dic
         if matched_names:
             for event_name in matched_names:
                 handled_event_names.add(event_name)
-                for row in display_rows:
-                    if canonical_event_name(row.get("event_name")) != event_name:
-                        continue
-                    row["expected"] = expected_text
-                    row["validation"] = validation_label
+                if include_unmatched_observed_events:
+                    for row in display_rows:
+                        if canonical_event_name(row.get("event_name")) != event_name:
+                            continue
+                        row["expected"] = expected_text
+                        row["validation"] = validation_label
+                else:
+                    matched_row = dict(observed_by_name.get(event_name) or {})
+                    matched_row["expected"] = expected_text
+                    matched_row["validation"] = validation_label
+                    display_rows.append(matched_row)
         else:
             display_rows.append(
                 {
@@ -9856,6 +9871,7 @@ This capture is split into three layers:
                             companion_event_df = build_event_validation_rows(
                                 audit_summary["event_rows"],
                                 companion_rules,
+                                include_unmatched_observed_events=False,
                             )
                             renderable_companion_rows.append(
                                 (companion_template, companion_rules, companion_event_df)
@@ -9876,6 +9892,7 @@ This capture is split into three layers:
                                         companion_execution_df, _ = build_execution_validation_rows(
                                             snapshot,
                                             companion_rules,
+                                            include_unmatched_fields=False,
                                         )
                                         if companion_execution_df.empty:
                                             st.info("No execution values matched this companion validation.")
