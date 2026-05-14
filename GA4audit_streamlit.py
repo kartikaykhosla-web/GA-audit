@@ -2440,7 +2440,11 @@ def single_audit_requires_video_playback(rules: Optional[List[dict]]) -> bool:
             if canonical_event_name(field_name) == "videointeraction":
                 return True
         elif rule_scope == "execution":
-            if normalize_dimension_name(field_name) in video_fields:
+            normalized_field_name = normalize_dimension_name(field_name)
+            if (
+                normalized_field_name in video_fields
+                and normalized_field_name not in ARTICLE_DETAIL_BASE_VIDEO_FIELD_NORMALIZED
+            ):
                 return True
     return False
 
