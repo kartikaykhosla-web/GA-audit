@@ -9596,7 +9596,7 @@ This capture is split into three layers:
             if article_detail_fast_path:
                 requires_video_playback = single_audit_requires_video_playback(selected_template_rules)
                 requires_scroll_capture = False
-                quick_video_probe = False
+                quick_video_probe = bool(companion_validation_templates) and not requires_video_playback
             else:
                 requires_video_playback = (
                     single_audit_requires_video_playback(selected_template_rules)
