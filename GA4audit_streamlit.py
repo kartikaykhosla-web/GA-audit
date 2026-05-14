@@ -444,6 +444,16 @@ COMMON_CONSENT_SELECTORS = [
     "[role='button']",
 ]
 
+LIGHTWEIGHT_CONSENT_SELECTORS = [
+    "#onetrust-accept-btn-handler",
+    ".onetrust-accept-btn-handler",
+    "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
+    "#didomi-notice-agree-button",
+    "[id*='didomi-notice-agree-button']",
+    "[data-testid*='accept']",
+    "[aria-label*='Accept']",
+]
+
 # Embedded GA4 audit engine
 
 
@@ -2049,8 +2059,8 @@ return {taboolaY: top, viewportHeight: viewportHeight, docHeight: docHeight};
 # Consent helper
 # -------------------------
 
-def _click_candidate_elements(driver, actions: List[Dict[str, Any]]) -> None:
-    for selector in COMMON_CONSENT_SELECTORS:
+def _click_candidate_elements(driver, actions: List[Dict[str, Any]], selectors: List[str]) -> None:
+    for selector in selectors:
         try:
             elements = driver.find_elements(By.CSS_SELECTOR, selector)
         except Exception:
@@ -2080,12 +2090,13 @@ def _click_candidate_elements(driver, actions: List[Dict[str, Any]]) -> None:
                 continue
 
 
-def accept_common_consent(driver) -> List[Dict[str, Any]]:
+def accept_common_consent(driver, lightweight: bool = False) -> List[Dict[str, Any]]:
     actions: List[Dict[str, Any]] = []
+    selectors = LIGHTWEIGHT_CONSENT_SELECTORS if lightweight else COMMON_CONSENT_SELECTORS
 
     try:
         driver.switch_to.default_content()
-        _click_candidate_elements(driver, actions)
+        _click_candidate_elements(driver, actions, selectors)
         if actions:
             return actions
     except Exception:
@@ -2101,7 +2112,7 @@ def accept_common_consent(driver) -> List[Dict[str, Any]]:
             driver.switch_to.default_content()
             driver.switch_to.frame(frame)
             before_count = len(actions)
-            _click_candidate_elements(driver, actions)
+            _click_candidate_elements(driver, actions, selectors)
             if len(actions) > before_count:
                 actions[-1]["frame_index"] = index
                 driver.switch_to.default_content()
@@ -2751,7 +2762,7 @@ def audit_single_url(
         result["audit_duration_seconds"] = round(time.time() - audit_start, 2)
         return result
 
-    consent_actions = accept_common_consent(driver)
+    consent_actions = accept_common_consent(driver, lightweight=lightweight_capture)
     result["consent_clicked"] = bool(consent_actions)
     result["consent_clicks_json"] = safe_json(consent_actions)
 
@@ -9598,7 +9609,7 @@ This capture is split into three layers:
             if article_detail_fast_path:
                 requires_video_playback = single_audit_requires_video_playback(selected_template_rules)
                 requires_scroll_capture = False
-                quick_video_probe = bool(companion_validation_templates) and not requires_video_playback
+                quick_video_probe = False
             else:
                 requires_video_playback = (
                     single_audit_requires_video_playback(selected_template_rules)
