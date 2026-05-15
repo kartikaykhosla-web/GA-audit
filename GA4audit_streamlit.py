@@ -2380,21 +2380,74 @@ def _click_article_hero_video_in_current_context(driver) -> bool:
 
 
 def _click_opened_video_surface_in_current_context(driver) -> bool:
-    for selector in OPENED_VIDEO_SURFACE_SELECTORS:
-        try:
-            elements = driver.find_elements(By.CSS_SELECTOR, selector)
-        except Exception:
-            continue
-        for element in elements[:2]:
-            try:
-                if not element.is_displayed():
-                    continue
-                if _click_element(driver, element):
-                    time.sleep(0.12)
-                    return True
-            except Exception:
-                continue
-    return False
+    try:
+        clicked = driver.execute_script(
+            """
+            const rootSelectors = [
+              ".Short_wrapper_fixed .VideoSwiper_videoContainer",
+              ".Short_wrapper_fixed .video-player-container",
+              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer",
+              ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
+              ".VideoSwiper_videoContainer",
+              ".video-player-container"
+            ];
+            const targetSelectors = [
+              "video",
+              "[aria-label*='play' i]",
+              "button",
+              "[class*='play' i]",
+              "[role='button']"
+            ];
+            const visible = (element) => {
+              if (!element) return false;
+              const rect = element.getBoundingClientRect();
+              return !!(rect.width && rect.height);
+            };
+            const clickElement = (element) => {
+              if (!visible(element)) return false;
+              try {
+                element.scrollIntoView({ block: "center", inline: "center" });
+              } catch (e) {}
+              try {
+                ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((eventName) => {
+                  try {
+                    element.dispatchEvent(new MouseEvent(eventName, {
+                      view: window,
+                      bubbles: true,
+                      cancelable: true,
+                      buttons: 1
+                    }));
+                  } catch (e) {}
+                });
+                if (typeof element.click === "function") {
+                  element.click();
+                }
+                return true;
+              } catch (e) {
+                return false;
+              }
+            };
+            for (const rootSelector of rootSelectors) {
+              const root = document.querySelector(rootSelector);
+              if (!visible(root)) continue;
+              for (const selector of targetSelectors) {
+                const candidate = root.querySelector(selector);
+                if (clickElement(candidate)) {
+                  return true;
+                }
+              }
+              if (clickElement(root)) {
+                return true;
+              }
+            }
+            return false;
+            """
+        )
+        if clicked:
+            time.sleep(0.08)
+        return bool(clicked)
+    except Exception:
+        return False
 
 
 def _attempt_video_start_in_current_context(driver) -> bool:
