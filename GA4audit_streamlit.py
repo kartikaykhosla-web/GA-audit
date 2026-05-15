@@ -9671,11 +9671,6 @@ This capture is split into three layers:
                 )
                 for companion_template in companion_validation_templates
             ]
-            video_companion_templates = [
-                companion_template
-                for companion_template in companion_validation_templates
-                if is_video_interaction_template(companion_template, template_rules_by_template)
-            ]
             article_detail_fast_path = is_article_detail_template(
                 selected_template,
                 template_rules_by_template,
@@ -9683,7 +9678,7 @@ This capture is split into three layers:
             if article_detail_fast_path:
                 requires_video_playback = single_audit_requires_video_playback(selected_template_rules)
                 requires_scroll_capture = False
-                quick_video_probe = bool(video_companion_templates)
+                quick_video_probe = False
             else:
                 requires_video_playback = (
                     single_audit_requires_video_playback(selected_template_rules)
