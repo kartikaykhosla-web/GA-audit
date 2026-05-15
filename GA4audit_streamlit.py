@@ -2170,6 +2170,18 @@ ARTICLE_HERO_VIDEO_SELECTORS = [
     "i.videoImage",
 ]
 
+OPENED_VIDEO_SURFACE_SELECTORS = [
+    ".Short_wrapper_fixed .VideoSwiper_videoContainer",
+    ".Short_wrapper_fixed .video-player-container",
+    ".Short_wrapper_fixed .video-player-container video",
+    ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer",
+    ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
+    ".ArticleDetail_relatedvideo__wvgRP .video-player-container video",
+    ".VideoSwiper_videoContainer",
+    ".video-player-container",
+    ".video-player-container video",
+]
+
 
 def _click_element(driver, element) -> bool:
     try:
@@ -2297,6 +2309,24 @@ def _click_article_hero_video_in_current_context(driver) -> bool:
     return False
 
 
+def _click_opened_video_surface_in_current_context(driver) -> bool:
+    for selector in OPENED_VIDEO_SURFACE_SELECTORS:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        except Exception:
+            continue
+        for element in elements[:2]:
+            try:
+                if not element.is_displayed():
+                    continue
+                if _click_element(driver, element):
+                    time.sleep(0.12)
+                    return True
+            except Exception:
+                continue
+    return False
+
+
 def _attempt_video_start_in_current_context(driver) -> bool:
     attempted = False
     if _click_article_hero_video_in_current_context(driver):
@@ -2321,7 +2351,19 @@ def _attempt_quick_video_start_in_current_context(driver) -> bool:
     attempted = False
     if _click_article_hero_video_in_current_context(driver):
         attempted = True
+        time.sleep(0.18)
+    if _click_opened_video_surface_in_current_context(driver):
+        attempted = True
         time.sleep(0.12)
+    if _play_visible_videos_in_current_context(driver):
+        attempted = True
+        time.sleep(0.02)
+    if _seek_visible_videos_in_current_context(driver, target_percent=26.0):
+        attempted = True
+        time.sleep(0.03)
+    if _click_opened_video_surface_in_current_context(driver):
+        attempted = True
+        time.sleep(0.08)
     if _play_visible_videos_in_current_context(driver):
         attempted = True
         time.sleep(0.02)
