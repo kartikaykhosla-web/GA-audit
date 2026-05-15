@@ -11,7 +11,7 @@ import signal
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Tuple, Optional, Set
+from typing import List, Dict, Any, Tuple, Optional, Set, Callable
 from urllib.parse import urlparse, parse_qs, urlunparse, unquote_plus
 from zoneinfo import ZoneInfo
 
@@ -2571,7 +2571,12 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
         return {"error": str(exc)}
 
 
-def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> Dict[str, Any]:
+def audit_video_interaction_url(
+    driver,
+    url: str,
+    timeout_seconds: int = 6,
+    step_reporter: Optional[Callable[[str, Optional[float]], None]] = None,
+) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "page_url": url,
         "preload_hook_installed": False,
@@ -2594,6 +2599,14 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
     }
     debug_steps: List[Dict[str, Any]] = []
 
+    def report_step(message: str, progress_value: Optional[float] = None):
+        if callable(step_reporter):
+            try:
+                step_reporter(message, progress_value)
+            except Exception:
+                pass
+
+    report_step("Installing preload instrumentation...", 0.05)
     preload_ok, preload_error = install_preload_instrumentation(driver)
     result["preload_hook_installed"] = preload_ok
     result["preload_hook_error"] = preload_error
@@ -2605,6 +2618,7 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
         }
     )
 
+    report_step("Loading article page...", 0.12)
     try:
         driver.get(url)
         debug_steps.append({"step": "driver.get", "success": True})
@@ -2623,6 +2637,7 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
         result["video_debug_steps_json"] = safe_json(debug_steps)
         return result
 
+    report_step("Handling consent...", 0.22)
     consent_actions = accept_common_consent(driver, lightweight=True)
     result["consent_clicked"] = bool(consent_actions)
     result["consent_clicks_json"] = safe_json(consent_actions)
@@ -2634,6 +2649,7 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
         }
     )
 
+    report_step("Granting analytics consent...", 0.28)
     try:
         driver.execute_script("""
             try {
@@ -2650,6 +2666,7 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
     except Exception:
         pass
 
+    report_step("Inspecting video placements...", 0.34)
     initial_dom_state = capture_video_dom_diagnostics(driver)
     video_started = False
     for percent in (0,):
@@ -2668,19 +2685,23 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
         except Exception:
             pass
 
+        report_step("Clicking initial video surface...", 0.42)
         clicked_initial = _click_article_hero_video_in_current_context(driver)
         if clicked_initial:
             video_started = True
             time.sleep(0.2)
         opened_dom_state = capture_video_dom_diagnostics(driver)
+        report_step("Clicking opened player surface...", 0.52)
         clicked_opened = _click_opened_video_surface_in_current_context(driver)
         if clicked_opened:
             video_started = True
             time.sleep(0.15)
+        report_step("Clicking player controls...", 0.60)
         clicked_controls = _click_video_controls_in_current_context(driver)
         if clicked_controls:
             video_started = True
             time.sleep(0.06)
+        report_step("Attempting visible video playback...", 0.68)
         played_visible = _play_visible_videos_in_current_context(driver)
         if played_visible:
             video_started = True
@@ -2700,6 +2721,7 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
 
     if video_started:
         try:
+            report_step("Seeking playback to 26%...", 0.76)
             sought_progress = _seek_visible_videos_in_current_context(driver, target_percent=26.0)
             debug_steps.append({"step": "seek_visible_videos", "success": bool(sought_progress), "target_percent": 26.0})
         except Exception:
@@ -2711,12 +2733,15 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
     execution_events: List[Dict[str, Any]] = []
     matched_video_event = None
 
+    report_step("Polling for video_interaction event...", 0.84)
     while time.time() < deadline:
         preload_state = extract_preload_state(driver)
         execution_hits, execution_events = normalize_transport_hits(preload_state)
         matched_video_event = find_event_by_name(execution_events, "video_interaction")
         if matched_video_event:
             break
+        remaining = max(0.0, deadline - time.time())
+        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
         time.sleep(0.12)
 
     preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
@@ -2749,6 +2774,7 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
     )
     result["video_debug_steps_json"] = safe_json(debug_steps)
 
+    report_step("Finalizing video capture result...", 0.96)
     if matched_video_event:
         result["pageview_event_json"] = safe_json(snapshot_trigger_payload_from_event(matched_video_event))
         result["status"] = "PASS"
@@ -10469,6 +10495,14 @@ This capture is split into three layers:
             video_status_box = st.empty()
             video_capture_result: Optional[Dict[str, Any]] = None
 
+            def report_video_step(message: str, progress_value: Optional[float] = None):
+                video_status_box.write(message)
+                if progress_value is not None:
+                    try:
+                        video_progress.progress(min(1.0, max(0.0, float(progress_value))))
+                    except Exception:
+                        pass
+
             video_status_box.write("Launching video capture browser...")
             try:
                 driver = create_driver(
@@ -10484,6 +10518,7 @@ This capture is split into three layers:
                         driver,
                         normalized_url,
                         timeout_seconds=6,
+                        step_reporter=report_video_step,
                     )
                     video_progress.progress(0.8)
                 finally:
