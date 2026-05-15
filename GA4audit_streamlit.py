@@ -3586,7 +3586,9 @@ MAPPING_FIELD_ALIASES = {
     "user_status": "User_Status",
     "usertype": "usertype",
     "video_orientation": "video_orientation",
+    "video_duration": "Video_duration",
     "video_percent": "video_percent",
+    "video_title": "Video_title",
     "word_count": "word_count",
 }
 JAGRAN_STARTER_TEMPLATES = [
@@ -6033,14 +6035,16 @@ VIDEO_INTERACTION_FIELD_NAMES = {
     "player_type",
     "position_fold",
     "section_name",
+    "tvc_event_name",
     "video_orientation",
-    "video_percent",
     "video_duration",
+    "video_percent",
     "video_title",
     "scroll_percent",
 }
 VIDEO_INTERACTION_FIELD_NORMALIZED = {
     "dynamicvideoembedtype",
+    "eventname",
     "playertype",
     "positionfold",
     "sectionname",
@@ -6073,7 +6077,7 @@ def build_default_article_detail_video_rules(template: Optional[dict]) -> List[d
             "rule_scope": "execution",
             "field_name": "dynamic_video_embed_type",
             "rule_type": "one_of",
-            "expected_values": "view this video also|in-house video|youtube embed",
+            "expected_values": "view this video also|in-house video",
         },
         {
             "rule_id": f"{base_rule_id}_player_type",
@@ -6097,7 +6101,7 @@ def build_default_article_detail_video_rules(template: Optional[dict]) -> List[d
             "rule_scope": "execution",
             "field_name": "scroll_percent",
             "rule_type": "one_of",
-            "expected_values": "0%|25%|50%|75%|100%",
+            "expected_values": "25%|50%|75%|100%",
         },
         {
             "rule_id": f"{base_rule_id}_section_name",
@@ -6120,10 +6124,55 @@ def build_default_article_detail_video_rules(template: Optional[dict]) -> List[d
             "template_id": template_id,
             "rule_scope": "execution",
             "field_name": "video_percent",
+            "rule_type": "one_of",
+            "expected_values": "25%|50%|75%|100%",
+        },
+        {
+            "rule_id": f"{base_rule_id}_video_duration",
+            "template_id": template_id,
+            "rule_scope": "execution",
+            "field_name": "video_duration",
+            "rule_type": "regex",
+            "expected_values": "^\\d{2}:\\d{2}:\\d{2}$",
+        },
+        {
+            "rule_id": f"{base_rule_id}_video_title",
+            "template_id": template_id,
+            "rule_scope": "execution",
+            "field_name": "video_title",
+            "rule_type": "regex",
+            "expected_values": "^[\\u0900-\\u097F0-9A-Za-z\\s.,;:'\"()!?\\-–—]+$",
+        },
+        {
+            "rule_id": f"{base_rule_id}_tvc_event_name",
+            "template_id": template_id,
+            "rule_scope": "execution",
+            "field_name": "tvc_event_name",
             "rule_type": "exact",
-            "expected_values": "25%",
+            "expected_values": "video_interaction",
         },
     ]
+
+
+def merge_video_rules_with_defaults(video_rules: List[dict], template: Optional[dict]) -> List[dict]:
+    merged_rules = list(video_rules or [])
+    template_id = str((template or {}).get("template_id") or "").strip()
+    indexed_rules = {
+        _rule_field_merge_key(rule): index
+        for index, rule in enumerate(merged_rules)
+    }
+    for default_rule in build_default_article_detail_video_rules(template):
+        merged_rule = dict(default_rule)
+        if template_id:
+            merged_rule["template_id"] = template_id
+        field_key = _rule_field_merge_key(merged_rule)
+        existing_index = indexed_rules.get(field_key)
+        if existing_index is None:
+            merged_rules.append(merged_rule)
+            indexed_rules[field_key] = len(merged_rules) - 1
+        else:
+            merged_rules[existing_index] = merged_rule
+    return merged_rules
 
 
 def is_video_related_rule(rule: dict) -> bool:
@@ -6134,7 +6183,10 @@ def is_video_related_rule(rule: dict) -> bool:
     if rule_scope == "event" and "video_interaction" in f"{field_name} {expected_values}":
         return True
 
-    if rule_scope == "execution" and field_name in VIDEO_INTERACTION_FIELD_NAMES:
+    if rule_scope == "execution" and (
+        field_name in VIDEO_INTERACTION_FIELD_NAMES
+        or normalize_dimension_name(field_name) in VIDEO_INTERACTION_FIELD_NORMALIZED
+    ):
         return True
 
     return False
@@ -6154,7 +6206,10 @@ def is_video_interaction_template(template: dict, rules_by_template: Optional[Di
         expected_values = _normalize_template_name_key(rule.get("expected_values") or "")
         if rule_scope == "event" and "video_interaction" in f"{field_name} {expected_values}":
             return True
-        if rule_scope == "execution" and field_name in VIDEO_INTERACTION_FIELD_NAMES:
+        if rule_scope == "execution" and (
+            field_name in VIDEO_INTERACTION_FIELD_NAMES
+            or normalize_dimension_name(field_name) in VIDEO_INTERACTION_FIELD_NORMALIZED
+        ):
             return True
     return False
 
@@ -6241,26 +6296,7 @@ def build_runtime_video_companion_template(
     if not video_rules:
         video_rules = build_default_article_detail_video_rules(base_template)
     else:
-        existing_signatures = {
-            _normalize_rule_signature(
-                rule.get("rule_scope"),
-                rule.get("field_name"),
-                rule.get("rule_type"),
-                rule.get("expected_values"),
-            )
-            for rule in video_rules
-        }
-        for default_rule in build_default_article_detail_video_rules(base_template):
-            signature = _normalize_rule_signature(
-                default_rule.get("rule_scope"),
-                default_rule.get("field_name"),
-                default_rule.get("rule_type"),
-                default_rule.get("expected_values"),
-            )
-            if signature in existing_signatures:
-                continue
-            video_rules.append(dict(default_rule))
-            existing_signatures.add(signature)
+        video_rules = merge_video_rules_with_defaults(video_rules, base_template)
 
     template_name = str(base_template.get("template_name") or "Unnamed template").strip()
     companion_template = dict(base_template)
@@ -6318,27 +6354,7 @@ def derive_video_rules_from_article_detail_template(
         candidate_rules = get_augmented_template_rules(candidate, rules_by_template)
         video_rules = [rule for rule in candidate_rules if is_video_related_rule(rule)]
         if video_rules:
-            existing_signatures = {
-                _normalize_rule_signature(
-                    rule.get("rule_scope"),
-                    rule.get("field_name"),
-                    rule.get("rule_type"),
-                    rule.get("expected_values"),
-                )
-                for rule in video_rules
-            }
-            for default_rule in build_default_article_detail_video_rules(video_template):
-                signature = _normalize_rule_signature(
-                    default_rule.get("rule_scope"),
-                    default_rule.get("field_name"),
-                    default_rule.get("rule_type"),
-                    default_rule.get("expected_values"),
-                )
-                if signature in existing_signatures:
-                    continue
-                video_rules.append(dict(default_rule))
-                existing_signatures.add(signature)
-            return video_rules
+            return merge_video_rules_with_defaults(video_rules, video_template)
 
     return build_default_article_detail_video_rules(video_template)
 
@@ -6386,7 +6402,7 @@ def get_single_audit_template_rules(
         if is_video_interaction_template(template, rules_by_template):
             video_rules = [rule for rule in template_rules_list if is_video_related_rule(rule)]
             if video_rules:
-                return video_rules
+                return merge_video_rules_with_defaults(video_rules, template)
             return build_default_article_detail_video_rules(template)
         return template_rules_list
 
@@ -7751,11 +7767,42 @@ def build_datalayer_snapshot_export(result: dict, target_event_name: Optional[st
         matched_execution = find_event_by_name(execution_events, target_event_name)
         matched_network = find_event_by_name(network_events, target_event_name)
         selected_event = snapshot_trigger_payload_from_event(matched_execution) or snapshot_trigger_payload_from_event(matched_network)
+        if not selected_event and isinstance(data_layer, list):
+            for item in reversed(data_layer):
+                if not isinstance(item, dict):
+                    continue
+                if normalize_event_name(item.get("event")) == target_event_key:
+                    selected_event = dict(item)
+                    break
         event_payloads = build_event_payload_lookup(execution_events, network_events)
-        execution_payload = snapshot_ga4_payload(matched_execution) or dict(event_payloads.get(target_event_key) or {})
-        network_payload = snapshot_ga4_payload(matched_network) or dict(event_payloads.get(target_event_key) or {})
-        computed_state = dict(selected_event) if selected_event else {}
         selected_index = None
+        if selected_event:
+            selected_index = find_matching_datalayer_index(data_layer, selected_event)
+        if selected_index is None and isinstance(data_layer, list):
+            for index in range(len(data_layer) - 1, -1, -1):
+                item = data_layer[index]
+                if not isinstance(item, dict):
+                    continue
+                if normalize_event_name(item.get("event")) == target_event_key:
+                    selected_index = index
+                    break
+
+        computed_state = build_computed_state(data_layer, selected_index) if selected_index is not None else {}
+        if not computed_state and selected_event:
+            computed_state = dict(selected_event)
+
+        merged_target_payload = dict(computed_state)
+        for payload in (
+            dict(event_payloads.get(target_event_key) or {}),
+            snapshot_ga4_payload(matched_network),
+            snapshot_ga4_payload(matched_execution),
+            selected_event,
+        ):
+            if isinstance(payload, dict):
+                merged_target_payload.update(payload)
+
+        execution_payload = dict(merged_target_payload)
+        network_payload = dict(merged_target_payload)
     else:
         if not selected_event and isinstance(data_layer, list):
             for item in reversed(data_layer):
@@ -8178,6 +8225,9 @@ def find_payload_value(payload: dict, field_name: str):
 
 def select_payload_for_execution_rule(snapshot: dict, rule: dict) -> dict:
     execution_payload = snapshot.get("execution_payload") or {}
+    network_payload = snapshot.get("network_payload") or {}
+    computed_state = snapshot.get("computed_state") or {}
+    selected_event = snapshot.get("selected_event") or {}
     event_payloads = snapshot.get("event_payloads") or {}
     field_name = str(rule.get("field_name") or "").strip()
     normalized_field_name = normalize_dimension_name(field_name)
@@ -8186,7 +8236,17 @@ def select_payload_for_execution_rule(snapshot: dict, rule: dict) -> dict:
         return event_payloads.get("pagescroll") or event_payloads.get("scroll") or execution_payload
 
     if normalized_field_name in VIDEO_INTERACTION_FIELD_NORMALIZED:
-        return event_payloads.get("videointeraction") or execution_payload
+        merged_payload = {}
+        for payload in (
+            computed_state,
+            selected_event,
+            network_payload,
+            execution_payload,
+            event_payloads.get("videointeraction") or {},
+        ):
+            if isinstance(payload, dict):
+                merged_payload.update(payload)
+        return merged_payload or execution_payload
 
     return execution_payload
 
