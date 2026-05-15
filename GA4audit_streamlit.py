@@ -2149,37 +2149,54 @@ VIDEO_PLAY_SELECTORS = [
 ]
 
 ARTICLE_HERO_VIDEO_SELECTORS = [
-    ".Short_wrapper_fixed",
     ".Short_wrapper_fixed img[alt='video thumbnail']",
+    ".Short_wrapper_fixed img[src*='thumbnail' i]",
+    ".Short_wrapper_fixed i.videoImage",
     ".Short_wrapper_fixed [class*='play' i]",
     ".Short_wrapper_fixed [role='button']",
-    ".ArticleDetail_relatedvideo__wvgRP",
-    ".loop-div .point1",
-    ".loop-div .point2",
-    ".loop-container",
     ".ArticleDetail_relatedvideo__wvgRP img",
     ".ArticleDetail_relatedvideo__wvgRP .article",
     ".ArticleDetail_relatedvideo__wvgRP i.videoImage",
     ".ArticleDetail_relatedvideo__wvgRP [class*='play' i]",
     ".ArticleDetail_relatedvideo__wvgRP [role='button']",
+    ".loop-div .point1",
+    ".loop-div .point2",
+    ".loop-container",
     ".relatedvideo img",
     ".relatedvideo .article",
     ".relatedvideo a",
     "img[alt='video thumbnail']",
     "a[href*='/videos/' i]",
     "i.videoImage",
+    ".Short_wrapper_fixed",
+    ".ArticleDetail_relatedvideo__wvgRP",
 ]
 
 OPENED_VIDEO_SURFACE_SELECTORS = [
+    ".Short_wrapper_fixed .video-player-container video",
+    ".Short_wrapper_fixed .video-player-container [aria-label*='play' i]",
+    ".Short_wrapper_fixed .video-player-container button",
+    ".Short_wrapper_fixed .VideoSwiper_videoContainer video",
+    ".Short_wrapper_fixed .VideoSwiper_videoContainer [class*='play' i]",
+    ".Short_wrapper_fixed .VideoSwiper_videoContainer [role='button']",
     ".Short_wrapper_fixed .VideoSwiper_videoContainer",
     ".Short_wrapper_fixed .video-player-container",
-    ".Short_wrapper_fixed .video-player-container video",
+    ".ArticleDetail_relatedvideo__wvgRP .video-player-container video",
+    ".ArticleDetail_relatedvideo__wvgRP .video-player-container [aria-label*='play' i]",
+    ".ArticleDetail_relatedvideo__wvgRP .video-player-container button",
+    ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer video",
+    ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer [class*='play' i]",
+    ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer [role='button']",
     ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer",
     ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
-    ".ArticleDetail_relatedvideo__wvgRP .video-player-container video",
+    ".video-player-container video",
+    ".video-player-container [aria-label*='play' i]",
+    ".video-player-container button",
+    ".VideoSwiper_videoContainer video",
+    ".VideoSwiper_videoContainer [class*='play' i]",
+    ".VideoSwiper_videoContainer [role='button']",
     ".VideoSwiper_videoContainer",
     ".video-player-container",
-    ".video-player-container video",
 ]
 
 
@@ -2593,6 +2610,12 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
             time.sleep(0.03)
         if video_started:
             break
+
+    if video_started:
+        try:
+            _seek_visible_videos_in_current_context(driver, target_percent=26.0)
+        except Exception:
+            pass
 
     deadline = time.time() + min(6, max(3, int(timeout_seconds or 6)))
     preload_state: Dict[str, Any] = {}
