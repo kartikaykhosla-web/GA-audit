@@ -2527,6 +2527,50 @@ def seek_video_progress(driver, target_percent: float = 26.0) -> bool:
     return updated
 
 
+def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
+    try:
+        diagnostics = driver.execute_script(
+            """
+            const selectors = {
+              placementAWrapper: ".Short_wrapper_fixed",
+              placementAThumbnail: ".Short_wrapper_fixed img[alt='video thumbnail'], .Short_wrapper_fixed img[src*='thumbnail' i], .Short_wrapper_fixed i.videoImage",
+              placementBWrapper: ".ArticleDetail_relatedvideo__wvgRP, .relatedvideo",
+              placementBThumbnail: ".ArticleDetail_relatedvideo__wvgRP img, .ArticleDetail_relatedvideo__wvgRP i.videoImage, .relatedvideo img",
+              openedContainer: ".VideoSwiper_videoContainer, .video-player-container",
+              playControls: ".video-player-container [aria-label*='play' i], .video-player-container button, .VideoSwiper_videoContainer [class*='play' i], .VideoSwiper_videoContainer [role='button']"
+            };
+            const output = { selectors: {}, videos: [] };
+            Object.entries(selectors).forEach(([key, selector]) => {
+              const elements = Array.from(document.querySelectorAll(selector));
+              output.selectors[key] = {
+                count: elements.length,
+                visible: elements.some((element) => {
+                  const rect = element.getBoundingClientRect();
+                  return !!(rect.width && rect.height);
+                }),
+              };
+            });
+            output.videos = Array.from(document.querySelectorAll("video")).slice(0, 4).map((video, index) => {
+              const rect = video.getBoundingClientRect();
+              return {
+                index,
+                visible: !!(rect.width && rect.height),
+                paused: !!video.paused,
+                muted: !!video.muted,
+                currentTime: Number(video.currentTime || 0),
+                duration: Number(video.duration || 0),
+                readyState: Number(video.readyState || 0),
+                src: String(video.currentSrc || video.src || ""),
+              };
+            });
+            return output;
+            """
+        )
+        return diagnostics if isinstance(diagnostics, dict) else {}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "page_url": url,
@@ -2542,18 +2586,31 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
         "ga4_network_hits_json": "[]",
         "capture_failed": False,
         "capture_failure_reason": "",
+        "video_debug_steps_json": "[]",
+        "video_dom_state_json": "{}",
+        "video_visible_videos_json": "[]",
         "status": "",
         "issues": "",
     }
+    debug_steps: List[Dict[str, Any]] = []
 
     preload_ok, preload_error = install_preload_instrumentation(driver)
     result["preload_hook_installed"] = preload_ok
     result["preload_hook_error"] = preload_error
+    debug_steps.append(
+        {
+            "step": "install_preload_instrumentation",
+            "success": bool(preload_ok),
+            "error": preload_error,
+        }
+    )
 
     try:
         driver.get(url)
+        debug_steps.append({"step": "driver.get", "success": True})
     except TimeoutException as e:
         result["issues"] = f"Video page load timed out; continuing with loaded DOM: {e}"
+        debug_steps.append({"step": "driver.get", "success": False, "error": str(e), "timeout": True})
         try:
             driver.execute_script("window.stop();")
         except Exception:
@@ -2563,11 +2620,19 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
         result["capture_failure_reason"] = f"Error loading page for video audit: {e}"
         result["status"] = "FAIL"
         result["issues"] = result["capture_failure_reason"]
+        result["video_debug_steps_json"] = safe_json(debug_steps)
         return result
 
     consent_actions = accept_common_consent(driver, lightweight=True)
     result["consent_clicked"] = bool(consent_actions)
     result["consent_clicks_json"] = safe_json(consent_actions)
+    debug_steps.append(
+        {
+            "step": "accept_common_consent",
+            "success": bool(consent_actions),
+            "actions": consent_actions,
+        }
+    )
 
     try:
         driver.execute_script("""
@@ -2585,6 +2650,7 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
     except Exception:
         pass
 
+    initial_dom_state = capture_video_dom_diagnostics(driver)
     video_started = False
     for percent in (0,):
         try:
@@ -2602,23 +2668,42 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
         except Exception:
             pass
 
-        if _click_article_hero_video_in_current_context(driver):
+        clicked_initial = _click_article_hero_video_in_current_context(driver)
+        if clicked_initial:
             video_started = True
             time.sleep(0.2)
-        if _click_opened_video_surface_in_current_context(driver):
+        opened_dom_state = capture_video_dom_diagnostics(driver)
+        clicked_opened = _click_opened_video_surface_in_current_context(driver)
+        if clicked_opened:
             video_started = True
             time.sleep(0.15)
-        if _play_visible_videos_in_current_context(driver):
+        clicked_controls = _click_video_controls_in_current_context(driver)
+        if clicked_controls:
+            video_started = True
+            time.sleep(0.06)
+        played_visible = _play_visible_videos_in_current_context(driver)
+        if played_visible:
             video_started = True
             time.sleep(0.03)
+        debug_steps.append(
+            {
+                "step": "video_probe",
+                "scroll_percent": percent,
+                "clicked_initial": bool(clicked_initial),
+                "clicked_opened_surface": bool(clicked_opened),
+                "clicked_play_controls": bool(clicked_controls),
+                "played_visible_videos": bool(played_visible),
+            }
+        )
         if video_started:
             break
 
     if video_started:
         try:
-            _seek_visible_videos_in_current_context(driver, target_percent=26.0)
+            sought_progress = _seek_visible_videos_in_current_context(driver, target_percent=26.0)
+            debug_steps.append({"step": "seek_visible_videos", "success": bool(sought_progress), "target_percent": 26.0})
         except Exception:
-            pass
+            debug_steps.append({"step": "seek_visible_videos", "success": False, "target_percent": 26.0})
 
     deadline = time.time() + min(6, max(3, int(timeout_seconds or 6)))
     preload_state: Dict[str, Any] = {}
@@ -2640,6 +2725,29 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> D
     result["ga4_execution_events_json"] = safe_json(execution_events)
     result["ga4_network_hits_json"] = "[]"
     result["ga4_network_events_json"] = "[]"
+    final_dom_state = capture_video_dom_diagnostics(driver)
+    result["video_dom_state_json"] = safe_json(
+        {
+            "initial": initial_dom_state,
+            "after_open_attempt": opened_dom_state if 'opened_dom_state' in locals() else {},
+            "final": final_dom_state,
+        }
+    )
+    result["video_visible_videos_json"] = safe_json(final_dom_state.get("videos", []))
+    debug_steps.append(
+        {
+            "step": "poll_for_video_interaction",
+            "matched_video_event": bool(matched_video_event),
+            "execution_event_names": sorted(
+                {
+                    str(event.get("event_name") or "")
+                    for event in execution_events
+                    if str(event.get("event_name") or "").strip()
+                }
+            ),
+        }
+    )
+    result["video_debug_steps_json"] = safe_json(debug_steps)
 
     if matched_video_event:
         result["pageview_event_json"] = safe_json(snapshot_trigger_payload_from_event(matched_video_event))
@@ -10451,6 +10559,32 @@ This capture is split into three layers:
                             use_container_width=True,
                             hide_index=True,
                         )
+                with st.expander("Video capture debug", expanded=False):
+                    render_json_block(
+                        "Video debug steps",
+                        video_capture_result.get("video_debug_steps_json", ""),
+                        "No video diagnostic steps were recorded.",
+                    )
+                    render_json_block(
+                        "Video DOM state",
+                        video_capture_result.get("video_dom_state_json", ""),
+                        "No video DOM diagnostics were recorded.",
+                    )
+                    render_json_block(
+                        "Visible video elements",
+                        video_capture_result.get("video_visible_videos_json", ""),
+                        "No visible video elements were observed.",
+                    )
+                    render_event_list(
+                        "Execution-stage GA4 values",
+                        video_capture_result.get("ga4_execution_events_json", ""),
+                        "No execution-stage GA4 events were captured in the video pass.",
+                    )
+                    render_event_list(
+                        "Execution transport hits (pre-network)",
+                        video_capture_result.get("ga4_execution_hits_json", ""),
+                        "No transport hits were captured in the video pass.",
+                    )
 
 
 if active_section == "Domain Audit":
