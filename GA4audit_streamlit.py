@@ -2487,6 +2487,39 @@ def _attempt_quick_video_start_in_current_context(driver) -> bool:
     return attempted
 
 
+def _has_opened_video_iframe_in_current_context(driver) -> bool:
+    try:
+        found = driver.execute_script(
+            """
+            const roots = [
+              ".Short_wrapper_fixed .VideoSwiper_videoContainer",
+              ".Short_wrapper_fixed .video-player-container",
+              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer",
+              ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
+              ".VideoSwiper_videoContainer",
+              ".video-player-container"
+            ];
+            const visible = (element) => {
+              if (!element) return false;
+              const rect = element.getBoundingClientRect();
+              return !!(rect.width && rect.height);
+            };
+            for (const rootSelector of roots) {
+              const root = document.querySelector(rootSelector);
+              if (!visible(root)) continue;
+              const frame = root.querySelector("iframe");
+              if (visible(frame)) {
+                return true;
+              }
+            }
+            return false;
+            """
+        )
+        return bool(found)
+    except Exception:
+        return False
+
+
 def _attempt_video_start_in_frames(driver, depth: int = 0, max_depth: int = 0) -> bool:
     if depth > max_depth:
         return False
@@ -2819,7 +2852,10 @@ def audit_video_interaction_url(
                 video_started = True
                 time.sleep(0.03)
         report_step("Attempting visible video playback...", 0.68)
-        played_in_frame = _attempt_video_start_in_frames(driver, max_depth=0)
+        has_opened_iframe = _has_opened_video_iframe_in_current_context(driver)
+        played_in_frame = False
+        if not played_visible and has_opened_iframe:
+            played_in_frame = _attempt_video_start_in_frames(driver, max_depth=0)
         if played_in_frame:
             video_started = True
             time.sleep(0.03)
@@ -2831,6 +2867,7 @@ def audit_video_interaction_url(
                 "clicked_opened_surface": bool(clicked_opened),
                 "clicked_play_controls": bool(clicked_controls),
                 "played_visible_videos": bool(played_visible),
+                "has_opened_iframe": bool(has_opened_iframe),
                 "played_in_frame": bool(played_in_frame),
             }
         )
@@ -2841,7 +2878,9 @@ def audit_video_interaction_url(
         try:
             report_step("Seeking playback to 26%...", 0.76)
             sought_progress = _seek_visible_videos_in_current_context(driver, target_percent=26.0)
-            sought_progress_in_frame = _seek_visible_videos_in_frames(driver, target_percent=26.0, max_depth=0)
+            sought_progress_in_frame = False
+            if not sought_progress and _has_opened_video_iframe_in_current_context(driver):
+                sought_progress_in_frame = _seek_visible_videos_in_frames(driver, target_percent=26.0, max_depth=0)
             debug_steps.append(
                 {
                     "step": "seek_visible_videos",
