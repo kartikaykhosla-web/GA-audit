@@ -1693,7 +1693,7 @@ def extract_collect_hits_from_performance_logs(
             "response_headers": {},
             "request_body": request_body,
             "response_body": response_body,
-            "decoded_events": [],
+            "decoded_events": decode_ga4_collect_request(url, request_body),
         }
 
         if _is_comscore_hit(url):
@@ -2638,6 +2638,7 @@ def audit_video_interaction_url(
         "issues": "",
     }
     debug_steps: List[Dict[str, Any]] = []
+    page_domain = urlparse(url).netloc
 
     def report_step(message: str, progress_value: Optional[float] = None):
         if callable(step_reporter):
@@ -2746,6 +2747,10 @@ def audit_video_interaction_url(
         if played_visible:
             video_started = True
             time.sleep(0.03)
+        played_in_frame = _attempt_video_start_in_frames(driver, max_depth=0)
+        if played_in_frame:
+            video_started = True
+            time.sleep(0.03)
         debug_steps.append(
             {
                 "step": "video_probe",
@@ -2754,6 +2759,7 @@ def audit_video_interaction_url(
                 "clicked_opened_surface": bool(clicked_opened),
                 "clicked_play_controls": bool(clicked_controls),
                 "played_visible_videos": bool(played_visible),
+                "played_in_frame": bool(played_in_frame),
             }
         )
         if video_started:
@@ -2763,7 +2769,16 @@ def audit_video_interaction_url(
         try:
             report_step("Seeking playback to 26%...", 0.76)
             sought_progress = _seek_visible_videos_in_current_context(driver, target_percent=26.0)
-            debug_steps.append({"step": "seek_visible_videos", "success": bool(sought_progress), "target_percent": 26.0})
+            sought_progress_in_frame = _seek_visible_videos_in_frames(driver, target_percent=26.0, max_depth=0)
+            debug_steps.append(
+                {
+                    "step": "seek_visible_videos",
+                    "success": bool(sought_progress or sought_progress_in_frame),
+                    "sought_in_current_context": bool(sought_progress),
+                    "sought_in_frame": bool(sought_progress_in_frame),
+                    "target_percent": 26.0,
+                }
+            )
         except Exception:
             debug_steps.append({"step": "seek_visible_videos", "success": False, "target_percent": 26.0})
 
@@ -2772,6 +2787,9 @@ def audit_video_interaction_url(
     execution_hits: List[Dict[str, Any]] = []
     execution_events: List[Dict[str, Any]] = []
     matched_video_event = None
+    performance_hits: List[Dict[str, Any]] = []
+    performance_events: List[Dict[str, Any]] = []
+    performance_match_source = ""
 
     report_step("Polling for video_interaction event...", 0.84)
     while time.time() < deadline:
@@ -2786,6 +2804,33 @@ def audit_video_interaction_url(
                 if normalize_event_name(entry.get("event")) == "videointeraction":
                     matched_video_event = build_synthetic_ga4_event_from_datalayer(entry)
                     break
+        if not matched_video_event:
+            perf_ga4_collects, _, _, _ = extract_collect_hits_from_performance_logs(driver, page_domain)
+            performance_hits = perf_ga4_collects or []
+            performance_events = []
+            for hit in performance_hits:
+                if not isinstance(hit, dict):
+                    continue
+                for event in hit.get("decoded_events") or []:
+                    if isinstance(event, dict):
+                        performance_events.append(event)
+            matched_video_event = find_event_by_name(performance_events, "video_interaction")
+            if matched_video_event:
+                performance_match_source = "performance_log"
+        if not matched_video_event:
+            timing_ga4_collects, _, _, _ = extract_collect_hits_from_resource_timing(driver, page_domain)
+            if timing_ga4_collects:
+                performance_hits = timing_ga4_collects
+                performance_events = []
+                for hit in timing_ga4_collects:
+                    if not isinstance(hit, dict):
+                        continue
+                    for event in hit.get("decoded_events") or []:
+                        if isinstance(event, dict):
+                            performance_events.append(event)
+                matched_video_event = find_event_by_name(performance_events, "video_interaction")
+                if matched_video_event:
+                    performance_match_source = "resource_timing"
         if matched_video_event:
             break
         remaining = max(0.0, deadline - time.time())
@@ -2796,8 +2841,8 @@ def audit_video_interaction_url(
     result["all_datalayer_json"] = safe_json(sanitize_for_json(preload_datalayer))
     result["ga4_execution_hits_json"] = safe_json(execution_hits)
     result["ga4_execution_events_json"] = safe_json(execution_events)
-    result["ga4_network_hits_json"] = "[]"
-    result["ga4_network_events_json"] = "[]"
+    result["ga4_network_hits_json"] = safe_json(performance_hits)
+    result["ga4_network_events_json"] = safe_json(performance_events)
     final_dom_state = capture_video_dom_diagnostics(driver)
     result["video_dom_state_json"] = safe_json(
         {
@@ -2811,10 +2856,19 @@ def audit_video_interaction_url(
         {
             "step": "poll_for_video_interaction",
             "matched_video_event": bool(matched_video_event),
+            "performance_match_source": performance_match_source,
+            "performance_hit_count": len(performance_hits),
             "execution_event_names": sorted(
                 {
                     str(event.get("event_name") or "")
                     for event in execution_events
+                    if str(event.get("event_name") or "").strip()
+                }
+            ),
+            "performance_event_names": sorted(
+                {
+                    str(event.get("event_name") or "")
+                    for event in performance_events
                     if str(event.get("event_name") or "").strip()
                 }
             ),
@@ -10574,7 +10628,7 @@ This capture is split into three layers:
             try:
                 driver = create_driver(
                     headless=True,
-                    performance_logs=False,
+                    performance_logs=True,
                     capture_network=False,
                     page_load_timeout=5,
                 )
