@@ -2372,6 +2372,9 @@ def _attempt_quick_video_start_in_current_context(driver) -> bool:
     if _click_opened_video_surface_in_current_context(driver):
         attempted = True
         time.sleep(0.08)
+    if _click_video_controls_in_current_context(driver):
+        attempted = True
+        time.sleep(0.06)
     if _play_visible_videos_in_current_context(driver):
         attempted = True
         time.sleep(0.02)
