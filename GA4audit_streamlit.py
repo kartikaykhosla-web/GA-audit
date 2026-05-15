@@ -2507,7 +2507,7 @@ def seek_video_progress(driver, target_percent: float = 26.0) -> bool:
     return updated
 
 
-def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 18) -> Dict[str, Any]:
+def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 6) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "page_url": url,
         "preload_hook_installed": False,
@@ -2566,7 +2566,7 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 18) -> 
         pass
 
     video_started = False
-    for percent in (0, 40):
+    for percent in (0,):
         try:
             driver.execute_script(
                 """
@@ -2594,13 +2594,7 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 18) -> 
         if video_started:
             break
 
-    if video_started:
-        try:
-            seek_video_progress(driver, target_percent=26.0)
-        except Exception:
-            pass
-
-    deadline = time.time() + max(4, int(timeout_seconds or 18))
+    deadline = time.time() + min(6, max(3, int(timeout_seconds or 6)))
     preload_state: Dict[str, Any] = {}
     execution_hits: List[Dict[str, Any]] = []
     execution_events: List[Dict[str, Any]] = []
@@ -2612,7 +2606,7 @@ def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 18) -> 
         matched_video_event = find_event_by_name(execution_events, "video_interaction")
         if matched_video_event:
             break
-        time.sleep(0.2)
+        time.sleep(0.12)
 
     preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
     result["all_datalayer_json"] = safe_json(sanitize_for_json(preload_datalayer))
@@ -10347,7 +10341,7 @@ This capture is split into three layers:
                     headless=True,
                     performance_logs=False,
                     capture_network=False,
-                    page_load_timeout=8,
+                    page_load_timeout=5,
                 )
                 try:
                     video_progress.progress(0.25)
@@ -10355,7 +10349,7 @@ This capture is split into three layers:
                     video_capture_result = audit_video_interaction_url(
                         driver,
                         normalized_url,
-                        timeout_seconds=max(8, int(wait_seconds or 8) + 6),
+                        timeout_seconds=6,
                     )
                     video_progress.progress(0.8)
                 finally:
