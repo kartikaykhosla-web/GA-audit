@@ -862,9 +862,7 @@ GA4_PRELOAD_SCRIPT = r"""
                 }
                 for (var i = 0; i < Math.min(list.length, 20); i++) {
                     if (list[i] && typeof list[i] === "object") {
-                        state.initialDataLayer.push({
-                            event: list[i] && list[i].event ? list[i].event : ""
-                        });
+                        state.initialDataLayer.push(safeClone(list[i], 0));
                     }
                 }
                 trim(state.initialDataLayer);
@@ -948,6 +946,7 @@ GA4_PRELOAD_SCRIPT = r"""
             list.push = function () {
                 var args = Array.prototype.slice.call(arguments);
                 push("dataLayerPushes", {
+                  entry: safeClone(args[0], 0),
                   event: args[0] && args[0].event ? args[0].event : ""
                 });
                 return originalPush.apply(this, arguments);
@@ -1151,8 +1150,12 @@ def reconstruct_datalayer_from_preload(preload_state: Dict[str, Any]) -> List[Di
         if not isinstance(push_entry, dict):
             continue
 
-        event_name = str(push_entry.get("event") or "").strip()
+        full_entry = push_entry.get("entry")
+        if isinstance(full_entry, dict):
+            reconstructed.append(full_entry)
+            continue
 
+        event_name = str(push_entry.get("event") or "").strip()
         if event_name:
             reconstructed.append({"event": event_name})
 
@@ -2775,6 +2778,14 @@ def audit_video_interaction_url(
         preload_state = extract_preload_state(driver)
         execution_hits, execution_events = normalize_transport_hits(preload_state)
         matched_video_event = find_event_by_name(execution_events, "video_interaction")
+        if not matched_video_event:
+            current_datalayer = reconstruct_datalayer_from_preload(preload_state)
+            for entry in reversed(current_datalayer):
+                if not isinstance(entry, dict):
+                    continue
+                if normalize_event_name(entry.get("event")) == "videointeraction":
+                    matched_video_event = build_synthetic_ga4_event_from_datalayer(entry)
+                    break
         if matched_video_event:
             break
         remaining = max(0.0, deadline - time.time())
@@ -7538,6 +7549,25 @@ def snapshot_trigger_payload_from_event(event):
     if event_name not in (None, ""):
         payload.setdefault("event", event_name)
     return payload
+
+
+def build_synthetic_ga4_event_from_datalayer(entry: dict) -> Optional[dict]:
+    if not isinstance(entry, dict):
+        return None
+    event_name = str(entry.get("event") or "").strip()
+    if not event_name:
+        return None
+    params = {
+        str(key): value
+        for key, value in entry.items()
+        if str(key) not in {"event"} and not str(key).startswith("gtm")
+    }
+    return {
+        "event_name": event_name,
+        "params": params,
+        "user_properties": {},
+        "source": "datalayer",
+    }
 
 
 def merge_payload_field_values(existing_value, new_value):
