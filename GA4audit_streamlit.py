@@ -2507,6 +2507,134 @@ def seek_video_progress(driver, target_percent: float = 26.0) -> bool:
     return updated
 
 
+def audit_video_interaction_url(driver, url: str, timeout_seconds: int = 18) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "page_url": url,
+        "preload_hook_installed": False,
+        "preload_hook_error": "",
+        "consent_clicked": False,
+        "consent_clicks_json": "",
+        "all_datalayer_json": "[]",
+        "pageview_event_json": "{}",
+        "ga4_execution_events_json": "[]",
+        "ga4_network_events_json": "[]",
+        "ga4_execution_hits_json": "[]",
+        "ga4_network_hits_json": "[]",
+        "capture_failed": False,
+        "capture_failure_reason": "",
+        "status": "",
+        "issues": "",
+    }
+
+    preload_ok, preload_error = install_preload_instrumentation(driver)
+    result["preload_hook_installed"] = preload_ok
+    result["preload_hook_error"] = preload_error
+
+    try:
+        driver.get(url)
+    except TimeoutException as e:
+        result["issues"] = f"Video page load timed out; continuing with loaded DOM: {e}"
+        try:
+            driver.execute_script("window.stop();")
+        except Exception:
+            pass
+    except Exception as e:
+        result["capture_failed"] = True
+        result["capture_failure_reason"] = f"Error loading page for video audit: {e}"
+        result["status"] = "FAIL"
+        result["issues"] = result["capture_failure_reason"]
+        return result
+
+    consent_actions = accept_common_consent(driver, lightweight=True)
+    result["consent_clicked"] = bool(consent_actions)
+    result["consent_clicks_json"] = safe_json(consent_actions)
+
+    try:
+        driver.execute_script("""
+            try {
+                if (typeof gtag === "function") {
+                    gtag('consent', 'update', {
+                        ad_user_data: 'granted',
+                        ad_personalization: 'granted',
+                        ad_storage: 'granted',
+                        analytics_storage: 'granted'
+                    });
+                }
+            } catch (e) {}
+        """)
+    except Exception:
+        pass
+
+    video_started = False
+    for percent in (0, 40):
+        try:
+            driver.execute_script(
+                """
+                const scrollHeight = Math.max(
+                    document.body.scrollHeight || 0,
+                    document.documentElement.scrollHeight || 0
+                );
+                window.scrollTo(0, scrollHeight * arguments[0] / 100);
+                """,
+                percent,
+            )
+            time.sleep(0.1)
+        except Exception:
+            pass
+
+        if _click_article_hero_video_in_current_context(driver):
+            video_started = True
+            time.sleep(0.2)
+        if _click_opened_video_surface_in_current_context(driver):
+            video_started = True
+            time.sleep(0.15)
+        if _play_visible_videos_in_current_context(driver):
+            video_started = True
+            time.sleep(0.03)
+        if video_started:
+            break
+
+    if video_started:
+        try:
+            seek_video_progress(driver, target_percent=26.0)
+        except Exception:
+            pass
+
+    deadline = time.time() + max(4, int(timeout_seconds or 18))
+    preload_state: Dict[str, Any] = {}
+    execution_hits: List[Dict[str, Any]] = []
+    execution_events: List[Dict[str, Any]] = []
+    matched_video_event = None
+
+    while time.time() < deadline:
+        preload_state = extract_preload_state(driver)
+        execution_hits, execution_events = normalize_transport_hits(preload_state)
+        matched_video_event = find_event_by_name(execution_events, "video_interaction")
+        if matched_video_event:
+            break
+        time.sleep(0.2)
+
+    preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
+    result["all_datalayer_json"] = safe_json(sanitize_for_json(preload_datalayer))
+    result["ga4_execution_hits_json"] = safe_json(execution_hits)
+    result["ga4_execution_events_json"] = safe_json(execution_events)
+    result["ga4_network_hits_json"] = "[]"
+    result["ga4_network_events_json"] = "[]"
+
+    if matched_video_event:
+        result["pageview_event_json"] = safe_json(snapshot_trigger_payload_from_event(matched_video_event))
+        result["status"] = "PASS"
+        result["issues"] = ""
+    else:
+        result["pageview_event_json"] = "{}"
+        result["capture_failed"] = True
+        result["capture_failure_reason"] = "video_interaction was not observed during the bounded video capture pass."
+        result["status"] = "FAIL"
+        result["issues"] = result["capture_failure_reason"]
+
+    return result
+
+
 def single_audit_requires_video_playback(rules: Optional[List[dict]]) -> bool:
     video_fields = {
         normalize_dimension_name(value) for value in VIDEO_INTERACTION_FIELD_NAMES
@@ -9597,6 +9725,7 @@ This capture is split into three layers:
     )
 
     selected_template = None
+    available_video_companion_templates: List[dict] = []
     if not active_templates:
         st.warning("No active templates are available.")
     else:
@@ -9622,6 +9751,16 @@ This capture is split into three layers:
             "Video-interaction companion templates are hidden here; select the base template "
             "(for example `article detail`) and the app will handle companion validations itself."
         )
+        if selected_template is not None:
+            available_video_companion_templates = [
+                template
+                for template in build_companion_validation_templates(
+                    selected_template,
+                    active_templates,
+                    template_rules_by_template,
+                )
+                if is_video_interaction_template(template)
+            ]
 
     wait_seconds = st.slider(
         "Wait time after page load (seconds)",
@@ -9632,10 +9771,23 @@ This capture is split into three layers:
 
     st.caption("`URL` and `Template` are required to run the audit.")
 
-    if st.button(
+    action_col1, action_col2 = st.columns(2)
+    run_audit_clicked = action_col1.button(
         "Run audit",
         disabled=not str(url_text or "").strip() or selected_template is None,
-    ):
+        use_container_width=True,
+    )
+    capture_video_clicked = action_col2.button(
+        "Capture video interaction",
+        disabled=(
+            not str(url_text or "").strip()
+            or selected_template is None
+            or not available_video_companion_templates
+        ),
+        use_container_width=True,
+    )
+
+    if run_audit_clicked:
         original_url, normalized_url, input_error = normalize_single_url(url_text)
         if selected_template is None:
             st.error("Please select a template before running the audit.")
@@ -10160,6 +10312,124 @@ This capture is split into three layers:
                             "Consent actions",
                             result.get("consent_clicks_json", ""),
                             "No consent click was performed.",
+                        )
+
+    if capture_video_clicked:
+        original_url, normalized_url, input_error = normalize_single_url(url_text)
+        if selected_template is None:
+            st.error("Please select a template before capturing video interaction.")
+        elif input_error:
+            st.error(input_error)
+        elif not template_reference_matches_url(selected_template, normalized_url):
+            st.error(
+                "The selected template does not match this URL. "
+                "Please choose a template whose reference URL/pattern fits the page you want to audit."
+            )
+        elif not available_video_companion_templates:
+            st.error("No video interaction companion template is configured for the selected template.")
+        else:
+            if normalized_url != original_url:
+                st.info(f"Using normalized URL: `{normalized_url}`")
+
+            video_capture_template = available_video_companion_templates[0]
+            video_capture_rules = get_single_audit_template_rules(
+                video_capture_template,
+                active_templates,
+                template_rules_by_template,
+            )
+            video_progress = st.progress(0)
+            video_status_box = st.empty()
+            video_capture_result: Optional[Dict[str, Any]] = None
+
+            video_status_box.write("Launching video capture browser...")
+            try:
+                driver = create_driver(
+                    headless=True,
+                    performance_logs=False,
+                    capture_network=False,
+                    page_load_timeout=8,
+                )
+                try:
+                    video_progress.progress(0.25)
+                    video_status_box.write(f"Capturing video interaction for {normalized_url}")
+                    video_capture_result = audit_video_interaction_url(
+                        driver,
+                        normalized_url,
+                        timeout_seconds=max(8, int(wait_seconds or 8) + 6),
+                    )
+                    video_progress.progress(0.8)
+                finally:
+                    video_status_box.write("Closing video capture browser...")
+                    safe_quit_driver(driver)
+            except Exception as exc:
+                st.error(f"Error capturing video interaction for {normalized_url}")
+                st.exception(exc)
+            video_progress.progress(1.0)
+            video_status_box.write("Done.")
+
+            if video_capture_result:
+                st.markdown("### Video Interaction Capture")
+                companion_summary = build_audit_focus_summary(video_capture_result, video_capture_template)
+                companion_snapshot = build_datalayer_snapshot_export(
+                    video_capture_result,
+                    target_event_name="video_interaction",
+                )
+                companion_execution_df, _ = build_execution_validation_rows(
+                    companion_snapshot,
+                    video_capture_rules,
+                    include_unmatched_fields=False,
+                )
+                companion_event_df = build_event_validation_rows(
+                    companion_summary["event_rows"],
+                    video_capture_rules,
+                    include_unmatched_observed_events=False,
+                )
+
+                companion_exec_col, companion_event_col = st.columns(2)
+                with companion_exec_col:
+                    st.markdown(f"#### {video_capture_template.get('template_name') or 'Video interaction'}")
+                    st.caption("Execution checks")
+                    if companion_execution_df.empty:
+                        st.info("No video execution values were captured in this pass.")
+                    else:
+                        st.dataframe(
+                            style_validation_table(companion_execution_df, "Validation"),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                with companion_event_col:
+                    st.markdown("#### Video Event")
+                    if companion_event_df.empty:
+                        st.info("No video interaction event rules were available for this pass.")
+                    else:
+                        companion_event_display_columns = [
+                            "event_name",
+                            "status",
+                            "times_fired",
+                            "capture_layer",
+                        ]
+                        if "expected" in companion_event_df.columns:
+                            companion_event_display_columns.append("expected")
+                        if "validation" in companion_event_df.columns:
+                            companion_event_display_columns.append("validation")
+                        companion_event_display_df = companion_event_df[
+                            companion_event_display_columns
+                        ].rename(
+                            columns={
+                                "event_name": "Event",
+                                "status": "Status",
+                                "times_fired": "Times Fired",
+                                "capture_layer": "Seen In",
+                                "expected": "Expected",
+                                "validation": "Validation",
+                            }
+                        )
+                        st.dataframe(
+                            style_validation_table(companion_event_display_df, "Validation")
+                            if "Validation" in companion_event_display_df.columns
+                            else companion_event_display_df,
+                            use_container_width=True,
+                            hide_index=True,
                         )
 
 
