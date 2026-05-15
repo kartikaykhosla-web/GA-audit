@@ -2149,15 +2149,23 @@ VIDEO_PLAY_SELECTORS = [
 ]
 
 ARTICLE_HERO_VIDEO_SELECTORS = [
+    ".Short_wrapper_fixed",
+    ".Short_wrapper_fixed img[alt='video thumbnail']",
+    ".Short_wrapper_fixed [class*='play' i]",
+    ".Short_wrapper_fixed [role='button']",
+    ".ArticleDetail_relatedvideo__wvgRP",
     ".loop-div .point1",
     ".loop-div .point2",
     ".loop-container",
     ".ArticleDetail_relatedvideo__wvgRP img",
     ".ArticleDetail_relatedvideo__wvgRP .article",
     ".ArticleDetail_relatedvideo__wvgRP i.videoImage",
+    ".ArticleDetail_relatedvideo__wvgRP [class*='play' i]",
+    ".ArticleDetail_relatedvideo__wvgRP [role='button']",
     ".relatedvideo img",
     ".relatedvideo .article",
     ".relatedvideo a",
+    "img[alt='video thumbnail']",
     "a[href*='/videos/' i]",
     "i.videoImage",
 ]
@@ -2309,6 +2317,17 @@ def _attempt_video_start_in_current_context(driver) -> bool:
     return attempted
 
 
+def _attempt_quick_video_start_in_current_context(driver) -> bool:
+    attempted = False
+    if _click_article_hero_video_in_current_context(driver):
+        attempted = True
+        time.sleep(0.12)
+    if _play_visible_videos_in_current_context(driver):
+        attempted = True
+        time.sleep(0.02)
+    return attempted
+
+
 def _attempt_video_start_in_frames(driver, depth: int = 0, max_depth: int = 0) -> bool:
     if depth > max_depth:
         return False
@@ -2415,7 +2434,7 @@ def trigger_video_playback(driver, quick: bool = False) -> bool:
         return False
 
     # Try the hero media near the top of the article before we scroll past it.
-    scroll_points = (0,) if quick else (0, 12)
+    scroll_points = (0, 35) if quick else (0, 12)
     for percent in scroll_points:
         try:
             driver.execute_script(
@@ -2431,7 +2450,12 @@ def trigger_video_playback(driver, quick: bool = False) -> bool:
             time.sleep(0.08)
         except Exception:
             pass
-        started = _attempt_video_start_in_current_context(driver) or started
+        if quick:
+            started = _attempt_quick_video_start_in_current_context(driver) or started
+            if started:
+                break
+        else:
+            started = _attempt_video_start_in_current_context(driver) or started
         if not quick:
             started = _attempt_video_start_in_frames(driver) or started
     return started
@@ -7258,63 +7282,75 @@ def build_snapshot_ordered_keys(*payloads):
     return filtered_keys
 
 
-def build_datalayer_snapshot_export(result: dict):
+def build_datalayer_snapshot_export(result: dict, target_event_name: Optional[str] = None):
     data_layer = load_json_payload(result.get("all_datalayer_json", ""), [])
     selected_event = load_json_payload(result.get("pageview_event_json", ""), {})
     execution_events = load_json_payload(result.get("ga4_execution_events_json", ""), [])
     network_events = load_json_payload(result.get("ga4_network_events_json", ""), [])
+    target_event_key = canonical_event_name(target_event_name) if target_event_name else ""
 
     if not isinstance(selected_event, dict):
         selected_event = {}
 
-    if not selected_event and isinstance(data_layer, list):
-        for item in reversed(data_layer):
-            if not isinstance(item, dict):
-                continue
-            if normalize_event_name(item.get("event")) == "pageview":
-                selected_event = item
-                break
+    if target_event_key:
+        matched_execution = find_event_by_name(execution_events, target_event_name)
+        matched_network = find_event_by_name(network_events, target_event_name)
+        selected_event = snapshot_trigger_payload_from_event(matched_execution) or snapshot_trigger_payload_from_event(matched_network)
+        event_payloads = build_event_payload_lookup(execution_events, network_events)
+        execution_payload = snapshot_ga4_payload(matched_execution) or dict(event_payloads.get(target_event_key) or {})
+        network_payload = snapshot_ga4_payload(matched_network) or dict(event_payloads.get(target_event_key) or {})
+        computed_state = dict(selected_event) if selected_event else {}
+        selected_index = None
+    else:
+        if not selected_event and isinstance(data_layer, list):
+            for item in reversed(data_layer):
+                if not isinstance(item, dict):
+                    continue
+                if normalize_event_name(item.get("event")) == "pageview":
+                    selected_event = item
+                    break
 
-    matched_execution = None
-    matched_network = None
-    if selected_event:
-        matched_execution = best_matching_event(selected_event, execution_events)
-        matched_network = best_matching_event(selected_event, network_events)
+        matched_execution = None
+        matched_network = None
+        if selected_event:
+            matched_execution = best_matching_event(selected_event, execution_events)
+            matched_network = best_matching_event(selected_event, network_events)
 
-    if not matched_execution:
-        matched_execution = (
-            find_event_by_name(execution_events, "page_view")
-            or find_event_by_name(execution_events, "pageview")
-            or (execution_events[-1] if isinstance(execution_events, list) and execution_events else None)
-        )
-    if not matched_network:
-        matched_network = (
-            find_event_by_name(network_events, "page_view")
-            or find_event_by_name(network_events, "pageview")
-            or (network_events[-1] if isinstance(network_events, list) and network_events else None)
-        )
+        if not matched_execution:
+            matched_execution = (
+                find_event_by_name(execution_events, "page_view")
+                or find_event_by_name(execution_events, "pageview")
+                or (execution_events[-1] if isinstance(execution_events, list) and execution_events else None)
+            )
+        if not matched_network:
+            matched_network = (
+                find_event_by_name(network_events, "page_view")
+                or find_event_by_name(network_events, "pageview")
+                or (network_events[-1] if isinstance(network_events, list) and network_events else None)
+            )
 
-    if not selected_event:
-        selected_event = (
-            snapshot_trigger_payload_from_event(matched_execution)
-            or snapshot_trigger_payload_from_event(matched_network)
-        )
+        if not selected_event:
+            selected_event = (
+                snapshot_trigger_payload_from_event(matched_execution)
+                or snapshot_trigger_payload_from_event(matched_network)
+            )
 
-    selected_index = None
-    if selected_event:
-        selected_index = find_matching_datalayer_index(data_layer, selected_event)
-        if selected_index is None and isinstance(data_layer, list) and data_layer:
-            selected_index = max(len(data_layer) - 1, 0)
+        selected_index = None
+        if selected_event:
+            selected_index = find_matching_datalayer_index(data_layer, selected_event)
+            if selected_index is None and isinstance(data_layer, list) and data_layer:
+                selected_index = max(len(data_layer) - 1, 0)
 
-    computed_state = build_computed_state(data_layer, selected_index) if selected_index is not None else {}
-    if not computed_state and selected_event:
-        computed_state = dict(selected_event)
+        computed_state = build_computed_state(data_layer, selected_index) if selected_index is not None else {}
+        if not computed_state and selected_event:
+            computed_state = dict(selected_event)
 
-    execution_payload = snapshot_ga4_payload(matched_execution)
-    network_payload = snapshot_ga4_payload(matched_network)
-    event_payloads = build_event_payload_lookup(execution_events, network_events)
-    if not execution_payload and computed_state and selected_event:
-        execution_payload = dict(computed_state)
+        execution_payload = snapshot_ga4_payload(matched_execution)
+        network_payload = snapshot_ga4_payload(matched_network)
+        event_payloads = build_event_payload_lookup(execution_events, network_events)
+        if not execution_payload and computed_state and selected_event:
+            execution_payload = dict(computed_state)
+
     ordered_keys = build_snapshot_ordered_keys(
         selected_event,
         computed_state,
@@ -9602,6 +9638,11 @@ This capture is split into three layers:
                 )
                 for companion_template in companion_validation_templates
             ]
+            video_companion_templates = [
+                companion_template
+                for companion_template in companion_validation_templates
+                if is_video_interaction_template(companion_template, template_rules_by_template)
+            ]
             article_detail_fast_path = is_article_detail_template(
                 selected_template,
                 template_rules_by_template,
@@ -9609,7 +9650,7 @@ This capture is split into three layers:
             if article_detail_fast_path:
                 requires_video_playback = single_audit_requires_video_playback(selected_template_rules)
                 requires_scroll_capture = False
-                quick_video_probe = False
+                quick_video_probe = bool(video_companion_templates)
             else:
                 requires_video_playback = (
                     single_audit_requires_video_playback(selected_template_rules)
@@ -9626,10 +9667,8 @@ This capture is split into three layers:
                         for rule_set in companion_rule_sets
                     )
                 )
-            # Do not auto-run a second browser pass for companion video validation
-            # inside the base article-detail audit. On Streamlit Cloud, the extra
-            # browser startup is the main source of the slow/crash loop.
-            video_companion_templates: List[dict] = []
+            # Keep companion validation inside the same browser session; a second
+            # auto-launched browser pass was the main source of the slow/crash loop.
             total_audit_passes = 1
             completed_audit_passes = 0
             companion_results_by_template_id: Dict[str, Dict[str, Any]] = {}
@@ -9912,7 +9951,10 @@ This capture is split into three layers:
                                     companion_exec_col, companion_event_col = st.columns(2)
                                     with companion_exec_col:
                                         st.markdown("##### Execution checks")
-                                        companion_snapshot = build_datalayer_snapshot_export(companion_result)
+                                        companion_snapshot = build_datalayer_snapshot_export(
+                                            companion_result,
+                                            target_event_name="video_interaction",
+                                        )
                                         companion_execution_df, _ = build_execution_validation_rows(
                                             companion_snapshot,
                                             companion_rules,
