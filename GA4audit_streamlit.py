@@ -2274,48 +2274,61 @@ def _click_video_controls_in_current_context(driver) -> bool:
     try:
         clicked = driver.execute_script(
             """
+            const rootSelectors = [
+              ".Short_wrapper_fixed .video-player-container",
+              ".Short_wrapper_fixed .VideoSwiper_videoContainer",
+              ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
+              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer",
+              ".video-player-container",
+              ".VideoSwiper_videoContainer"
+            ];
             const selectors = [
-              ".Short_wrapper_fixed .video-player-container [aria-label*='play' i]",
-              ".Short_wrapper_fixed .video-player-container button",
-              ".Short_wrapper_fixed .VideoSwiper_videoContainer [class*='play' i]",
-              ".Short_wrapper_fixed .VideoSwiper_videoContainer [role='button']",
-              ".ArticleDetail_relatedvideo__wvgRP .video-player-container [aria-label*='play' i]",
-              ".ArticleDetail_relatedvideo__wvgRP .video-player-container button",
-              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer [class*='play' i]",
-              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer [role='button']",
-              ".video-player-container [aria-label*='play' i]",
-              ".video-player-container button",
-              ".VideoSwiper_videoContainer [class*='play' i]",
-              ".VideoSwiper_videoContainer [role='button']"
+              "button[aria-label*='play' i]",
+              "[aria-label*='play' i]",
+              "[class*='play' i]",
+              "[role='button']",
+              "video"
             ];
             const visible = (element) => {
               if (!element) return false;
               const rect = element.getBoundingClientRect();
               return !!(rect.width && rect.height);
             };
-            for (const selector of selectors) {
-              const elements = Array.from(document.querySelectorAll(selector)).slice(0, 3);
-              for (const element of elements) {
-                if (!visible(element)) continue;
-                try {
-                  element.scrollIntoView({ block: "center", inline: "center" });
-                } catch (e) {}
-                try {
-                  ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((eventName) => {
-                    try {
-                      element.dispatchEvent(new MouseEvent(eventName, {
-                        view: window,
-                        bubbles: true,
-                        cancelable: true,
-                        buttons: 1
-                      }));
-                    } catch (e) {}
-                  });
-                  if (typeof element.click === "function") {
-                    element.click();
-                  }
+            const clickElement = (element) => {
+              if (!visible(element)) return false;
+              try {
+                element.scrollIntoView({ block: "center", inline: "center" });
+              } catch (e) {}
+              try {
+                ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((eventName) => {
+                  try {
+                    element.dispatchEvent(new MouseEvent(eventName, {
+                      view: window,
+                      bubbles: true,
+                      cancelable: true,
+                      buttons: 1
+                    }));
+                  } catch (e) {}
+                });
+                if (typeof element.click === "function") {
+                  element.click();
+                }
+                return true;
+              } catch (e) {
+                return false;
+              }
+            };
+            for (const rootSelector of rootSelectors) {
+              const root = document.querySelector(rootSelector);
+              if (!visible(root)) continue;
+              for (const selector of selectors) {
+                const element = root.querySelector(selector);
+                if (clickElement(element)) {
                   return true;
-                } catch (e) {}
+                }
+              }
+              if (clickElement(root)) {
+                return true;
               }
             }
             return false;
@@ -2737,16 +2750,22 @@ def audit_video_interaction_url(
         if clicked_opened:
             video_started = True
             time.sleep(0.15)
-        report_step("Clicking player controls...", 0.60)
-        clicked_controls = _click_video_controls_in_current_context(driver)
-        if clicked_controls:
-            video_started = True
-            time.sleep(0.06)
-        report_step("Attempting visible video playback...", 0.68)
         played_visible = _play_visible_videos_in_current_context(driver)
         if played_visible:
             video_started = True
             time.sleep(0.03)
+        report_step("Clicking player controls...", 0.60)
+        clicked_controls = False
+        if not played_visible:
+            clicked_controls = _click_video_controls_in_current_context(driver)
+            if clicked_controls:
+                video_started = True
+                time.sleep(0.06)
+            played_visible = _play_visible_videos_in_current_context(driver) or played_visible
+            if played_visible:
+                video_started = True
+                time.sleep(0.03)
+        report_step("Attempting visible video playback...", 0.68)
         played_in_frame = _attempt_video_start_in_frames(driver, max_depth=0)
         if played_in_frame:
             video_started = True
