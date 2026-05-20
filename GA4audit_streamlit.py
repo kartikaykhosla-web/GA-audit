@@ -2274,20 +2274,19 @@ def _click_video_controls_in_current_context(driver) -> bool:
     try:
         clicked = driver.execute_script(
             """
-            const rootSelectors = [
-              ".Short_wrapper_fixed .video-player-container",
-              ".Short_wrapper_fixed .VideoSwiper_videoContainer",
-              ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
-              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer",
-              ".video-player-container",
-              ".VideoSwiper_videoContainer"
-            ];
             const selectors = [
-              "button[aria-label*='play' i]",
-              "[aria-label*='play' i]",
-              "[class*='play' i]",
-              "[role='button']",
-              "video"
+              ".Short_wrapper_fixed .video-player-container button[aria-label*='play' i]",
+              ".Short_wrapper_fixed .video-player-container [aria-label*='play' i]",
+              ".Short_wrapper_fixed .VideoSwiper_videoContainer [class*='play' i]",
+              ".Short_wrapper_fixed .VideoSwiper_videoContainer [role='button']",
+              ".ArticleDetail_relatedvideo__wvgRP .video-player-container button[aria-label*='play' i]",
+              ".ArticleDetail_relatedvideo__wvgRP .video-player-container [aria-label*='play' i]",
+              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer [class*='play' i]",
+              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer [role='button']",
+              ".video-player-container button[aria-label*='play' i]",
+              ".video-player-container [aria-label*='play' i]",
+              ".VideoSwiper_videoContainer [class*='play' i]",
+              ".VideoSwiper_videoContainer [role='button']"
             ];
             const visible = (element) => {
               if (!element) return false;
@@ -2318,16 +2317,9 @@ def _click_video_controls_in_current_context(driver) -> bool:
                 return false;
               }
             };
-            for (const rootSelector of rootSelectors) {
-              const root = document.querySelector(rootSelector);
-              if (!visible(root)) continue;
-              for (const selector of selectors) {
-                const element = root.querySelector(selector);
-                if (clickElement(element)) {
-                  return true;
-                }
-              }
-              if (clickElement(root)) {
+            for (const selector of selectors) {
+              const element = document.querySelector(selector);
+              if (clickElement(element)) {
                 return true;
               }
             }
