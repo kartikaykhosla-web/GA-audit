@@ -3138,6 +3138,7 @@ def audit_video_interaction_url(
         time.sleep(0.12)
 
     if not matched_video_event:
+        report_step("Checking network fallback...", 0.90)
         timing_ga4_collects, _, _, _ = extract_collect_hits_from_resource_timing(driver, page_domain)
         if timing_ga4_collects:
             performance_hits = timing_ga4_collects
@@ -3153,7 +3154,15 @@ def audit_video_interaction_url(
                 performance_match_source = "resource_timing"
 
     preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
-    result["all_datalayer_json"] = safe_json(sanitize_for_json(preload_datalayer))
+    compact_video_datalayer = []
+    if isinstance(preload_datalayer, list):
+        compact_video_datalayer = [
+            item
+            for item in preload_datalayer
+            if isinstance(item, dict)
+            and normalize_event_name(item.get("event")) == "videointeraction"
+        ][-3:]
+    result["all_datalayer_json"] = safe_json(sanitize_for_json(compact_video_datalayer))
     final_dom_state = dict(
         opened_dom_state if "opened_dom_state" in locals() and isinstance(opened_dom_state, dict) else initial_dom_state
     )
