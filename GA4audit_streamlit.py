@@ -2774,6 +2774,38 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
         return {"error": str(exc)}
 
 
+def capture_video_playback_state(driver) -> Dict[str, Any]:
+    try:
+        playback_state = driver.execute_script(
+            """
+            const viewportHeight = Number(window.innerHeight || 0);
+            const videos = Array.from(document.querySelectorAll("video")).slice(0, 4).map((video, index) => {
+              const rect = video.getBoundingClientRect();
+              return {
+                index,
+                visible: !!(rect.width && rect.height),
+                paused: !!video.paused,
+                muted: !!video.muted,
+                currentTime: Number(video.currentTime || 0),
+                duration: Number(video.duration || 0),
+                readyState: Number(video.readyState || 0),
+                width: Number(rect.width || 0),
+                height: Number(rect.height || 0),
+                top: Number(rect.top || 0),
+                src: String(video.currentSrc || video.src || ""),
+              };
+            });
+            return {
+              viewportHeight,
+              videos,
+            };
+            """
+        )
+        return playback_state if isinstance(playback_state, dict) else {}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 def _format_video_duration_hms(seconds_value: float) -> str:
     try:
         total_seconds = int(round(float(seconds_value or 0)))
@@ -3105,11 +3137,18 @@ def audit_video_interaction_url(
                 if normalize_event_name(entry.get("event")) == "videointeraction":
                     matched_video_event = build_synthetic_ga4_event_from_datalayer(entry)
                     break
-        if not matched_video_event:
-            perf_ga4_collects, _, _, _ = extract_collect_hits_from_performance_logs(driver, page_domain)
-            performance_hits = perf_ga4_collects or []
+        if matched_video_event:
+            break
+        remaining = max(0.0, deadline - time.time())
+        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
+        time.sleep(0.12)
+
+    if not matched_video_event:
+        timing_ga4_collects, _, _, _ = extract_collect_hits_from_resource_timing(driver, page_domain)
+        if timing_ga4_collects:
+            performance_hits = timing_ga4_collects
             performance_events = []
-            for hit in performance_hits:
+            for hit in timing_ga4_collects:
                 if not isinstance(hit, dict):
                     continue
                 for event in hit.get("decoded_events") or []:
@@ -3117,30 +3156,21 @@ def audit_video_interaction_url(
                         performance_events.append(event)
             matched_video_event = find_event_by_name(performance_events, "video_interaction")
             if matched_video_event:
-                performance_match_source = "performance_log"
-        if not matched_video_event:
-            timing_ga4_collects, _, _, _ = extract_collect_hits_from_resource_timing(driver, page_domain)
-            if timing_ga4_collects:
-                performance_hits = timing_ga4_collects
-                performance_events = []
-                for hit in timing_ga4_collects:
-                    if not isinstance(hit, dict):
-                        continue
-                    for event in hit.get("decoded_events") or []:
-                        if isinstance(event, dict):
-                            performance_events.append(event)
-                matched_video_event = find_event_by_name(performance_events, "video_interaction")
-                if matched_video_event:
-                    performance_match_source = "resource_timing"
-        if matched_video_event:
-            break
-        remaining = max(0.0, deadline - time.time())
-        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
-        time.sleep(0.12)
+                performance_match_source = "resource_timing"
 
     preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
     result["all_datalayer_json"] = safe_json(sanitize_for_json(preload_datalayer))
-    final_dom_state = capture_video_dom_diagnostics(driver)
+    final_dom_state = dict(
+        opened_dom_state if "opened_dom_state" in locals() and isinstance(opened_dom_state, dict) else initial_dom_state
+    )
+    playback_state = capture_video_playback_state(driver)
+    if isinstance(playback_state, dict):
+        if playback_state.get("videos"):
+            final_dom_state["videos"] = playback_state.get("videos")
+        if playback_state.get("viewportHeight"):
+            final_dom_state["viewportHeight"] = playback_state.get("viewportHeight")
+        if playback_state.get("error"):
+            final_dom_state["playbackError"] = playback_state.get("error")
     inferred_video_params = _build_inferred_video_event_params(final_dom_state, debug_steps)
     if matched_video_event and inferred_video_params:
         params = matched_video_event.setdefault("params", {})
