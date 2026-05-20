@@ -2908,7 +2908,7 @@ def _build_inferred_video_event_params(dom_state: Dict[str, Any], debug_steps: L
 def audit_video_interaction_url(
     driver,
     url: str,
-    timeout_seconds: int = 3,
+    timeout_seconds: int = 6,
     step_reporter: Optional[Callable[[str, Optional[float]], None]] = None,
 ) -> Dict[str, Any]:
     result: Dict[str, Any] = {
@@ -3083,7 +3083,7 @@ def audit_video_interaction_url(
         except Exception:
             debug_steps.append({"step": "seek_visible_videos", "success": False, "target_percent": 26.0})
 
-    deadline = time.time() + min(3, max(2, int(timeout_seconds or 3)))
+    deadline = time.time() + min(6, max(3, int(timeout_seconds or 6)))
     preload_state: Dict[str, Any] = {}
     execution_hits: List[Dict[str, Any]] = []
     execution_events: List[Dict[str, Any]] = []
