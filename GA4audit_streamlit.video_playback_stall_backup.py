@@ -3047,8 +3047,13 @@ def audit_video_interaction_url(
                 video_started = True
                 time.sleep(0.03)
         report_step("Attempting visible video playback...", 0.68)
-        has_opened_iframe = False
+        has_opened_iframe = _has_opened_video_iframe_in_current_context(driver)
         played_in_frame = False
+        if not played_visible and has_opened_iframe:
+            played_in_frame = _attempt_video_start_in_frames(driver, max_depth=0)
+        if played_in_frame:
+            video_started = True
+            time.sleep(0.03)
         debug_steps.append(
             {
                 "step": "video_probe",
