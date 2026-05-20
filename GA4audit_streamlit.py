@@ -2678,7 +2678,16 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
               openedContainer: ".VideoSwiper_videoContainer, .video-player-container",
               playControls: ".video-player-container [aria-label*='play' i], .video-player-container button, .VideoSwiper_videoContainer [class*='play' i], .VideoSwiper_videoContainer [role='button']"
             };
-            const output = { selectors: {}, videos: [], viewportHeight: Number(window.innerHeight || 0) };
+            const output = { selectors: {}, videos: [], viewportHeight: Number(window.innerHeight || 0), titleCandidates: [] };
+            const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+            const titleExclusions = new Set([
+              "video thumbnail",
+              "featured video",
+              "view this video also",
+              "close",
+              "play",
+              "pause"
+            ]);
             Object.entries(selectors).forEach(([key, selector]) => {
               const elements = Array.from(document.querySelectorAll(selector));
               output.selectors[key] = {
@@ -2688,6 +2697,36 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
                   return !!(rect.width && rect.height);
                 }),
               };
+            });
+            const candidateRoots = [
+              document.querySelector(".Short_wrapper_fixed"),
+              document.querySelector(".ArticleDetail_relatedvideo__wvgRP"),
+              document.querySelector(".relatedvideo"),
+              document.querySelector(".VideoSwiper_videoContainer"),
+              document.querySelector(".video-player-container")
+            ].filter(Boolean);
+            const seenTitles = new Set();
+            candidateRoots.forEach((root) => {
+              const rootRect = root.getBoundingClientRect();
+              if (!(rootRect.width && rootRect.height)) return;
+              const textNodes = root.querySelectorAll("[title], [aria-label], h1, h2, h3, h4, h5, p, span, div");
+              Array.from(textNodes).slice(0, 80).forEach((node) => {
+                const values = [
+                  normalizeText(node.getAttribute && node.getAttribute("title")),
+                  normalizeText(node.getAttribute && node.getAttribute("aria-label")),
+                  normalizeText(node.innerText)
+                ];
+                values.forEach((text) => {
+                  if (!text) return;
+                  const lower = text.toLowerCase();
+                  if (titleExclusions.has(lower)) return;
+                  if (text.length < 12 || text.length > 220) return;
+                  if (!/[A-Za-z\u0900-\u097F]/.test(text)) return;
+                  if (seenTitles.has(text)) return;
+                  seenTitles.add(text);
+                  output.titleCandidates.push(text);
+                });
+              });
             });
             output.videos = Array.from(document.querySelectorAll("video")).slice(0, 4).map((video, index) => {
               const rect = video.getBoundingClientRect();
@@ -2731,6 +2770,7 @@ def _build_inferred_video_event_params(dom_state: Dict[str, Any], debug_steps: L
     selectors = (dom_state or {}).get("selectors") or {}
     videos = (dom_state or {}).get("videos") or []
     viewport_height = float((dom_state or {}).get("viewportHeight") or 0)
+    title_candidates = (dom_state or {}).get("titleCandidates") or []
 
     placement_a_visible = bool((selectors.get("placementAWrapper") or {}).get("visible"))
     placement_b_visible = bool((selectors.get("placementBWrapper") or {}).get("visible"))
@@ -2807,6 +2847,25 @@ def _build_inferred_video_event_params(dom_state: Dict[str, Any], debug_steps: L
                 fold_bucket = 100
             inferred["position_fold"] = str(fold_bucket)
             inferred.setdefault("scroll_percent", f"{fold_bucket}%")
+
+    if title_candidates:
+        hindi_candidates = [
+            str(value).strip()
+            for value in title_candidates
+            if isinstance(value, str) and re.search(r"[\u0900-\u097F]", value)
+        ]
+        generic_exclusions = {
+            "featured video",
+            "view this video also",
+            "video thumbnail",
+        }
+        filtered_candidates = [
+            value
+            for value in (hindi_candidates or [str(value).strip() for value in title_candidates if isinstance(value, str)])
+            if value and value.strip().lower() not in generic_exclusions
+        ]
+        if filtered_candidates:
+            inferred["video_title"] = max(filtered_candidates, key=len)
 
     inferred.setdefault("tvc_event_name", "video_interaction")
     return inferred
