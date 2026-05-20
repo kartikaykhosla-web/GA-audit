@@ -2274,19 +2274,20 @@ def _click_video_controls_in_current_context(driver) -> bool:
     try:
         clicked = driver.execute_script(
             """
+            const rootSelectors = [
+              ".Short_wrapper_fixed .video-player-container",
+              ".Short_wrapper_fixed .VideoSwiper_videoContainer",
+              ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
+              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer",
+              ".video-player-container",
+              ".VideoSwiper_videoContainer"
+            ];
             const selectors = [
-              ".Short_wrapper_fixed .video-player-container button[aria-label*='play' i]",
-              ".Short_wrapper_fixed .video-player-container [aria-label*='play' i]",
-              ".Short_wrapper_fixed .VideoSwiper_videoContainer [class*='play' i]",
-              ".Short_wrapper_fixed .VideoSwiper_videoContainer [role='button']",
-              ".ArticleDetail_relatedvideo__wvgRP .video-player-container button[aria-label*='play' i]",
-              ".ArticleDetail_relatedvideo__wvgRP .video-player-container [aria-label*='play' i]",
-              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer [class*='play' i]",
-              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer [role='button']",
-              ".video-player-container button[aria-label*='play' i]",
-              ".video-player-container [aria-label*='play' i]",
-              ".VideoSwiper_videoContainer [class*='play' i]",
-              ".VideoSwiper_videoContainer [role='button']"
+              "button[aria-label*='play' i]",
+              "[aria-label*='play' i]",
+              "[class*='play' i]",
+              "[role='button']",
+              "video"
             ];
             const visible = (element) => {
               if (!element) return false;
@@ -2299,24 +2300,34 @@ def _click_video_controls_in_current_context(driver) -> bool:
                 element.scrollIntoView({ block: "center", inline: "center" });
               } catch (e) {}
               try {
+                ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((eventName) => {
+                  try {
+                    element.dispatchEvent(new MouseEvent(eventName, {
+                      view: window,
+                      bubbles: true,
+                      cancelable: true,
+                      buttons: 1
+                    }));
+                  } catch (e) {}
+                });
                 if (typeof element.click === "function") {
                   element.click();
-                  return true;
                 }
-                element.dispatchEvent(new MouseEvent("click", {
-                  view: window,
-                  bubbles: true,
-                  cancelable: true,
-                  buttons: 1
-                }));
                 return true;
               } catch (e) {
                 return false;
               }
             };
-            for (const selector of selectors) {
-              const element = document.querySelector(selector);
-              if (clickElement(element)) {
+            for (const rootSelector of rootSelectors) {
+              const root = document.querySelector(rootSelector);
+              if (!visible(root)) continue;
+              for (const selector of selectors) {
+                const element = root.querySelector(selector);
+                if (clickElement(element)) {
+                  return true;
+                }
+              }
+              if (clickElement(root)) {
                 return true;
               }
             }
@@ -2763,38 +2774,6 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
         return {"error": str(exc)}
 
 
-def capture_video_playback_state(driver) -> Dict[str, Any]:
-    try:
-        playback_state = driver.execute_script(
-            """
-            const viewportHeight = Number(window.innerHeight || 0);
-            const videos = Array.from(document.querySelectorAll("video")).slice(0, 4).map((video, index) => {
-              const rect = video.getBoundingClientRect();
-              return {
-                index,
-                visible: !!(rect.width && rect.height),
-                paused: !!video.paused,
-                muted: !!video.muted,
-                currentTime: Number(video.currentTime || 0),
-                duration: Number(video.duration || 0),
-                readyState: Number(video.readyState || 0),
-                width: Number(rect.width || 0),
-                height: Number(rect.height || 0),
-                top: Number(rect.top || 0),
-                src: String(video.currentSrc || video.src || ""),
-              };
-            });
-            return {
-              viewportHeight,
-              videos,
-            };
-            """
-        )
-        return playback_state if isinstance(playback_state, dict) else {}
-    except Exception as exc:
-        return {"error": str(exc)}
-
-
 def _format_video_duration_hms(seconds_value: float) -> str:
     try:
         total_seconds = int(round(float(seconds_value or 0)))
@@ -2929,7 +2908,7 @@ def _build_inferred_video_event_params(dom_state: Dict[str, Any], debug_steps: L
 def audit_video_interaction_url(
     driver,
     url: str,
-    timeout_seconds: int = 3,
+    timeout_seconds: int = 6,
     step_reporter: Optional[Callable[[str, Optional[float]], None]] = None,
 ) -> Dict[str, Any]:
     result: Dict[str, Any] = {
@@ -3052,18 +3031,29 @@ def audit_video_interaction_url(
         if clicked_opened:
             video_started = True
             time.sleep(0.15)
-        report_step("Clicking player controls...", 0.60)
-        clicked_controls = _click_video_controls_in_current_context(driver)
-        if clicked_controls:
-            video_started = True
-            time.sleep(0.06)
-        report_step("Attempting visible video playback...", 0.68)
         played_visible = _play_visible_videos_in_current_context(driver)
         if played_visible:
             video_started = True
             time.sleep(0.03)
-        has_opened_iframe = False
+        report_step("Clicking player controls...", 0.60)
+        clicked_controls = False
+        if not played_visible:
+            clicked_controls = _click_video_controls_in_current_context(driver)
+            if clicked_controls:
+                video_started = True
+                time.sleep(0.06)
+            played_visible = _play_visible_videos_in_current_context(driver) or played_visible
+            if played_visible:
+                video_started = True
+                time.sleep(0.03)
+        report_step("Attempting visible video playback...", 0.68)
+        has_opened_iframe = _has_opened_video_iframe_in_current_context(driver)
         played_in_frame = False
+        if not played_visible and has_opened_iframe:
+            played_in_frame = _attempt_video_start_in_frames(driver, max_depth=0)
+        if played_in_frame:
+            video_started = True
+            time.sleep(0.03)
         debug_steps.append(
             {
                 "step": "video_probe",
@@ -3098,7 +3088,7 @@ def audit_video_interaction_url(
         except Exception:
             debug_steps.append({"step": "seek_visible_videos", "success": False, "target_percent": 26.0})
 
-    deadline = time.time() + min(3, max(2, int(timeout_seconds or 3)))
+    deadline = time.time() + min(6, max(3, int(timeout_seconds or 6)))
     preload_state: Dict[str, Any] = {}
     execution_hits: List[Dict[str, Any]] = []
     execution_events: List[Dict[str, Any]] = []
@@ -3120,19 +3110,11 @@ def audit_video_interaction_url(
                 if normalize_event_name(entry.get("event")) == "videointeraction":
                     matched_video_event = build_synthetic_ga4_event_from_datalayer(entry)
                     break
-        if matched_video_event:
-            break
-        remaining = max(0.0, deadline - time.time())
-        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
-        time.sleep(0.12)
-
-    if not matched_video_event:
-        report_step("Checking network fallback...", 0.90)
-        timing_ga4_collects, _, _, _ = extract_collect_hits_from_resource_timing(driver, page_domain)
-        if timing_ga4_collects:
-            performance_hits = timing_ga4_collects
+        if not matched_video_event:
+            perf_ga4_collects, _, _, _ = extract_collect_hits_from_performance_logs(driver, page_domain)
+            performance_hits = perf_ga4_collects or []
             performance_events = []
-            for hit in timing_ga4_collects:
+            for hit in performance_hits:
                 if not isinstance(hit, dict):
                     continue
                 for event in hit.get("decoded_events") or []:
@@ -3140,29 +3122,30 @@ def audit_video_interaction_url(
                         performance_events.append(event)
             matched_video_event = find_event_by_name(performance_events, "video_interaction")
             if matched_video_event:
-                performance_match_source = "resource_timing"
+                performance_match_source = "performance_log"
+        if not matched_video_event:
+            timing_ga4_collects, _, _, _ = extract_collect_hits_from_resource_timing(driver, page_domain)
+            if timing_ga4_collects:
+                performance_hits = timing_ga4_collects
+                performance_events = []
+                for hit in timing_ga4_collects:
+                    if not isinstance(hit, dict):
+                        continue
+                    for event in hit.get("decoded_events") or []:
+                        if isinstance(event, dict):
+                            performance_events.append(event)
+                matched_video_event = find_event_by_name(performance_events, "video_interaction")
+                if matched_video_event:
+                    performance_match_source = "resource_timing"
+        if matched_video_event:
+            break
+        remaining = max(0.0, deadline - time.time())
+        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
+        time.sleep(0.12)
 
     preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
-    compact_video_datalayer = []
-    if isinstance(preload_datalayer, list):
-        compact_video_datalayer = [
-            item
-            for item in preload_datalayer
-            if isinstance(item, dict)
-            and normalize_event_name(item.get("event")) == "videointeraction"
-        ][-3:]
-    result["all_datalayer_json"] = safe_json(sanitize_for_json(compact_video_datalayer))
-    final_dom_state = dict(
-        opened_dom_state if "opened_dom_state" in locals() and isinstance(opened_dom_state, dict) else initial_dom_state
-    )
-    playback_state = capture_video_playback_state(driver)
-    if isinstance(playback_state, dict):
-        if playback_state.get("videos"):
-            final_dom_state["videos"] = playback_state.get("videos")
-        if playback_state.get("viewportHeight"):
-            final_dom_state["viewportHeight"] = playback_state.get("viewportHeight")
-        if playback_state.get("error"):
-            final_dom_state["playbackError"] = playback_state.get("error")
+    result["all_datalayer_json"] = safe_json(sanitize_for_json(preload_datalayer))
+    final_dom_state = capture_video_dom_diagnostics(driver)
     inferred_video_params = _build_inferred_video_event_params(final_dom_state, debug_steps)
     if matched_video_event and inferred_video_params:
         params = matched_video_event.setdefault("params", {})
