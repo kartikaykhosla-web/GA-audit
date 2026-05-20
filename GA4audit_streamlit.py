@@ -2299,19 +2299,16 @@ def _click_video_controls_in_current_context(driver) -> bool:
                 element.scrollIntoView({ block: "center", inline: "center" });
               } catch (e) {}
               try {
-                ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((eventName) => {
-                  try {
-                    element.dispatchEvent(new MouseEvent(eventName, {
-                      view: window,
-                      bubbles: true,
-                      cancelable: true,
-                      buttons: 1
-                    }));
-                  } catch (e) {}
-                });
                 if (typeof element.click === "function") {
                   element.click();
+                  return true;
                 }
+                element.dispatchEvent(new MouseEvent("click", {
+                  view: window,
+                  bubbles: true,
+                  cancelable: true,
+                  buttons: 1
+                }));
                 return true;
               } catch (e) {
                 return false;
