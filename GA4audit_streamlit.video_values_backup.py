@@ -2678,7 +2678,7 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
               openedContainer: ".VideoSwiper_videoContainer, .video-player-container",
               playControls: ".video-player-container [aria-label*='play' i], .video-player-container button, .VideoSwiper_videoContainer [class*='play' i], .VideoSwiper_videoContainer [role='button']"
             };
-            const output = { selectors: {}, videos: [], viewportHeight: Number(window.innerHeight || 0) };
+            const output = { selectors: {}, videos: [] };
             Object.entries(selectors).forEach(([key, selector]) => {
               const elements = Array.from(document.querySelectorAll(selector));
               output.selectors[key] = {
@@ -2699,9 +2699,6 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
                 currentTime: Number(video.currentTime || 0),
                 duration: Number(video.duration || 0),
                 readyState: Number(video.readyState || 0),
-                width: Number(rect.width || 0),
-                height: Number(rect.height || 0),
-                top: Number(rect.top || 0),
                 src: String(video.currentSrc || video.src || ""),
               };
             });
@@ -2711,105 +2708,6 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
         return diagnostics if isinstance(diagnostics, dict) else {}
     except Exception as exc:
         return {"error": str(exc)}
-
-
-def _format_video_duration_hms(seconds_value: float) -> str:
-    try:
-        total_seconds = int(round(float(seconds_value or 0)))
-    except Exception:
-        return ""
-    if total_seconds <= 0:
-        return ""
-    hours = total_seconds // 3600
-    minutes = (total_seconds % 3600) // 60
-    seconds = total_seconds % 60
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
-def _build_inferred_video_event_params(dom_state: Dict[str, Any], debug_steps: List[Dict[str, Any]]) -> Dict[str, Any]:
-    inferred: Dict[str, Any] = {}
-    selectors = (dom_state or {}).get("selectors") or {}
-    videos = (dom_state or {}).get("videos") or []
-    viewport_height = float((dom_state or {}).get("viewportHeight") or 0)
-
-    placement_a_visible = bool((selectors.get("placementAWrapper") or {}).get("visible"))
-    placement_b_visible = bool((selectors.get("placementBWrapper") or {}).get("visible"))
-    opened_container_visible = bool((selectors.get("openedContainer") or {}).get("visible"))
-
-    if placement_a_visible or opened_container_visible:
-        inferred["dynamic_video_embed_type"] = "in-house video"
-        inferred.setdefault("section_name", "featured video")
-    elif placement_b_visible:
-        inferred["dynamic_video_embed_type"] = "view this video also"
-        inferred.setdefault("section_name", "view this video also")
-
-    for step in debug_steps or []:
-        if step.get("step") != "video_probe":
-            continue
-        if any(
-            step.get(flag)
-            for flag in (
-                "clicked_initial",
-                "clicked_opened_surface",
-                "clicked_play_controls",
-                "played_visible_videos",
-                "played_in_frame",
-            )
-        ):
-            inferred["player_type"] = "manual"
-            break
-
-    visible_video = next(
-        (
-            video
-            for video in videos
-            if isinstance(video, dict) and (video.get("visible") or video.get("duration") or video.get("currentTime"))
-        ),
-        None,
-    )
-    if visible_video:
-        width = float(visible_video.get("width") or 0)
-        height = float(visible_video.get("height") or 0)
-        top = float(visible_video.get("top") or 0)
-        duration = float(visible_video.get("duration") or 0)
-        current_time = float(visible_video.get("currentTime") or 0)
-
-        if width > 0 and height > 0:
-            inferred["video_orientation"] = "vertical" if height > width else "horizontal"
-
-        if duration > 0:
-            formatted_duration = _format_video_duration_hms(duration)
-            if formatted_duration:
-                inferred["video_duration"] = formatted_duration
-
-            ratio = max(0.0, min(1.0, current_time / duration)) if duration else 0.0
-            if ratio < 0.125:
-                percent_bucket = 0
-            elif ratio < 0.375:
-                percent_bucket = 25
-            elif ratio < 0.625:
-                percent_bucket = 50
-            elif ratio < 0.875:
-                percent_bucket = 75
-            else:
-                percent_bucket = 100
-            inferred["video_percent"] = f"{percent_bucket}%"
-
-        if viewport_height > 0 and height > 0:
-            midpoint_ratio = ((top + (height / 2.0)) / viewport_height) * 100.0
-            if midpoint_ratio <= 25:
-                fold_bucket = 25
-            elif midpoint_ratio <= 50:
-                fold_bucket = 50
-            elif midpoint_ratio <= 75:
-                fold_bucket = 75
-            else:
-                fold_bucket = 100
-            inferred["position_fold"] = str(fold_bucket)
-            inferred.setdefault("scroll_percent", f"{fold_bucket}%")
-
-    inferred.setdefault("tvc_event_name", "video_interaction")
-    return inferred
 
 
 def audit_video_interaction_url(
@@ -3052,18 +2950,11 @@ def audit_video_interaction_url(
 
     preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
     result["all_datalayer_json"] = safe_json(sanitize_for_json(preload_datalayer))
-    final_dom_state = capture_video_dom_diagnostics(driver)
-    inferred_video_params = _build_inferred_video_event_params(final_dom_state, debug_steps)
-    if matched_video_event and inferred_video_params:
-        params = matched_video_event.setdefault("params", {})
-        if isinstance(params, dict):
-            for key, value in inferred_video_params.items():
-                if params.get(key) in (None, "") and value not in (None, ""):
-                    params[key] = value
     result["ga4_execution_hits_json"] = safe_json(execution_hits)
     result["ga4_execution_events_json"] = safe_json(execution_events)
     result["ga4_network_hits_json"] = safe_json(performance_hits)
     result["ga4_network_events_json"] = safe_json(performance_events)
+    final_dom_state = capture_video_dom_diagnostics(driver)
     result["video_dom_state_json"] = safe_json(
         {
             "initial": initial_dom_state,
@@ -7827,32 +7718,6 @@ def snapshot_ga4_payload(event):
         for key, value in user_properties.items():
             payload[f"user.{key}"] = value
 
-    raw_fields = event.get("raw_fields") or {}
-    if isinstance(raw_fields, dict):
-        interesting_video_fields = {
-            "dynamicvideoembedtype",
-            "playertype",
-            "positionfold",
-            "sectionname",
-            "videoorientation",
-            "videopercent",
-            "videoduration",
-            "videotitle",
-            "scrollpercent",
-            "tvceventname",
-        }
-        for raw_key, value in raw_fields.items():
-            normalized_key = normalize_dimension_name(raw_key)
-            if normalized_key not in interesting_video_fields:
-                continue
-            clean_key = str(raw_key or "")
-            for prefix in ("ep.", "epn.", "epf.", "up.", "upn."):
-                if clean_key.startswith(prefix):
-                    clean_key = clean_key.split(".", 1)[1]
-                    break
-            if clean_key and clean_key not in payload and value not in (None, ""):
-                payload[clean_key] = value
-
     return payload
 
 
@@ -8013,13 +7878,6 @@ def build_datalayer_snapshot_export(result: dict, target_event_name: Optional[st
                 if normalize_event_name(item.get("event")) == target_event_key:
                     selected_index = index
                     break
-        if (
-            selected_index is None
-            and target_event_key == "videointeraction"
-            and isinstance(data_layer, list)
-            and data_layer
-        ):
-            selected_index = len(data_layer) - 1
 
         computed_state = build_computed_state(data_layer, selected_index) if selected_index is not None else {}
         if not computed_state and selected_event:
