@@ -2935,6 +2935,10 @@ def audit_video_interaction_url(
     page_domain = urlparse(url).netloc
 
     def report_step(message: str, progress_value: Optional[float] = None):
+        try:
+            print(f"[video_capture] {datetime.now().isoformat()} {message}")
+        except Exception:
+            pass
         if callable(step_reporter):
             try:
                 step_reporter(message, progress_value)
@@ -3031,22 +3035,16 @@ def audit_video_interaction_url(
         if clicked_opened:
             video_started = True
             time.sleep(0.15)
+        report_step("Clicking player controls...", 0.60)
+        clicked_controls = _click_video_controls_in_current_context(driver)
+        if clicked_controls:
+            video_started = True
+            time.sleep(0.06)
+        report_step("Attempting visible video playback...", 0.68)
         played_visible = _play_visible_videos_in_current_context(driver)
         if played_visible:
             video_started = True
             time.sleep(0.03)
-        report_step("Clicking player controls...", 0.60)
-        clicked_controls = False
-        if not played_visible:
-            clicked_controls = _click_video_controls_in_current_context(driver)
-            if clicked_controls:
-                video_started = True
-                time.sleep(0.06)
-            played_visible = _play_visible_videos_in_current_context(driver) or played_visible
-            if played_visible:
-                video_started = True
-                time.sleep(0.03)
-        report_step("Attempting visible video playback...", 0.68)
         has_opened_iframe = False
         played_in_frame = False
         debug_steps.append(
@@ -3105,11 +3103,33 @@ def audit_video_interaction_url(
                 if normalize_event_name(entry.get("event")) == "videointeraction":
                     matched_video_event = build_synthetic_ga4_event_from_datalayer(entry)
                     break
-        if not matched_video_event:
-            perf_ga4_collects, _, _, _ = extract_collect_hits_from_performance_logs(driver, page_domain)
-            performance_hits = perf_ga4_collects or []
+        if matched_video_event:
+            break
+        remaining = max(0.0, deadline - time.time())
+        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
+        time.sleep(0.12)
+
+    if not matched_video_event:
+        report_step("Checking performance log fallback...", 0.90)
+        perf_ga4_collects, _, _, _ = extract_collect_hits_from_performance_logs(driver, page_domain)
+        performance_hits = perf_ga4_collects or []
+        performance_events = []
+        for hit in performance_hits:
+            if not isinstance(hit, dict):
+                continue
+            for event in hit.get("decoded_events") or []:
+                if isinstance(event, dict):
+                    performance_events.append(event)
+        matched_video_event = find_event_by_name(performance_events, "video_interaction")
+        if matched_video_event:
+            performance_match_source = "performance_log"
+    if not matched_video_event:
+        report_step("Checking resource timing fallback...", 0.93)
+        timing_ga4_collects, _, _, _ = extract_collect_hits_from_resource_timing(driver, page_domain)
+        if timing_ga4_collects:
+            performance_hits = timing_ga4_collects
             performance_events = []
-            for hit in performance_hits:
+            for hit in timing_ga4_collects:
                 if not isinstance(hit, dict):
                     continue
                 for event in hit.get("decoded_events") or []:
@@ -3117,26 +3137,7 @@ def audit_video_interaction_url(
                         performance_events.append(event)
             matched_video_event = find_event_by_name(performance_events, "video_interaction")
             if matched_video_event:
-                performance_match_source = "performance_log"
-        if not matched_video_event:
-            timing_ga4_collects, _, _, _ = extract_collect_hits_from_resource_timing(driver, page_domain)
-            if timing_ga4_collects:
-                performance_hits = timing_ga4_collects
-                performance_events = []
-                for hit in timing_ga4_collects:
-                    if not isinstance(hit, dict):
-                        continue
-                    for event in hit.get("decoded_events") or []:
-                        if isinstance(event, dict):
-                            performance_events.append(event)
-                matched_video_event = find_event_by_name(performance_events, "video_interaction")
-                if matched_video_event:
-                    performance_match_source = "resource_timing"
-        if matched_video_event:
-            break
-        remaining = max(0.0, deadline - time.time())
-        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
-        time.sleep(0.12)
+                performance_match_source = "resource_timing"
 
     preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
     result["all_datalayer_json"] = safe_json(sanitize_for_json(preload_datalayer))
