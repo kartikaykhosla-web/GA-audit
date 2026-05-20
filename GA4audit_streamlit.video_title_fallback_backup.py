@@ -2678,15 +2678,8 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
               openedContainer: ".VideoSwiper_videoContainer, .video-player-container",
               playControls: ".video-player-container [aria-label*='play' i], .video-player-container button, .VideoSwiper_videoContainer [class*='play' i], .VideoSwiper_videoContainer [role='button']"
             };
-            const output = {
-              selectors: {},
-              videos: [],
-              viewportHeight: Number(window.innerHeight || 0),
-              titleCandidates: [],
-              pageTitleCandidates: []
-            };
+            const output = { selectors: {}, videos: [], viewportHeight: Number(window.innerHeight || 0), titleCandidates: [] };
             const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
-            const cleanDocumentTitle = (value) => normalizeText(value).replace(/\s*\|\s*[^|]+$/, "").trim();
             const titleExclusions = new Set([
               "video thumbnail",
               "featured video",
@@ -2735,21 +2728,6 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
                 });
               });
             });
-            [
-              cleanDocumentTitle(document.title),
-              normalizeText(document.querySelector("meta[property='og:title']")?.getAttribute("content")),
-              normalizeText(document.querySelector("meta[name='twitter:title']")?.getAttribute("content")),
-              normalizeText(document.querySelector("h1")?.innerText)
-            ].forEach((text) => {
-              if (!text) return;
-              const lower = text.toLowerCase();
-              if (titleExclusions.has(lower)) return;
-              if (text.length < 12 || text.length > 220) return;
-              if (!/[A-Za-z\u0900-\u097F]/.test(text)) return;
-              if (seenTitles.has(text)) return;
-              seenTitles.add(text);
-              output.pageTitleCandidates.push(text);
-            });
             output.videos = Array.from(document.querySelectorAll("video")).slice(0, 4).map((video, index) => {
               const rect = video.getBoundingClientRect();
               return {
@@ -2793,7 +2771,6 @@ def _build_inferred_video_event_params(dom_state: Dict[str, Any], debug_steps: L
     videos = (dom_state or {}).get("videos") or []
     viewport_height = float((dom_state or {}).get("viewportHeight") or 0)
     title_candidates = (dom_state or {}).get("titleCandidates") or []
-    page_title_candidates = (dom_state or {}).get("pageTitleCandidates") or []
 
     placement_a_visible = bool((selectors.get("placementAWrapper") or {}).get("visible"))
     placement_b_visible = bool((selectors.get("placementBWrapper") or {}).get("visible"))
@@ -2889,17 +2866,6 @@ def _build_inferred_video_event_params(dom_state: Dict[str, Any], debug_steps: L
         ]
         if filtered_candidates:
             inferred["video_title"] = max(filtered_candidates, key=len)
-    if not inferred.get("video_title") and page_title_candidates:
-        fallback_candidates = [
-            str(value).strip()
-            for value in page_title_candidates
-            if isinstance(value, str) and str(value).strip()
-        ]
-        if fallback_candidates:
-            hindi_candidates = [
-                value for value in fallback_candidates if re.search(r"[\u0900-\u097F]", value)
-            ]
-            inferred["video_title"] = max(hindi_candidates or fallback_candidates, key=len)
 
     inferred.setdefault("tvc_event_name", "video_interaction")
     return inferred
