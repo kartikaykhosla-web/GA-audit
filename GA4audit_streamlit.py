@@ -3017,21 +3017,15 @@ def audit_video_interaction_url(
         if clicked_opened:
             video_started = True
             time.sleep(0.15)
+        report_step("Clicking player controls...", 0.60)
+        clicked_controls = _click_video_controls_in_current_context(driver)
+        if clicked_controls:
+            video_started = True
+            time.sleep(0.06)
         played_visible = _play_visible_videos_in_current_context(driver)
         if played_visible:
             video_started = True
             time.sleep(0.03)
-        report_step("Clicking player controls...", 0.60)
-        clicked_controls = False
-        if not played_visible:
-            clicked_controls = _click_video_controls_in_current_context(driver)
-            if clicked_controls:
-                video_started = True
-                time.sleep(0.06)
-            played_visible = _play_visible_videos_in_current_context(driver) or played_visible
-            if played_visible:
-                video_started = True
-                time.sleep(0.03)
         report_step("Attempting visible video playback...", 0.68)
         has_opened_iframe = _has_opened_video_iframe_in_current_context(driver)
         played_in_frame = False
