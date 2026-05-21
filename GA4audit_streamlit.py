@@ -11031,6 +11031,10 @@ This capture is split into three layers:
                     page_load_timeout=5,
                 )
                 try:
+                    driver.set_script_timeout(1)
+                except Exception:
+                    pass
+                try:
                     video_progress.progress(0.25)
                     video_status_box.write(f"Capturing video interaction for {normalized_url}")
                     video_capture_result = audit_video_interaction_url(
