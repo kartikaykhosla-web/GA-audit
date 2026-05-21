@@ -1139,6 +1139,53 @@ def extract_preload_state(driver) -> Dict[str, Any]:
         return {}
 
 
+def extract_video_preload_state(driver) -> Dict[str, Any]:
+    try:
+        state = driver.execute_script(
+            """
+            try {
+                const state = window.__ga4AuditState || {};
+                const transportHits = (state.transportHits || []).slice(-12).map(function(hit) {
+                    return {
+                        api: hit && hit.api || "",
+                        url: hit && hit.url || "",
+                        method: hit && hit.method || "",
+                        bodyText: hit && hit.bodyText || "",
+                        timestamp: hit && hit.timestamp || 0
+                    };
+                });
+                const dataLayerPushes = (state.dataLayerPushes || []).filter(function(pushEntry) {
+                    const entry = pushEntry && typeof pushEntry.entry === "object" ? pushEntry.entry : null;
+                    const eventName = String(
+                        (pushEntry && pushEntry.event) ||
+                        (entry && entry.event) ||
+                        ""
+                    ).toLowerCase().replace(/_/g, "");
+                    return eventName === "videointeraction";
+                }).slice(-4).map(function(pushEntry) {
+                    const entry = pushEntry && typeof pushEntry.entry === "object"
+                        ? JSON.parse(JSON.stringify(pushEntry.entry))
+                        : null;
+                    return {
+                        event: pushEntry && pushEntry.event || "",
+                        entry: entry
+                    };
+                });
+                return {
+                    transportHits: transportHits,
+                    dataLayerPushes: dataLayerPushes,
+                    initialDataLayer: []
+                };
+            } catch (e) {
+                return {};
+            }
+            """
+        )
+        return state if isinstance(state, dict) else {}
+    except Exception:
+        return {}
+
+
 def reconstruct_datalayer_from_preload(preload_state: Dict[str, Any]) -> List[Dict[str, Any]]:
     reconstructed: List[Dict[str, Any]] = []
 
@@ -3006,7 +3053,7 @@ def audit_video_interaction_url(
 
     report_step("Polling for video_interaction event...", 0.84)
     while time.time() < deadline:
-        preload_state = extract_preload_state(driver)
+        preload_state = extract_video_preload_state(driver)
         execution_hits, execution_events = normalize_transport_hits(preload_state)
         matched_video_event = find_event_by_name(execution_events, "video_interaction")
         if not matched_video_event:
@@ -10934,10 +10981,15 @@ This capture is split into three layers:
             )
             video_progress = st.progress(0)
             video_status_box = st.empty()
+            video_runtime_log_box = st.empty()
             video_capture_result: Optional[Dict[str, Any]] = None
+            video_runtime_lines: List[str] = []
 
             def report_video_step(message: str, progress_value: Optional[float] = None):
                 video_status_box.write(message)
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                video_runtime_lines.append(f"[{timestamp}] {message}")
+                video_runtime_log_box.code("\n".join(video_runtime_lines[-12:]), language="text")
                 if progress_value is not None:
                     try:
                         video_progress.progress(min(1.0, max(0.0, float(progress_value))))
@@ -10948,7 +11000,7 @@ This capture is split into three layers:
             try:
                 driver = create_driver(
                     headless=True,
-                    performance_logs=True,
+                    performance_logs=False,
                     capture_network=False,
                     page_load_timeout=5,
                 )
