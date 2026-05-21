@@ -2678,23 +2678,7 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
               openedContainer: ".VideoSwiper_videoContainer, .video-player-container",
               playControls: ".video-player-container [aria-label*='play' i], .video-player-container button, .VideoSwiper_videoContainer [class*='play' i], .VideoSwiper_videoContainer [role='button']"
             };
-            const output = {
-              selectors: {},
-              videos: [],
-              viewportHeight: Number(window.innerHeight || 0),
-              titleCandidates: [],
-              pageTitleCandidates: []
-            };
-            const normalizeText = (value) => String(value || "").replace(/\s+/g, " ").trim();
-            const cleanDocumentTitle = (value) => normalizeText(value).replace(/\s*\|\s*[^|]+$/, "").trim();
-            const titleExclusions = new Set([
-              "video thumbnail",
-              "featured video",
-              "view this video also",
-              "close",
-              "play",
-              "pause"
-            ]);
+            const output = { selectors: {}, videos: [], viewportHeight: Number(window.innerHeight || 0) };
             Object.entries(selectors).forEach(([key, selector]) => {
               const elements = Array.from(document.querySelectorAll(selector));
               output.selectors[key] = {
@@ -2704,51 +2688,6 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
                   return !!(rect.width && rect.height);
                 }),
               };
-            });
-            const candidateRoots = [
-              document.querySelector(".Short_wrapper_fixed"),
-              document.querySelector(".ArticleDetail_relatedvideo__wvgRP"),
-              document.querySelector(".relatedvideo"),
-              document.querySelector(".VideoSwiper_videoContainer"),
-              document.querySelector(".video-player-container")
-            ].filter(Boolean);
-            const seenTitles = new Set();
-            candidateRoots.forEach((root) => {
-              const rootRect = root.getBoundingClientRect();
-              if (!(rootRect.width && rootRect.height)) return;
-              const textNodes = root.querySelectorAll("[title], [aria-label], h1, h2, h3, h4, h5, p, span, div");
-              Array.from(textNodes).slice(0, 80).forEach((node) => {
-                const values = [
-                  normalizeText(node.getAttribute && node.getAttribute("title")),
-                  normalizeText(node.getAttribute && node.getAttribute("aria-label")),
-                  normalizeText(node.innerText)
-                ];
-                values.forEach((text) => {
-                  if (!text) return;
-                  const lower = text.toLowerCase();
-                  if (titleExclusions.has(lower)) return;
-                  if (text.length < 12 || text.length > 220) return;
-                  if (!/[A-Za-z\u0900-\u097F]/.test(text)) return;
-                  if (seenTitles.has(text)) return;
-                  seenTitles.add(text);
-                  output.titleCandidates.push(text);
-                });
-              });
-            });
-            [
-              cleanDocumentTitle(document.title),
-              normalizeText(document.querySelector("meta[property='og:title']")?.getAttribute("content")),
-              normalizeText(document.querySelector("meta[name='twitter:title']")?.getAttribute("content")),
-              normalizeText(document.querySelector("h1")?.innerText)
-            ].forEach((text) => {
-              if (!text) return;
-              const lower = text.toLowerCase();
-              if (titleExclusions.has(lower)) return;
-              if (text.length < 12 || text.length > 220) return;
-              if (!/[A-Za-z\u0900-\u097F]/.test(text)) return;
-              if (seenTitles.has(text)) return;
-              seenTitles.add(text);
-              output.pageTitleCandidates.push(text);
             });
             output.videos = Array.from(document.querySelectorAll("video")).slice(0, 4).map((video, index) => {
               const rect = video.getBoundingClientRect();
@@ -2792,8 +2731,6 @@ def _build_inferred_video_event_params(dom_state: Dict[str, Any], debug_steps: L
     selectors = (dom_state or {}).get("selectors") or {}
     videos = (dom_state or {}).get("videos") or []
     viewport_height = float((dom_state or {}).get("viewportHeight") or 0)
-    title_candidates = (dom_state or {}).get("titleCandidates") or []
-    page_title_candidates = (dom_state or {}).get("pageTitleCandidates") or []
 
     placement_a_visible = bool((selectors.get("placementAWrapper") or {}).get("visible"))
     placement_b_visible = bool((selectors.get("placementBWrapper") or {}).get("visible"))
@@ -2870,36 +2807,6 @@ def _build_inferred_video_event_params(dom_state: Dict[str, Any], debug_steps: L
                 fold_bucket = 100
             inferred["position_fold"] = str(fold_bucket)
             inferred.setdefault("scroll_percent", f"{fold_bucket}%")
-
-    if title_candidates:
-        hindi_candidates = [
-            str(value).strip()
-            for value in title_candidates
-            if isinstance(value, str) and re.search(r"[\u0900-\u097F]", value)
-        ]
-        generic_exclusions = {
-            "featured video",
-            "view this video also",
-            "video thumbnail",
-        }
-        filtered_candidates = [
-            value
-            for value in (hindi_candidates or [str(value).strip() for value in title_candidates if isinstance(value, str)])
-            if value and value.strip().lower() not in generic_exclusions
-        ]
-        if filtered_candidates:
-            inferred["video_title"] = max(filtered_candidates, key=len)
-    if not inferred.get("video_title") and page_title_candidates:
-        fallback_candidates = [
-            str(value).strip()
-            for value in page_title_candidates
-            if isinstance(value, str) and str(value).strip()
-        ]
-        if fallback_candidates:
-            hindi_candidates = [
-                value for value in fallback_candidates if re.search(r"[\u0900-\u097F]", value)
-            ]
-            inferred["video_title"] = max(hindi_candidates or fallback_candidates, key=len)
 
     inferred.setdefault("tvc_event_name", "video_interaction")
     return inferred
@@ -3001,26 +2908,6 @@ def audit_video_interaction_url(
     except Exception:
         pass
 
-    report_step("Resetting video capture state...", 0.31)
-    try:
-        driver.execute_script(
-            """
-            try {
-                if (window.__ga4AuditState) {
-                    window.__ga4AuditState.transportHits = [];
-                    window.__ga4AuditState.gtagCalls = [];
-                    window.__ga4AuditState.dataLayerPushes = [];
-                }
-                if (window.performance && typeof window.performance.clearResourceTimings === "function") {
-                    window.performance.clearResourceTimings();
-                }
-            } catch (e) {}
-            """
-        )
-        debug_steps.append({"step": "reset_video_capture_state", "success": True})
-    except Exception as e:
-        debug_steps.append({"step": "reset_video_capture_state", "success": False, "error": str(e)})
-
     report_step("Inspecting video placements...", 0.34)
     initial_dom_state = capture_video_dom_diagnostics(driver)
     video_started = False
@@ -3108,7 +2995,7 @@ def audit_video_interaction_url(
         except Exception:
             debug_steps.append({"step": "seek_visible_videos", "success": False, "target_percent": 26.0})
 
-    deadline = time.time() + min(3, max(2, int(timeout_seconds or 3)))
+    deadline = time.time() + min(6, max(3, int(timeout_seconds or 6)))
     preload_state: Dict[str, Any] = {}
     execution_hits: List[Dict[str, Any]] = []
     execution_events: List[Dict[str, Any]] = []
@@ -3130,19 +3017,11 @@ def audit_video_interaction_url(
                 if normalize_event_name(entry.get("event")) == "videointeraction":
                     matched_video_event = build_synthetic_ga4_event_from_datalayer(entry)
                     break
-        if matched_video_event:
-            break
-        remaining = max(0.0, deadline - time.time())
-        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
-        time.sleep(0.12)
-
-    if not matched_video_event:
-        report_step("Checking network fallback...", 0.90)
-        timing_ga4_collects, _, _, _ = extract_collect_hits_from_resource_timing(driver, page_domain)
-        if timing_ga4_collects:
-            performance_hits = timing_ga4_collects
+        if not matched_video_event:
+            perf_ga4_collects, _, _, _ = extract_collect_hits_from_performance_logs(driver, page_domain)
+            performance_hits = perf_ga4_collects or []
             performance_events = []
-            for hit in timing_ga4_collects:
+            for hit in performance_hits:
                 if not isinstance(hit, dict):
                     continue
                 for event in hit.get("decoded_events") or []:
@@ -3150,29 +3029,30 @@ def audit_video_interaction_url(
                         performance_events.append(event)
             matched_video_event = find_event_by_name(performance_events, "video_interaction")
             if matched_video_event:
-                performance_match_source = "resource_timing"
+                performance_match_source = "performance_log"
+        if not matched_video_event:
+            timing_ga4_collects, _, _, _ = extract_collect_hits_from_resource_timing(driver, page_domain)
+            if timing_ga4_collects:
+                performance_hits = timing_ga4_collects
+                performance_events = []
+                for hit in timing_ga4_collects:
+                    if not isinstance(hit, dict):
+                        continue
+                    for event in hit.get("decoded_events") or []:
+                        if isinstance(event, dict):
+                            performance_events.append(event)
+                matched_video_event = find_event_by_name(performance_events, "video_interaction")
+                if matched_video_event:
+                    performance_match_source = "resource_timing"
+        if matched_video_event:
+            break
+        remaining = max(0.0, deadline - time.time())
+        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
+        time.sleep(0.12)
 
     preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
-    compact_video_datalayer = []
-    if isinstance(preload_datalayer, list):
-        compact_video_datalayer = [
-            item
-            for item in preload_datalayer
-            if isinstance(item, dict)
-            and normalize_event_name(item.get("event")) == "videointeraction"
-        ][-3:]
-    result["all_datalayer_json"] = safe_json(sanitize_for_json(compact_video_datalayer))
-    final_dom_state = dict(
-        opened_dom_state if "opened_dom_state" in locals() and isinstance(opened_dom_state, dict) else initial_dom_state
-    )
-    playback_state = capture_video_playback_state(driver)
-    if isinstance(playback_state, dict):
-        if playback_state.get("videos"):
-            final_dom_state["videos"] = playback_state.get("videos")
-        if playback_state.get("viewportHeight"):
-            final_dom_state["viewportHeight"] = playback_state.get("viewportHeight")
-        if playback_state.get("error"):
-            final_dom_state["playbackError"] = playback_state.get("error")
+    result["all_datalayer_json"] = safe_json(sanitize_for_json(preload_datalayer))
+    final_dom_state = capture_video_dom_diagnostics(driver)
     inferred_video_params = _build_inferred_video_event_params(final_dom_state, debug_steps)
     if matched_video_event and inferred_video_params:
         params = matched_video_event.setdefault("params", {})
