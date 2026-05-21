@@ -3001,6 +3001,26 @@ def audit_video_interaction_url(
     except Exception:
         pass
 
+    report_step("Resetting video capture state...", 0.31)
+    try:
+        driver.execute_script(
+            """
+            try {
+                if (window.__ga4AuditState) {
+                    window.__ga4AuditState.transportHits = [];
+                    window.__ga4AuditState.gtagCalls = [];
+                    window.__ga4AuditState.dataLayerPushes = [];
+                }
+                if (window.performance && typeof window.performance.clearResourceTimings === "function") {
+                    window.performance.clearResourceTimings();
+                }
+            } catch (e) {}
+            """
+        )
+        debug_steps.append({"step": "reset_video_capture_state", "success": True})
+    except Exception as e:
+        debug_steps.append({"step": "reset_video_capture_state", "success": False, "error": str(e)})
+
     report_step("Inspecting video placements...", 0.34)
     initial_dom_state = capture_video_dom_diagnostics(driver)
     video_started = False
