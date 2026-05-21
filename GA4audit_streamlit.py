@@ -1186,6 +1186,58 @@ def extract_video_preload_state(driver) -> Dict[str, Any]:
         return {}
 
 
+def extract_video_ga4_collects_from_resource_timing(driver) -> List[Dict[str, Any]]:
+    try:
+        entries = driver.execute_script(
+            """
+            try {
+                return (performance.getEntriesByType("resource") || [])
+                  .filter(function(entry) {
+                    var url = String((entry && entry.name) || "");
+                    return url.indexOf("google-analytics.com") !== -1;
+                  })
+                  .slice(-24)
+                  .map(function(entry) {
+                    return {
+                      url: entry.name || "",
+                      response_status: entry.responseStatus || ""
+                    };
+                  });
+            } catch (e) {
+                return [];
+            }
+            """
+        )
+    except Exception:
+        return []
+
+    ga4_collects: List[Dict[str, Any]] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        url = str(entry.get("url") or "")
+        if not url or not _is_ga4_collect_hit(url):
+            continue
+        ga4_collects.append(
+            {
+                "source": "resource_timing",
+                "url": url,
+                "request_url": url,
+                "method": "GET",
+                "status": entry.get("response_status") or "Observed",
+                "response_status": entry.get("response_status") or "Observed",
+                "content_type": "",
+                "headers": {},
+                "request_headers": {},
+                "response_headers": {},
+                "request_body": "",
+                "response_body": "",
+                "decoded_events": decode_ga4_collect_request(url, ""),
+            }
+        )
+    return ga4_collects
+
+
 def reconstruct_datalayer_from_preload(preload_state: Dict[str, Any]) -> List[Dict[str, Any]]:
     reconstructed: List[Dict[str, Any]] = []
 
@@ -3104,7 +3156,7 @@ def audit_video_interaction_url(
 
     if not matched_video_event:
         report_step("Checking network fallback...", 0.90)
-        timing_ga4_collects, _, _, _ = extract_collect_hits_from_resource_timing(driver, page_domain)
+        timing_ga4_collects = extract_video_ga4_collects_from_resource_timing(driver)
         if timing_ga4_collects:
             performance_hits = timing_ga4_collects
             performance_events = []
