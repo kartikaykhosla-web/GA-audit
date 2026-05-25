@@ -2337,6 +2337,25 @@ def _visible_video_has_loaded_metadata(driver) -> bool:
         return False
 
 
+def _visible_video_has_playback_progress(driver) -> bool:
+    try:
+        progressed = driver.execute_script(
+            """
+            const videos = Array.from(document.querySelectorAll("video"));
+            return videos.some((video) => {
+              const rect = video.getBoundingClientRect();
+              if (!rect.width || !rect.height) return false;
+              const currentTime = Number(video.currentTime || 0);
+              const readyState = Number(video.readyState || 0);
+              return currentTime >= 0.2 || (!video.paused && readyState >= 2);
+            });
+            """
+        )
+        return bool(progressed)
+    except Exception:
+        return False
+
+
 def _click_video_controls_in_current_context(driver) -> bool:
     try:
         element = driver.execute_script(
@@ -3037,8 +3056,18 @@ def audit_video_interaction_url(
                     metadata_loaded = True
                     break
                 time.sleep(0.08)
-            if not metadata_loaded:
+            playback_progressed = False
+            if metadata_loaded:
+                progress_deadline = time.time() + 0.6
+                while time.time() < progress_deadline:
+                    if _visible_video_has_playback_progress(driver):
+                        playback_progressed = True
+                        break
+                    time.sleep(0.08)
+            if not metadata_loaded or not playback_progressed:
                 played_visible = _play_visible_videos_in_current_context(driver)
+                if played_visible:
+                    time.sleep(0.12)
         else:
             played_visible = _play_visible_videos_in_current_context(driver)
         if played_visible:
