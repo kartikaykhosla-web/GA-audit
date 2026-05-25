@@ -2339,7 +2339,7 @@ def _visible_video_has_loaded_metadata(driver) -> bool:
 
 def _click_video_controls_in_current_context(driver) -> bool:
     try:
-        clicked = driver.execute_script(
+        element = driver.execute_script(
             """
             const rootSelectors = [
               ".Short_wrapper_fixed .video-player-container",
@@ -2361,47 +2361,33 @@ def _click_video_controls_in_current_context(driver) -> bool:
               const rect = element.getBoundingClientRect();
               return !!(rect.width && rect.height);
             };
-            const clickElement = (element) => {
-              if (!visible(element)) return false;
-              try {
-                element.scrollIntoView({ block: "center", inline: "center" });
-              } catch (e) {}
-              try {
-                ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((eventName) => {
-                  try {
-                    element.dispatchEvent(new MouseEvent(eventName, {
-                      view: window,
-                      bubbles: true,
-                      cancelable: true,
-                      buttons: 1
-                    }));
-                  } catch (e) {}
-                });
-                if (typeof element.click === "function") {
-                  element.click();
-                }
-                return true;
-              } catch (e) {
-                return false;
-              }
-            };
             for (const rootSelector of rootSelectors) {
               const root = document.querySelector(rootSelector);
               if (!visible(root)) continue;
               for (const selector of selectors) {
                 const element = root.querySelector(selector);
-                if (clickElement(element)) {
-                  return true;
+                if (visible(element)) {
+                  return element;
                 }
               }
-              if (clickElement(root)) {
-                return true;
-              }
             }
-            return false;
+            return null;
             """
         )
-        return bool(clicked)
+        if not element:
+            return False
+        try:
+            driver.execute_script(
+                "try { arguments[0].scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}",
+                element,
+            )
+        except Exception:
+            pass
+        try:
+            element.click()
+            return True
+        except Exception:
+            return _click_element(driver, element)
     except Exception:
         return False
 
