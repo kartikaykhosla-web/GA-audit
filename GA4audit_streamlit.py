@@ -2317,6 +2317,26 @@ def _play_visible_videos_in_current_context(driver) -> bool:
         return False
 
 
+def _visible_video_has_loaded_metadata(driver) -> bool:
+    try:
+        loaded = driver.execute_script(
+            """
+            const videos = Array.from(document.querySelectorAll("video"));
+            return videos.some((video) => {
+              const rect = video.getBoundingClientRect();
+              if (!rect.width || !rect.height) return false;
+              const duration = Number(video.duration || 0);
+              const currentTime = Number(video.currentTime || 0);
+              const readyState = Number(video.readyState || 0);
+              return duration > 0 || currentTime > 0 || readyState >= 1;
+            });
+            """
+        )
+        return bool(loaded)
+    except Exception:
+        return False
+
+
 def _click_video_controls_in_current_context(driver) -> bool:
     try:
         clicked = driver.execute_script(
@@ -3022,7 +3042,19 @@ def audit_video_interaction_url(
         if clicked_controls:
             video_started = True
             time.sleep(0.06)
-        played_visible = _play_visible_videos_in_current_context(driver)
+        played_visible = False
+        if clicked_controls:
+            metadata_loaded = False
+            metadata_deadline = time.time() + 0.6
+            while time.time() < metadata_deadline:
+                if _visible_video_has_loaded_metadata(driver):
+                    metadata_loaded = True
+                    break
+                time.sleep(0.08)
+            if not metadata_loaded:
+                played_visible = _play_visible_videos_in_current_context(driver)
+        else:
+            played_visible = _play_visible_videos_in_current_context(driver)
         if played_visible:
             video_started = True
             time.sleep(0.03)
@@ -3049,7 +3081,7 @@ def audit_video_interaction_url(
         if video_started:
             break
 
-    if video_started:
+    if video_started and not clicked_controls:
         try:
             report_step("Seeking playback to 26%...", 0.76)
             sought_progress = _seek_visible_videos_in_current_context(driver, target_percent=26.0)
@@ -3096,22 +3128,6 @@ def audit_video_interaction_url(
         report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
         time.sleep(0.12)
 
-    if not matched_video_event:
-        report_step("Checking network fallback...", 0.90)
-        timing_ga4_collects, _, _, _ = extract_collect_hits_from_resource_timing(driver, page_domain)
-        if timing_ga4_collects:
-            performance_hits = timing_ga4_collects
-            performance_events = []
-            for hit in timing_ga4_collects:
-                if not isinstance(hit, dict):
-                    continue
-                for event in hit.get("decoded_events") or []:
-                    if isinstance(event, dict):
-                        performance_events.append(event)
-            matched_video_event = find_event_by_name(performance_events, "video_interaction")
-            if matched_video_event:
-                performance_match_source = "resource_timing"
-
     preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
     compact_video_datalayer = []
     if isinstance(preload_datalayer, list):
@@ -3125,14 +3141,15 @@ def audit_video_interaction_url(
     final_dom_state = dict(
         opened_dom_state if "opened_dom_state" in locals() and isinstance(opened_dom_state, dict) else initial_dom_state
     )
-    playback_state = capture_video_playback_state(driver)
-    if isinstance(playback_state, dict):
-        if playback_state.get("videos"):
-            final_dom_state["videos"] = playback_state.get("videos")
-        if playback_state.get("viewportHeight"):
-            final_dom_state["viewportHeight"] = playback_state.get("viewportHeight")
-        if playback_state.get("error"):
-            final_dom_state["playbackError"] = playback_state.get("error")
+    if matched_video_event:
+        playback_state = capture_video_playback_state(driver)
+        if isinstance(playback_state, dict):
+            if playback_state.get("videos"):
+                final_dom_state["videos"] = playback_state.get("videos")
+            if playback_state.get("viewportHeight"):
+                final_dom_state["viewportHeight"] = playback_state.get("viewportHeight")
+            if playback_state.get("error"):
+                final_dom_state["playbackError"] = playback_state.get("error")
     inferred_video_params = _build_inferred_video_event_params(final_dom_state, debug_steps)
     if matched_video_event and inferred_video_params:
         params = matched_video_event.setdefault("params", {})
