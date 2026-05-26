@@ -2342,6 +2342,90 @@ def _play_visible_videos_in_current_context(driver) -> bool:
         return False
 
 
+def _capture_primary_visible_video_state(driver) -> Dict[str, Any]:
+    try:
+        state = driver.execute_script(
+            """
+            const videos = Array.from(document.querySelectorAll("video"));
+            for (const video of videos) {
+              const rect = video.getBoundingClientRect();
+              if (!rect.width || !rect.height) continue;
+              return {
+                paused: !!video.paused,
+                currentTime: Number(video.currentTime || 0),
+                duration: Number(video.duration || 0),
+                readyState: Number(video.readyState || 0),
+                width: Number(rect.width || 0),
+                height: Number(rect.height || 0),
+              };
+            }
+            return {};
+            """
+        )
+        return state if isinstance(state, dict) else {}
+    except Exception:
+        return {}
+
+
+def _video_state_advanced(before: Optional[Dict[str, Any]], after: Optional[Dict[str, Any]]) -> bool:
+    before = before or {}
+    after = after or {}
+    try:
+        before_current = float(before.get("currentTime") or 0)
+        after_current = float(after.get("currentTime") or 0)
+        before_duration = float(before.get("duration") or 0)
+        after_duration = float(after.get("duration") or 0)
+        before_ready = int(before.get("readyState") or 0)
+        after_ready = int(after.get("readyState") or 0)
+        before_paused = bool(before.get("paused"))
+        after_paused = bool(after.get("paused"))
+    except Exception:
+        return False
+    return (
+        after_current > before_current + 0.05
+        or (before_duration <= 0 and after_duration > 0)
+        or after_ready > before_ready
+        or (before_paused and not after_paused)
+    )
+
+
+def _native_click_opened_video_center(driver) -> bool:
+    try:
+        element = driver.execute_script(
+            """
+            const selectors = [
+              ".Short_wrapper_fixed .VideoSwiper_videoContainer video",
+              ".Short_wrapper_fixed .video-player-container video",
+              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer video",
+              ".ArticleDetail_relatedvideo__wvgRP .video-player-container video",
+              ".VideoSwiper_videoContainer video",
+              ".video-player-container video",
+              ".Short_wrapper_fixed .VideoSwiper_videoContainer",
+              ".Short_wrapper_fixed .video-player-container",
+              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer",
+              ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
+              ".VideoSwiper_videoContainer",
+              ".video-player-container"
+            ];
+            const visible = (element) => {
+              if (!element) return false;
+              const rect = element.getBoundingClientRect();
+              return !!(rect.width && rect.height);
+            };
+            for (const selector of selectors) {
+              const element = document.querySelector(selector);
+              if (visible(element)) {
+                return element;
+              }
+            }
+            return null;
+            """
+        )
+        return _native_click_element(driver, element)
+    except Exception:
+        return False
+
+
 def _visible_video_has_loaded_metadata(driver) -> bool:
     try:
         loaded = driver.execute_script(
@@ -3072,12 +3156,25 @@ def audit_video_interaction_url(
         report_step("Clicking player controls...", 0.60)
         controls_deadline = time.time() + 0.8
         clicked_controls = False
+        control_effective = False
+        pre_control_state = _capture_primary_visible_video_state(driver)
         while time.time() < controls_deadline:
             if _visible_video_controls_exist(driver):
                 clicked_controls = _click_video_controls_in_current_context(driver)
                 if clicked_controls:
+                    time.sleep(0.12)
+                    post_control_state = _capture_primary_visible_video_state(driver)
+                    control_effective = _video_state_advanced(pre_control_state, post_control_state)
                     break
             time.sleep(0.08)
+        if clicked_controls and not control_effective:
+            clicked_controls = _native_click_opened_video_center(driver)
+            if clicked_controls:
+                time.sleep(0.12)
+                control_effective = _video_state_advanced(
+                    pre_control_state,
+                    _capture_primary_visible_video_state(driver),
+                )
         if clicked_controls:
             video_started = True
             time.sleep(0.06)
