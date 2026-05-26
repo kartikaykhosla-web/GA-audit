@@ -43,6 +43,7 @@ except Exception:
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.action_chains import ActionChains
 
 AUTO_REFRESH_INTERVAL_MS = 60 * 60 * 1000
 from selenium.common.exceptions import JavascriptException, TimeoutException
@@ -2402,6 +2403,11 @@ def _click_video_controls_in_current_context(driver) -> bool:
                 "try { arguments[0].scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}",
                 element,
             )
+        except Exception:
+            pass
+        try:
+            ActionChains(driver).move_to_element(element).pause(0.05).click().perform()
+            return True
         except Exception:
             pass
         try:
