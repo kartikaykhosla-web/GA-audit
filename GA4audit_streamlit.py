@@ -3098,13 +3098,15 @@ def audit_video_interaction_url(
         if video_started:
             break
 
-    if video_started and not clicked_controls:
+    if video_started:
         try:
             report_step("Seeking playback to 26%...", 0.76)
             sought_progress = _seek_visible_videos_in_current_context(driver, target_percent=26.0)
             sought_progress_in_frame = False
             if not sought_progress and _has_opened_video_iframe_in_current_context(driver):
                 sought_progress_in_frame = _seek_visible_videos_in_frames(driver, target_percent=26.0, max_depth=0)
+            if sought_progress or sought_progress_in_frame:
+                time.sleep(0.12)
             debug_steps.append(
                 {
                     "step": "seek_visible_videos",
