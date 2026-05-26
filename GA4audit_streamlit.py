@@ -3171,6 +3171,7 @@ def audit_video_interaction_url(
     report_step("Inspecting video placements...", 0.34)
     initial_dom_state = capture_video_dom_diagnostics(driver)
     video_started = False
+    opened_dom_state: Dict[str, Any] = {}
     for percent in (0,):
         try:
             driver.execute_script(
@@ -3192,7 +3193,6 @@ def audit_video_interaction_url(
         if clicked_initial:
             video_started = True
             time.sleep(0.2)
-        opened_dom_state = capture_video_dom_diagnostics(driver)
         report_step("Clicking opened player surface...", 0.52)
         clicked_opened = _click_opened_video_surface_in_current_context(driver)
         if clicked_opened:
@@ -3341,6 +3341,9 @@ def audit_video_interaction_url(
         remaining = max(0.0, deadline - time.time())
         report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
         time.sleep(0.12)
+
+    if not opened_dom_state:
+        opened_dom_state = capture_video_dom_diagnostics(driver)
 
     preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
     compact_video_datalayer = []
@@ -11264,7 +11267,7 @@ This capture is split into three layers:
                     page_load_timeout=5,
                 )
                 try:
-                    driver.set_script_timeout(1)
+                    driver.set_script_timeout(2)
                 except Exception:
                     pass
                 try:
