@@ -982,11 +982,7 @@ GA4_PRELOAD_SCRIPT = r"""
                     command: args[0],
                     event_name: args[0] === "event" ? args[1] : "",
                     params: args[0] === "event" && args[2] && typeof args[2] === "object"
-                        ? {
-                            page_location: args[2].page_location || "",
-                            page_title: args[2].page_title || "",
-                            page_referrer: args[2].page_referrer || ""
-                        }
+                        ? safeClone(args[2], 0)
                         : null
                 });
                 if (typeof original === "function") {
@@ -1225,9 +1221,13 @@ def extract_video_preload_state(driver) -> Dict[str, Any]:
                         entry: entry
                     };
                 });
+                const gtagCalls = (state.gtagCalls || []).slice(-12).map(function(call) {
+                    return JSON.parse(JSON.stringify(call));
+                });
                 return {
                     transportHits: transportHits,
                     dataLayerPushes: dataLayerPushes,
+                    gtagCalls: gtagCalls,
                     initialDataLayer: []
                 };
             } catch (e) {
@@ -3289,6 +3289,9 @@ def audit_video_interaction_url(
     while time.time() < first_poll_deadline:
         preload_state = extract_video_preload_state(driver)
         execution_hits, execution_events = normalize_transport_hits(preload_state)
+        gtag_events = normalize_gtag_calls(preload_state.get("gtagCalls", []) or [])
+        if gtag_events:
+            execution_events.extend(gtag_events)
         matched_video_event = find_event_by_name(execution_events, "video_interaction")
         if not matched_video_event:
             current_datalayer = reconstruct_datalayer_from_preload(preload_state)
@@ -3330,6 +3333,9 @@ def audit_video_interaction_url(
     while not matched_video_event and time.time() < deadline:
         preload_state = extract_video_preload_state(driver)
         execution_hits, execution_events = normalize_transport_hits(preload_state)
+        gtag_events = normalize_gtag_calls(preload_state.get("gtagCalls", []) or [])
+        if gtag_events:
+            execution_events.extend(gtag_events)
         matched_video_event = find_event_by_name(execution_events, "video_interaction")
         if not matched_video_event:
             current_datalayer = reconstruct_datalayer_from_preload(preload_state)
