@@ -43,6 +43,8 @@ except Exception:
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+
+AUTO_REFRESH_INTERVAL_MS = 60 * 60 * 1000
 from selenium.common.exceptions import JavascriptException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
@@ -3766,6 +3768,8 @@ def audit_single_url(
 # Streamlit app
 
 st.set_page_config(page_title="GA4 / dataLayer Auditor", layout="wide")
+if st_autorefresh:
+    st_autorefresh(interval=AUTO_REFRESH_INTERVAL_MS, key="ga_audit_hourly_autorefresh")
 st.title("GA4 / dataLayer Auditor")
 st.markdown(
     """
