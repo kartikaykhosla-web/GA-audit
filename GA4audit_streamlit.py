@@ -2363,31 +2363,24 @@ def _click_video_controls_in_current_context(driver) -> bool:
     try:
         element = driver.execute_script(
             """
-            const rootSelectors = [
-              ".Short_wrapper_fixed .video-player-container",
-              ".Short_wrapper_fixed .VideoSwiper_videoContainer",
-              ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
-              ".ArticleDetail_relatedvideo__wvgRP .VideoSwiper_videoContainer",
-              ".video-player-container",
-              ".VideoSwiper_videoContainer"
-            ];
             const selectors = [
-              "button[aria-label*='play' i]",
-              "[aria-label*='play' i]",
-              "[class*='play' i]",
-              "[role='button']",
-              "video"
+              ".video-player-container [aria-label*='play' i]",
+              ".VideoSwiper_videoContainer [aria-label*='play' i]",
+              ".video-player-container [class*='play' i]",
+              ".VideoSwiper_videoContainer [class*='play' i]",
+              ".video-player-container [role='button']",
+              ".VideoSwiper_videoContainer [role='button']",
+              ".video-player-container button",
+              ".VideoSwiper_videoContainer button"
             ];
             const visible = (element) => {
               if (!element) return false;
               const rect = element.getBoundingClientRect();
               return !!(rect.width && rect.height);
             };
-            for (const rootSelector of rootSelectors) {
-              const root = document.querySelector(rootSelector);
-              if (!visible(root)) continue;
-              for (const selector of selectors) {
-                const element = root.querySelector(selector);
+            for (const selector of selectors) {
+              const elements = Array.from(document.querySelectorAll(selector));
+              for (const element of elements) {
                 if (visible(element)) {
                   return element;
                 }
