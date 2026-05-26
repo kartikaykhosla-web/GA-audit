@@ -1038,6 +1038,51 @@ GA4_PRELOAD_SCRIPT = r"""
             window.fetch = wrappedFetch;
         }
 
+        if (typeof XMLHttpRequest !== "undefined" && XMLHttpRequest.prototype && !XMLHttpRequest.prototype.__ga4AuditWrapped) {
+            var originalOpen = XMLHttpRequest.prototype.open;
+            var originalSend = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.open = function (method, url) {
+                try {
+                    this.__ga4AuditUrl = url || "";
+                    this.__ga4AuditMethod = method || "GET";
+                } catch (e) {}
+                return originalOpen.apply(this, arguments);
+            };
+            XMLHttpRequest.prototype.send = function (body) {
+                try {
+                    recordTransport("xhr", this.__ga4AuditUrl || "", this.__ga4AuditMethod || "GET", body);
+                } catch (e) {}
+                return originalSend.apply(this, arguments);
+            };
+            Object.defineProperty(XMLHttpRequest.prototype, "__ga4AuditWrapped", {
+                value: true,
+                configurable: true
+            });
+        }
+
+        if (typeof HTMLImageElement !== "undefined" && HTMLImageElement.prototype && !HTMLImageElement.prototype.__ga4AuditWrappedSrc) {
+            var imageSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+            if (imageSrcDescriptor && imageSrcDescriptor.set && imageSrcDescriptor.get) {
+                Object.defineProperty(HTMLImageElement.prototype, "src", {
+                    configurable: true,
+                    enumerable: imageSrcDescriptor.enumerable,
+                    get: function () {
+                        return imageSrcDescriptor.get.call(this);
+                    },
+                    set: function (value) {
+                        try {
+                            recordTransport("image", value || "", "GET", "");
+                        } catch (e) {}
+                        return imageSrcDescriptor.set.call(this, value);
+                    }
+                });
+                Object.defineProperty(HTMLImageElement.prototype, "__ga4AuditWrappedSrc", {
+                    value: true,
+                    configurable: true
+                });
+            }
+        }
+
 """
 
 
