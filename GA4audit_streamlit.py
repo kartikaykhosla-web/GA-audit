@@ -3130,7 +3130,36 @@ def audit_video_interaction_url(
         if video_started:
             break
 
-    if video_started:
+    deadline = time.time() + min(3, max(2, int(timeout_seconds or 3)))
+    preload_state: Dict[str, Any] = {}
+    execution_hits: List[Dict[str, Any]] = []
+    execution_events: List[Dict[str, Any]] = []
+    matched_video_event = None
+    performance_hits: List[Dict[str, Any]] = []
+    performance_events: List[Dict[str, Any]] = []
+    performance_match_source = ""
+
+    report_step("Polling for video_interaction event...", 0.84)
+    first_poll_deadline = min(deadline, time.time() + 1.2)
+    while time.time() < first_poll_deadline:
+        preload_state = extract_video_preload_state(driver)
+        execution_hits, execution_events = normalize_transport_hits(preload_state)
+        matched_video_event = find_event_by_name(execution_events, "video_interaction")
+        if not matched_video_event:
+            current_datalayer = reconstruct_datalayer_from_preload(preload_state)
+            for entry in reversed(current_datalayer):
+                if not isinstance(entry, dict):
+                    continue
+                if normalize_event_name(entry.get("event")) == "videointeraction":
+                    matched_video_event = build_synthetic_ga4_event_from_datalayer(entry)
+                    break
+        if matched_video_event:
+            break
+        remaining = max(0.0, first_poll_deadline - time.time())
+        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
+        time.sleep(0.12)
+
+    if not matched_video_event and video_started:
         try:
             report_step("Seeking playback to 26%...", 0.76)
             sought_progress = _seek_visible_videos_in_current_context(driver, target_percent=26.0)
@@ -3151,17 +3180,9 @@ def audit_video_interaction_url(
         except Exception:
             debug_steps.append({"step": "seek_visible_videos", "success": False, "target_percent": 26.0})
 
-    deadline = time.time() + min(3, max(2, int(timeout_seconds or 3)))
-    preload_state: Dict[str, Any] = {}
-    execution_hits: List[Dict[str, Any]] = []
-    execution_events: List[Dict[str, Any]] = []
-    matched_video_event = None
-    performance_hits: List[Dict[str, Any]] = []
-    performance_events: List[Dict[str, Any]] = []
-    performance_match_source = ""
-
-    report_step("Polling for video_interaction event...", 0.84)
-    while time.time() < deadline:
+    if not matched_video_event:
+        report_step("Polling for video_interaction event...", 0.84)
+    while not matched_video_event and time.time() < deadline:
         preload_state = extract_video_preload_state(driver)
         execution_hits, execution_events = normalize_transport_hits(preload_state)
         matched_video_event = find_event_by_name(execution_events, "video_interaction")
