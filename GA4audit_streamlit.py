@@ -2292,6 +2292,28 @@ def _click_element(driver, element) -> bool:
         return False
 
 
+def _native_click_element(driver, element) -> bool:
+    if not element:
+        return False
+    try:
+        driver.execute_script(
+            "try { arguments[0].scrollIntoView({block: 'center', inline: 'center'}); } catch (e) {}",
+            element,
+        )
+    except Exception:
+        pass
+    try:
+        ActionChains(driver).move_to_element(element).pause(0.05).click().perform()
+        return True
+    except Exception:
+        pass
+    try:
+        element.click()
+        return True
+    except Exception:
+        return _click_element(driver, element)
+
+
 def _play_visible_videos_in_current_context(driver) -> bool:
     try:
         played = driver.execute_script(
@@ -2471,7 +2493,7 @@ def _click_article_hero_video_in_current_context(driver) -> bool:
             try:
                 if not element.is_displayed():
                     continue
-                if _click_element(driver, element):
+                if _native_click_element(driver, element):
                     time.sleep(0.15)
                     return True
             except Exception:
@@ -2481,7 +2503,7 @@ def _click_article_hero_video_in_current_context(driver) -> bool:
 
 def _click_opened_video_surface_in_current_context(driver) -> bool:
     try:
-        clicked = driver.execute_script(
+        element = driver.execute_script(
             """
             const rootSelectors = [
               ".Short_wrapper_fixed .VideoSwiper_videoContainer",
@@ -2503,49 +2525,26 @@ def _click_opened_video_surface_in_current_context(driver) -> bool:
               const rect = element.getBoundingClientRect();
               return !!(rect.width && rect.height);
             };
-            const clickElement = (element) => {
-              if (!visible(element)) return false;
-              try {
-                element.scrollIntoView({ block: "center", inline: "center" });
-              } catch (e) {}
-              try {
-                ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((eventName) => {
-                  try {
-                    element.dispatchEvent(new MouseEvent(eventName, {
-                      view: window,
-                      bubbles: true,
-                      cancelable: true,
-                      buttons: 1
-                    }));
-                  } catch (e) {}
-                });
-                if (typeof element.click === "function") {
-                  element.click();
-                }
-                return true;
-              } catch (e) {
-                return false;
-              }
-            };
             for (const rootSelector of rootSelectors) {
               const root = document.querySelector(rootSelector);
               if (!visible(root)) continue;
               for (const selector of targetSelectors) {
                 const candidate = root.querySelector(selector);
-                if (clickElement(candidate)) {
-                  return true;
+                if (visible(candidate)) {
+                  return candidate;
                 }
               }
-              if (clickElement(root)) {
-                return true;
+              if (visible(root)) {
+                return root;
               }
             }
-            return false;
+            return null;
             """
         )
-        if clicked:
+        if _native_click_element(driver, element):
             time.sleep(0.08)
-        return bool(clicked)
+            return True
+        return False
     except Exception:
         return False
 
