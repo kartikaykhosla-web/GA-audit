@@ -2359,6 +2359,33 @@ def _visible_video_has_playback_progress(driver) -> bool:
         return False
 
 
+def _visible_video_controls_exist(driver) -> bool:
+    try:
+        visible = driver.execute_script(
+            """
+            const selectors = [
+              ".video-player-container [aria-label*='play' i]",
+              ".VideoSwiper_videoContainer [aria-label*='play' i]",
+              ".video-player-container [class*='play' i]",
+              ".VideoSwiper_videoContainer [class*='play' i]",
+              ".video-player-container [role='button']",
+              ".VideoSwiper_videoContainer [role='button']",
+              ".video-player-container button",
+              ".VideoSwiper_videoContainer button"
+            ];
+            return selectors.some((selector) => {
+              return Array.from(document.querySelectorAll(selector)).some((element) => {
+                const rect = element.getBoundingClientRect();
+                return !!(rect.width && rect.height);
+              });
+            });
+            """
+        )
+        return bool(visible)
+    except Exception:
+        return False
+
+
 def _click_video_controls_in_current_context(driver) -> bool:
     try:
         element = driver.execute_script(
@@ -3044,7 +3071,14 @@ def audit_video_interaction_url(
             video_started = True
             time.sleep(0.15)
         report_step("Clicking player controls...", 0.60)
-        clicked_controls = _click_video_controls_in_current_context(driver)
+        controls_deadline = time.time() + 0.8
+        clicked_controls = False
+        while time.time() < controls_deadline:
+            if _visible_video_controls_exist(driver):
+                clicked_controls = _click_video_controls_in_current_context(driver)
+                if clicked_controls:
+                    break
+            time.sleep(0.08)
         if clicked_controls:
             video_started = True
             time.sleep(0.06)
