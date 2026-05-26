@@ -3224,26 +3224,13 @@ def audit_video_interaction_url(
             video_started = True
             time.sleep(0.06)
         played_visible = False
+        manual_control_path = bool(clicked_controls)
         if clicked_controls:
-            metadata_loaded = False
-            metadata_deadline = time.time() + 0.6
-            while time.time() < metadata_deadline:
-                if _visible_video_has_loaded_metadata(driver):
-                    metadata_loaded = True
+            progress_deadline = time.time() + 1.2
+            while time.time() < progress_deadline:
+                if _visible_video_has_playback_progress(driver):
                     break
                 time.sleep(0.08)
-            playback_progressed = False
-            if metadata_loaded:
-                progress_deadline = time.time() + 0.6
-                while time.time() < progress_deadline:
-                    if _visible_video_has_playback_progress(driver):
-                        playback_progressed = True
-                        break
-                    time.sleep(0.08)
-            if not metadata_loaded or not playback_progressed:
-                played_visible = _play_visible_videos_in_current_context(driver)
-                if played_visible:
-                    time.sleep(0.12)
         else:
             played_visible = _play_visible_videos_in_current_context(driver)
         if played_visible:
@@ -3301,7 +3288,7 @@ def audit_video_interaction_url(
         report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
         time.sleep(0.12)
 
-    if not matched_video_event and video_started:
+    if not matched_video_event and video_started and not manual_control_path:
         try:
             report_step("Seeking playback to 26%...", 0.76)
             sought_progress = _seek_visible_videos_in_current_context(driver, target_percent=26.0)
