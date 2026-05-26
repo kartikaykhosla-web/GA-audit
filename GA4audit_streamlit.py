@@ -2862,6 +2862,28 @@ def _seek_visible_videos_in_frames(driver, target_percent: float = 26.0, depth: 
     return updated
 
 
+def _reset_visible_videos_in_current_context(driver) -> bool:
+    try:
+        reset = driver.execute_script(
+            """
+            let updated = false;
+            document.querySelectorAll("video").forEach((video) => {
+              const rect = video.getBoundingClientRect();
+              if (!rect.width || !rect.height) return;
+              try {
+                video.pause();
+                video.currentTime = 0;
+                updated = true;
+              } catch (e) {}
+            });
+            return updated;
+            """
+        )
+        return bool(reset)
+    except Exception:
+        return False
+
+
 def trigger_video_playback(driver, quick: bool = False) -> bool:
     started = False
     try:
@@ -3091,7 +3113,7 @@ def _build_inferred_video_event_params(dom_state: Dict[str, Any], debug_steps: L
 def audit_video_interaction_url(
     driver,
     url: str,
-    timeout_seconds: int = 3,
+    timeout_seconds: int = 8,
     step_reporter: Optional[Callable[[str, Optional[float]], None]] = None,
 ) -> Dict[str, Any]:
     result: Dict[str, Any] = {
@@ -3186,175 +3208,97 @@ def audit_video_interaction_url(
 
     report_step("Inspecting video placements...", 0.34)
     initial_dom_state = capture_video_dom_diagnostics(driver)
-    video_started = False
-    opened_dom_state: Dict[str, Any] = {}
-    for percent in (0,):
+    time.sleep(1.0)
+
+    report_step("Clicking initial video surface...", 0.42)
+    clicked_initial = _click_article_hero_video_in_current_context(driver)
+    time.sleep(0.8)
+
+    report_step("Clicking player controls...", 0.58)
+    clicked_controls = _click_video_controls_in_current_context(driver)
+    if clicked_controls:
+        time.sleep(0.8)
+
+    report_step("Resetting visible video...", 0.66)
+    reset_visible = _reset_visible_videos_in_current_context(driver)
+    if reset_visible:
+        time.sleep(0.3)
+
+    report_step("Clicking player controls again...", 0.72)
+    clicked_controls_after_reset = _click_video_controls_in_current_context(driver)
+    if clicked_controls_after_reset:
+        time.sleep(0.3)
+    else:
         try:
-            driver.execute_script(
-                """
-                const scrollHeight = Math.max(
-                    document.body.scrollHeight || 0,
-                    document.documentElement.scrollHeight || 0
-                );
-                window.scrollTo(0, scrollHeight * arguments[0] / 100);
-                """,
-                percent,
-            )
-            time.sleep(0.1)
-        except Exception:
-            pass
-
-        report_step("Clicking initial video surface...", 0.42)
-        clicked_initial = _click_article_hero_video_in_current_context(driver)
-        if clicked_initial:
-            video_started = True
-            time.sleep(0.2)
-        report_step("Clicking opened player surface...", 0.52)
-        clicked_opened = _click_opened_video_surface_in_current_context(driver)
-        if clicked_opened:
-            video_started = True
-            time.sleep(0.15)
-        report_step("Clicking player controls...", 0.60)
-        controls_deadline = time.time() + 0.8
-        clicked_controls = False
-        control_effective = False
-        pre_control_state = _capture_primary_visible_video_state(driver)
-        while time.time() < controls_deadline:
-            if _visible_video_controls_exist(driver):
-                clicked_controls = _click_video_controls_in_current_context(driver)
-                if clicked_controls:
-                    time.sleep(0.12)
-                    post_control_state = _capture_primary_visible_video_state(driver)
-                    control_effective = _video_state_advanced(pre_control_state, post_control_state)
-                    break
-            time.sleep(0.08)
-        if clicked_controls and not control_effective:
-            clicked_controls = _native_click_opened_video_center(driver)
-            if clicked_controls:
-                time.sleep(0.12)
-                control_effective = _video_state_advanced(
-                    pre_control_state,
-                    _capture_primary_visible_video_state(driver),
-                )
-        if clicked_controls:
-            video_started = True
-            time.sleep(0.06)
-        played_visible = False
-        manual_control_path = bool(clicked_controls)
-        if clicked_controls:
-            progress_deadline = time.time() + 1.2
-            while time.time() < progress_deadline:
-                if _visible_video_has_playback_progress(driver):
-                    break
-                time.sleep(0.08)
-        else:
             played_visible = _play_visible_videos_in_current_context(driver)
+        except Exception:
+            played_visible = False
         if played_visible:
-            video_started = True
-            time.sleep(0.03)
-        report_step("Attempting visible video playback...", 0.68)
-        has_opened_iframe = _has_opened_video_iframe_in_current_context(driver)
-        played_in_frame = False
-        if not played_visible and has_opened_iframe:
-            played_in_frame = _attempt_video_start_in_frames(driver, max_depth=0)
-        if played_in_frame:
-            video_started = True
-            time.sleep(0.03)
-        debug_steps.append(
-            {
-                "step": "video_probe",
-                "scroll_percent": percent,
-                "clicked_initial": bool(clicked_initial),
-                "clicked_opened_surface": bool(clicked_opened),
-                "clicked_play_controls": bool(clicked_controls),
-                "played_visible_videos": bool(played_visible),
-                "has_opened_iframe": bool(has_opened_iframe),
-                "played_in_frame": bool(played_in_frame),
-            }
-        )
-        if video_started:
-            break
+            time.sleep(0.1)
 
-    deadline = time.time() + min(3, max(2, int(timeout_seconds or 3)))
+    opened_dom_state = capture_video_dom_diagnostics(driver)
+    video_state_after_open = capture_video_playback_state(driver)
+    if isinstance(opened_dom_state, dict) and isinstance(video_state_after_open, dict):
+        if video_state_after_open.get("videos"):
+            opened_dom_state["videos"] = video_state_after_open.get("videos")
+        if video_state_after_open.get("viewportHeight"):
+            opened_dom_state["viewportHeight"] = video_state_after_open.get("viewportHeight")
+
+    debug_steps.append(
+        {
+            "step": "video_probe",
+            "scroll_percent": 0,
+            "clicked_initial": bool(clicked_initial),
+            "clicked_opened_surface": False,
+            "clicked_play_controls": bool(clicked_controls or clicked_controls_after_reset),
+            "played_visible_videos": False,
+            "has_opened_iframe": False,
+            "played_in_frame": False,
+            "clicked_control": bool(clicked_controls),
+            "clicked_control_after_reset": bool(clicked_controls_after_reset),
+        }
+    )
+
+    deadline = time.time() + min(12, max(6, int(timeout_seconds or 8)))
     preload_state: Dict[str, Any] = {}
     execution_hits: List[Dict[str, Any]] = []
     execution_events: List[Dict[str, Any]] = []
     matched_video_event = None
+    current_datalayer: List[Dict[str, Any]] = []
+
+    report_step("Polling for video_interaction event...", 0.84)
+    while time.time() < deadline:
+        preload_state = extract_video_preload_state(driver)
+        execution_hits, transport_events = normalize_transport_hits(preload_state)
+        gtag_events = normalize_gtag_calls(preload_state.get("gtagCalls", []) or [])
+        current_datalayer = reconstruct_datalayer_from_preload(preload_state)
+        execution_events = list(gtag_events)
+
+        matched_video_event = find_event_by_name(gtag_events, "video_interaction")
+        if not matched_video_event:
+            for entry in reversed(current_datalayer):
+                if not isinstance(entry, dict):
+                    continue
+                if normalize_event_name(entry.get("event")) == "videointeraction":
+                    matched_video_event = build_synthetic_ga4_event_from_datalayer(entry)
+                    break
+        if not matched_video_event:
+            matched_video_event = find_event_by_name(transport_events, "video_interaction")
+
+        if matched_video_event:
+            if matched_video_event not in execution_events:
+                execution_events.append(matched_video_event)
+            break
+
+        remaining = max(0.0, deadline - time.time())
+        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
+        time.sleep(0.5)
+
     performance_hits: List[Dict[str, Any]] = []
     performance_events: List[Dict[str, Any]] = []
     performance_match_source = ""
 
-    report_step("Polling for video_interaction event...", 0.84)
-    first_poll_deadline = min(deadline, time.time() + 1.2)
-    while time.time() < first_poll_deadline:
-        preload_state = extract_video_preload_state(driver)
-        execution_hits, execution_events = normalize_transport_hits(preload_state)
-        gtag_events = normalize_gtag_calls(preload_state.get("gtagCalls", []) or [])
-        if gtag_events:
-            execution_events.extend(gtag_events)
-        matched_video_event = find_event_by_name(execution_events, "video_interaction")
-        if not matched_video_event:
-            current_datalayer = reconstruct_datalayer_from_preload(preload_state)
-            for entry in reversed(current_datalayer):
-                if not isinstance(entry, dict):
-                    continue
-                if normalize_event_name(entry.get("event")) == "videointeraction":
-                    matched_video_event = build_synthetic_ga4_event_from_datalayer(entry)
-                    break
-        if matched_video_event:
-            break
-        remaining = max(0.0, first_poll_deadline - time.time())
-        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
-        time.sleep(0.12)
-
-    if not matched_video_event and video_started and not manual_control_path:
-        try:
-            report_step("Seeking playback to 26%...", 0.76)
-            sought_progress = _seek_visible_videos_in_current_context(driver, target_percent=26.0)
-            sought_progress_in_frame = False
-            if not sought_progress and _has_opened_video_iframe_in_current_context(driver):
-                sought_progress_in_frame = _seek_visible_videos_in_frames(driver, target_percent=26.0, max_depth=0)
-            if sought_progress or sought_progress_in_frame:
-                time.sleep(0.12)
-            debug_steps.append(
-                {
-                    "step": "seek_visible_videos",
-                    "success": bool(sought_progress or sought_progress_in_frame),
-                    "sought_in_current_context": bool(sought_progress),
-                    "sought_in_frame": bool(sought_progress_in_frame),
-                    "target_percent": 26.0,
-                }
-            )
-        except Exception:
-            debug_steps.append({"step": "seek_visible_videos", "success": False, "target_percent": 26.0})
-
-    if not matched_video_event:
-        report_step("Polling for video_interaction event...", 0.84)
-    while not matched_video_event and time.time() < deadline:
-        preload_state = extract_video_preload_state(driver)
-        execution_hits, execution_events = normalize_transport_hits(preload_state)
-        gtag_events = normalize_gtag_calls(preload_state.get("gtagCalls", []) or [])
-        if gtag_events:
-            execution_events.extend(gtag_events)
-        matched_video_event = find_event_by_name(execution_events, "video_interaction")
-        if not matched_video_event:
-            current_datalayer = reconstruct_datalayer_from_preload(preload_state)
-            for entry in reversed(current_datalayer):
-                if not isinstance(entry, dict):
-                    continue
-                if normalize_event_name(entry.get("event")) == "videointeraction":
-                    matched_video_event = build_synthetic_ga4_event_from_datalayer(entry)
-                    break
-        if matched_video_event:
-            break
-        remaining = max(0.0, deadline - time.time())
-        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
-        time.sleep(0.12)
-
-    if not opened_dom_state:
-        opened_dom_state = capture_video_dom_diagnostics(driver)
-
-    preload_datalayer = reconstruct_datalayer_from_preload(preload_state)
+    preload_datalayer = current_datalayer
     compact_video_datalayer = []
     if isinstance(preload_datalayer, list):
         compact_video_datalayer = [
@@ -3364,18 +3308,15 @@ def audit_video_interaction_url(
             and normalize_event_name(item.get("event")) == "videointeraction"
         ][-3:]
     result["all_datalayer_json"] = safe_json(sanitize_for_json(compact_video_datalayer))
-    final_dom_state = dict(
-        opened_dom_state if "opened_dom_state" in locals() and isinstance(opened_dom_state, dict) else initial_dom_state
-    )
-    if matched_video_event:
-        playback_state = capture_video_playback_state(driver)
-        if isinstance(playback_state, dict):
-            if playback_state.get("videos"):
-                final_dom_state["videos"] = playback_state.get("videos")
-            if playback_state.get("viewportHeight"):
-                final_dom_state["viewportHeight"] = playback_state.get("viewportHeight")
-            if playback_state.get("error"):
-                final_dom_state["playbackError"] = playback_state.get("error")
+    final_dom_state = dict(opened_dom_state if isinstance(opened_dom_state, dict) else initial_dom_state)
+    playback_state = capture_video_playback_state(driver)
+    if isinstance(playback_state, dict):
+        if playback_state.get("videos"):
+            final_dom_state["videos"] = playback_state.get("videos")
+        if playback_state.get("viewportHeight"):
+            final_dom_state["viewportHeight"] = playback_state.get("viewportHeight")
+        if playback_state.get("error"):
+            final_dom_state["playbackError"] = playback_state.get("error")
     inferred_video_params = _build_inferred_video_event_params(final_dom_state, debug_steps)
     if matched_video_event and inferred_video_params:
         params = matched_video_event.setdefault("params", {})
