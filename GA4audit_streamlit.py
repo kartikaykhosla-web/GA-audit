@@ -921,6 +921,14 @@ def get_neon_database_url() -> str:
                 st.secrets.get("POSTGRES_URL"),
             ]
         )
+        neon_secret = st.secrets.get("neon")
+        if isinstance(neon_secret, dict):
+            candidates.extend(
+                [
+                    neon_secret.get("database_url"),
+                    neon_secret.get("url"),
+                ]
+            )
     except Exception:
         pass
     for candidate in candidates:
