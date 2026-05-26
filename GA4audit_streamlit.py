@@ -908,6 +908,25 @@ def capture_video_event(url: str, headless: bool = True) -> Dict[str, Any]:
 
 
 def get_neon_database_url() -> str:
+    def read_secret_value(container: Any, key: str) -> Any:
+        if container is None:
+            return None
+        if hasattr(container, "get"):
+            try:
+                value = container.get(key)
+                if value is not None:
+                    return value
+            except Exception:
+                pass
+        try:
+            return container[key]
+        except Exception:
+            pass
+        try:
+            return getattr(container, key)
+        except Exception:
+            return None
+
     candidates = [
         os.environ.get("NEON_DATABASE_URL"),
         os.environ.get("DATABASE_URL"),
@@ -921,12 +940,13 @@ def get_neon_database_url() -> str:
                 st.secrets.get("POSTGRES_URL"),
             ]
         )
-        neon_secret = st.secrets.get("neon")
-        if isinstance(neon_secret, dict):
+        for section_name in ("neon", "db", "database"):
+            section = read_secret_value(st.secrets, section_name)
             candidates.extend(
                 [
-                    neon_secret.get("database_url"),
-                    neon_secret.get("url"),
+                    read_secret_value(section, "database_url"),
+                    read_secret_value(section, "url"),
+                    read_secret_value(section, "connection_string"),
                 ]
             )
     except Exception:
