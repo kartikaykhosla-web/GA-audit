@@ -1204,9 +1204,12 @@ def extract_video_preload_state(driver) -> Dict[str, Any]:
                 });
                 const dataLayerPushes = (state.dataLayerPushes || []).filter(function(pushEntry) {
                     const entry = pushEntry && typeof pushEntry.entry === "object" ? pushEntry.entry : null;
+                    const commandName = entry && (entry["0"] ?? entry[0]) || "";
+                    const gtagEventName = entry && (entry["1"] ?? entry[1]) || "";
                     const eventName = String(
                         (pushEntry && pushEntry.event) ||
                         (entry && entry.event) ||
+                        (String(commandName).toLowerCase() === "event" ? gtagEventName : "") ||
                         ""
                     ).toLowerCase().replace(/_/g, "");
                     return eventName === "videointeraction";
@@ -1214,8 +1217,11 @@ def extract_video_preload_state(driver) -> Dict[str, Any]:
                     const entry = pushEntry && typeof pushEntry.entry === "object"
                         ? JSON.parse(JSON.stringify(pushEntry.entry))
                         : null;
+                    const commandName = entry && (entry["0"] ?? entry[0]) || "";
+                    const gtagEventName = entry && (entry["1"] ?? entry[1]) || "";
                     return {
-                        event: pushEntry && pushEntry.event || "",
+                        event: (pushEntry && pushEntry.event) ||
+                            (String(commandName).toLowerCase() === "event" ? String(gtagEventName || "") : ""),
                         entry: entry
                     };
                 });
@@ -1247,6 +1253,16 @@ def reconstruct_datalayer_from_preload(preload_state: Dict[str, Any]) -> List[Di
 
         full_entry = push_entry.get("entry")
         if isinstance(full_entry, dict):
+            command_name = str(full_entry.get("0") or full_entry.get(0) or "").strip().lower()
+            gtag_event_name = str(full_entry.get("1") or full_entry.get(1) or "").strip()
+            gtag_params = full_entry.get("2") or full_entry.get(2)
+            if command_name == "event" and gtag_event_name:
+                normalized_entry = {"event": gtag_event_name}
+                if isinstance(gtag_params, dict):
+                    for key, value in gtag_params.items():
+                        normalized_entry[str(key)] = value
+                reconstructed.append(normalized_entry)
+                continue
             reconstructed.append(full_entry)
             continue
 
@@ -8175,12 +8191,24 @@ def build_synthetic_ga4_event_from_datalayer(entry: dict) -> Optional[dict]:
         return None
     event_name = str(entry.get("event") or "").strip()
     if not event_name:
+        command_name = str(entry.get("0") or entry.get(0) or "").strip().lower()
+        if command_name == "event":
+            event_name = str(entry.get("1") or entry.get(1) or "").strip()
+    if not event_name:
         return None
-    params = {
-        str(key): value
-        for key, value in entry.items()
-        if str(key) not in {"event"} and not str(key).startswith("gtm")
-    }
+    gtag_params = entry.get("2") or entry.get(2)
+    if isinstance(gtag_params, dict):
+        params = {
+            str(key): value
+            for key, value in gtag_params.items()
+            if not str(key).startswith("gtm")
+        }
+    else:
+        params = {
+            str(key): value
+            for key, value in entry.items()
+            if str(key) not in {"event", "0", "1", "2"} and not str(key).startswith("gtm")
+        }
     return {
         "event_name": event_name,
         "params": params,
