@@ -1317,6 +1317,70 @@ def normalize_transport_hits(preload_state: Dict[str, Any]) -> Tuple[List[Dict[s
     return hits, events
 
 
+def normalize_video_capture_matches(preload_state: Dict[str, Any]) -> Dict[str, Any]:
+    gtag_video_events: List[Dict[str, Any]] = []
+    for event in normalize_gtag_calls(preload_state.get("gtagCalls", []) or []):
+        if canonical_event_name(event.get("event_name")) == "videointeraction":
+            gtag_video_events.append(event)
+
+    data_layer_video_events: List[Dict[str, Any]] = []
+    for push_entry in preload_state.get("dataLayerPushes", []) or []:
+        if not isinstance(push_entry, dict):
+            continue
+
+        entry = push_entry.get("entry")
+        if isinstance(entry, dict):
+            if normalize_event_name(entry.get("event")) == "videointeraction":
+                data_layer_video_events.append(dict(entry))
+                continue
+
+            command_name = str(entry.get("0") or entry.get(0) or "").strip().lower()
+            gtag_event_name = str(entry.get("1") or entry.get(1) or "").strip()
+            gtag_params = entry.get("2") or entry.get(2)
+            if command_name == "event" and canonical_event_name(gtag_event_name) == "videointeraction":
+                normalized_entry = {"event": gtag_event_name}
+                if isinstance(gtag_params, dict):
+                    normalized_entry.update(gtag_params)
+                data_layer_video_events.append(normalized_entry)
+            continue
+
+        if isinstance(entry, list) and len(entry) >= 2:
+            command_name = str(entry[0] or "").strip().lower()
+            gtag_event_name = str(entry[1] or "").strip()
+            gtag_params = entry[2] if len(entry) > 2 and isinstance(entry[2], dict) else {}
+            if command_name == "event" and canonical_event_name(gtag_event_name) == "videointeraction":
+                data_layer_video_events.append({"event": gtag_event_name, **gtag_params})
+
+    normalized_transport_hits: List[Dict[str, Any]] = []
+    transport_video_events: List[Dict[str, Any]] = []
+    for hit in preload_state.get("transportHits", []) or []:
+        if not isinstance(hit, dict):
+            continue
+        url = str(hit.get("url") or "")
+        body_text = _truncate_text(str(hit.get("bodyText") or ""))
+        decoded_events = decode_ga4_collect_request(url, body_text)
+        normalized_hit = {
+            "transport": hit.get("api"),
+            "request_url": url,
+            "method": hit.get("method") or "GET",
+            "request_body": body_text,
+            "timestamp": hit.get("timestamp"),
+            "decoded_events": decoded_events,
+        }
+        normalized_transport_hits.append(normalized_hit)
+        for event in decoded_events:
+            if canonical_event_name(event.get("event_name")) == "videointeraction":
+                transport_video_events.append(event)
+
+    return {
+        "gtag_video_events": gtag_video_events,
+        "data_layer_video_events": data_layer_video_events,
+        "transport_video_events": transport_video_events,
+        "normalized_transport_hits": normalized_transport_hits,
+        "raw_state": preload_state,
+    }
+
+
 def _is_comscore_hit(url: str) -> bool:
     parsed = urlparse(str(url or ""))
     host = parsed.netloc.lower().split(":", 1)[0]
@@ -3137,7 +3201,6 @@ def audit_video_interaction_url(
         "issues": "",
     }
     debug_steps: List[Dict[str, Any]] = []
-    page_domain = urlparse(url).netloc
 
     def report_step(message: str, progress_value: Optional[float] = None):
         if callable(step_reporter):
@@ -3157,6 +3220,13 @@ def audit_video_interaction_url(
             "error": preload_error,
         }
     )
+    if not preload_ok:
+        result["capture_failed"] = True
+        result["capture_failure_reason"] = preload_error or "Failed to install preload instrumentation."
+        result["status"] = "FAIL"
+        result["issues"] = result["capture_failure_reason"]
+        result["video_debug_steps_json"] = safe_json(debug_steps)
+        return result
 
     report_step("Loading article page...", 0.12)
     try:
@@ -3206,25 +3276,25 @@ def audit_video_interaction_url(
     except Exception:
         pass
 
+    time.sleep(1.0)
     report_step("Inspecting video placements...", 0.34)
     initial_dom_state = capture_video_dom_diagnostics(driver)
-    time.sleep(1.0)
 
     report_step("Clicking initial video surface...", 0.42)
     clicked_initial = _click_article_hero_video_in_current_context(driver)
     time.sleep(0.8)
 
-    report_step("Clicking player controls...", 0.58)
+    report_step("Clicking player controls...", 0.52)
     clicked_controls = _click_video_controls_in_current_context(driver)
     if clicked_controls:
         time.sleep(0.8)
 
-    report_step("Resetting visible video...", 0.66)
+    report_step("Resetting visible video...", 0.60)
     reset_visible = _reset_visible_videos_in_current_context(driver)
     if reset_visible:
         time.sleep(0.3)
 
-    report_step("Clicking player controls again...", 0.72)
+    report_step("Clicking player controls again...", 0.68)
     clicked_controls_after_reset = _click_video_controls_in_current_context(driver)
     if clicked_controls_after_reset:
         time.sleep(0.3)
@@ -3249,7 +3319,7 @@ def audit_video_interaction_url(
             "step": "video_probe",
             "scroll_percent": 0,
             "clicked_initial": bool(clicked_initial),
-            "clicked_opened_surface": False,
+            "clicked_opened_surface": bool(clicked_initial),
             "clicked_play_controls": bool(clicked_controls or clicked_controls_after_reset),
             "played_visible_videos": False,
             "has_opened_iframe": False,
@@ -3259,79 +3329,92 @@ def audit_video_interaction_url(
         }
     )
 
-    deadline = time.time() + min(12, max(6, int(timeout_seconds or 8)))
+    deadline = time.time() + min(20, max(8, int(timeout_seconds or 8)))
     preload_state: Dict[str, Any] = {}
-    execution_hits: List[Dict[str, Any]] = []
     execution_events: List[Dict[str, Any]] = []
-    matched_video_event = None
-    current_datalayer: List[Dict[str, Any]] = []
+    execution_hits: List[Dict[str, Any]] = []
+    matched_video_event: Optional[Dict[str, Any]] = None
+    matched_capture_layer = ""
+    matched_state: Dict[str, Any] = {}
+    matched_normalized: Dict[str, Any] = {}
 
-    report_step("Polling for video_interaction event...", 0.84)
+    report_step("Polling for video_interaction event...", 0.78)
     while time.time() < deadline:
-        preload_state = extract_video_preload_state(driver)
-        execution_hits, transport_events = normalize_transport_hits(preload_state)
-        gtag_events = normalize_gtag_calls(preload_state.get("gtagCalls", []) or [])
-        current_datalayer = reconstruct_datalayer_from_preload(preload_state)
-        execution_events = list(gtag_events)
+        preload_state = extract_preload_state(driver)
+        normalized_matches = normalize_video_capture_matches(preload_state)
+        execution_hits = normalized_matches.get("normalized_transport_hits", []) or []
+        execution_events = list(normalized_matches.get("gtag_video_events", []) or [])
 
-        matched_video_event = find_event_by_name(gtag_events, "video_interaction")
-        if not matched_video_event:
-            for entry in reversed(current_datalayer):
-                if not isinstance(entry, dict):
-                    continue
-                if normalize_event_name(entry.get("event")) == "videointeraction":
-                    matched_video_event = build_synthetic_ga4_event_from_datalayer(entry)
-                    break
-        if not matched_video_event:
-            matched_video_event = find_event_by_name(transport_events, "video_interaction")
+        data_layer_events = normalized_matches.get("data_layer_video_events", []) or []
+        gtag_events = normalized_matches.get("gtag_video_events", []) or []
+        transport_events = normalized_matches.get("transport_video_events", []) or []
+
+        if data_layer_events:
+            matched_capture_layer = "dataLayer"
+            matched_state = preload_state
+            matched_normalized = normalized_matches
+            matched_video_event = build_synthetic_ga4_event_from_datalayer(data_layer_events[-1])
+        elif gtag_events:
+            matched_capture_layer = "Execution"
+            matched_state = preload_state
+            matched_normalized = normalized_matches
+            matched_video_event = dict(gtag_events[-1])
+        elif transport_events:
+            matched_capture_layer = "Network"
+            matched_state = preload_state
+            matched_normalized = normalized_matches
+            matched_video_event = dict(transport_events[-1])
 
         if matched_video_event:
-            if matched_video_event not in execution_events:
-                execution_events.append(matched_video_event)
             break
 
         remaining = max(0.0, deadline - time.time())
-        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.88)
-        time.sleep(0.5)
+        report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.84)
+        time.sleep(1.0)
 
-    performance_hits: List[Dict[str, Any]] = []
-    performance_events: List[Dict[str, Any]] = []
-    performance_match_source = ""
+    if not matched_state:
+        matched_state = preload_state
+    if not matched_normalized:
+        matched_normalized = normalize_video_capture_matches(matched_state)
+        execution_hits = matched_normalized.get("normalized_transport_hits", []) or []
+        execution_events = list(matched_normalized.get("gtag_video_events", []) or [])
 
-    preload_datalayer = current_datalayer
-    compact_video_datalayer = []
-    if isinstance(preload_datalayer, list):
-        compact_video_datalayer = [
-            item
-            for item in preload_datalayer
-            if isinstance(item, dict)
-            and normalize_event_name(item.get("event")) == "videointeraction"
-        ][-3:]
-    result["all_datalayer_json"] = safe_json(sanitize_for_json(compact_video_datalayer))
-    final_dom_state = dict(opened_dom_state if isinstance(opened_dom_state, dict) else initial_dom_state)
+    data_layer_video_events = matched_normalized.get("data_layer_video_events", []) or []
+    transport_video_events = matched_normalized.get("transport_video_events", []) or []
+    if not matched_video_event and data_layer_video_events:
+        matched_capture_layer = "dataLayer"
+        matched_video_event = build_synthetic_ga4_event_from_datalayer(data_layer_video_events[-1])
+    if not matched_video_event and execution_events:
+        matched_capture_layer = "Execution"
+        matched_video_event = dict(execution_events[-1])
+    if not matched_video_event and transport_video_events:
+        matched_capture_layer = "Network"
+        matched_video_event = dict(transport_video_events[-1])
+
+    final_dom_state = capture_video_dom_diagnostics(driver)
     playback_state = capture_video_playback_state(driver)
-    if isinstance(playback_state, dict):
+    if isinstance(final_dom_state, dict) and isinstance(playback_state, dict):
         if playback_state.get("videos"):
             final_dom_state["videos"] = playback_state.get("videos")
         if playback_state.get("viewportHeight"):
             final_dom_state["viewportHeight"] = playback_state.get("viewportHeight")
         if playback_state.get("error"):
             final_dom_state["playbackError"] = playback_state.get("error")
-    inferred_video_params = _build_inferred_video_event_params(final_dom_state, debug_steps)
-    if matched_video_event and inferred_video_params:
-        params = matched_video_event.setdefault("params", {})
-        if isinstance(params, dict):
-            for key, value in inferred_video_params.items():
-                if params.get(key) in (None, "") and value not in (None, ""):
-                    params[key] = value
+
+    compact_video_datalayer = [
+        event
+        for event in data_layer_video_events[-3:]
+        if isinstance(event, dict)
+    ]
+    result["all_datalayer_json"] = safe_json(sanitize_for_json(compact_video_datalayer))
     result["ga4_execution_hits_json"] = safe_json(execution_hits)
     result["ga4_execution_events_json"] = safe_json(execution_events)
-    result["ga4_network_hits_json"] = safe_json(performance_hits)
-    result["ga4_network_events_json"] = safe_json(performance_events)
+    result["ga4_network_hits_json"] = safe_json(execution_hits)
+    result["ga4_network_events_json"] = safe_json(transport_video_events)
     result["video_dom_state_json"] = safe_json(
         {
             "initial": initial_dom_state,
-            "after_open_attempt": opened_dom_state if 'opened_dom_state' in locals() else {},
+            "after_open_attempt": final_dom_state,
             "final": final_dom_state,
         }
     )
@@ -3340,8 +3423,8 @@ def audit_video_interaction_url(
         {
             "step": "poll_for_video_interaction",
             "matched_video_event": bool(matched_video_event),
-            "performance_match_source": performance_match_source,
-            "performance_hit_count": len(performance_hits),
+            "performance_match_source": matched_capture_layer,
+            "performance_hit_count": len(execution_hits),
             "execution_event_names": sorted(
                 {
                     str(event.get("event_name") or "")
@@ -3352,7 +3435,7 @@ def audit_video_interaction_url(
             "performance_event_names": sorted(
                 {
                     str(event.get("event_name") or "")
-                    for event in performance_events
+                    for event in transport_video_events
                     if str(event.get("event_name") or "").strip()
                 }
             ),
@@ -3362,7 +3445,10 @@ def audit_video_interaction_url(
 
     report_step("Finalizing video capture result...", 0.96)
     if matched_video_event:
-        result["pageview_event_json"] = safe_json(snapshot_trigger_payload_from_event(matched_video_event))
+        trigger_payload = snapshot_trigger_payload_from_event(matched_video_event)
+        if matched_capture_layer == "dataLayer" and data_layer_video_events:
+            trigger_payload = dict(data_layer_video_events[-1])
+        result["pageview_event_json"] = safe_json(trigger_payload)
         result["status"] = "PASS"
         result["issues"] = ""
     else:
