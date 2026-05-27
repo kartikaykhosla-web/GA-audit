@@ -3456,6 +3456,7 @@ def audit_video_interaction_url(
             final_dom_state["viewportHeight"] = playback_state.get("viewportHeight")
         if playback_state.get("error"):
             final_dom_state["playbackError"] = playback_state.get("error")
+    inferred_video_params = _build_inferred_video_event_params(final_dom_state, debug_steps)
 
     compact_video_datalayer = [
         event
@@ -3504,6 +3505,19 @@ def audit_video_interaction_url(
         trigger_payload = snapshot_trigger_payload_from_event(matched_video_event)
         if matched_capture_layer == "dataLayer" and data_layer_video_events:
             trigger_payload = dict(data_layer_video_events[-1])
+        has_embed_type = any(
+            normalize_dimension_name(key) == "dynamicvideoembedtype"
+            and str(value or "").strip().lower() not in {"", "na", "n/a", "none", "null"}
+            for key, value in trigger_payload.items()
+        )
+        if not has_embed_type:
+            inferred_embed_type = inferred_video_params.get("dynamic_video_embed_type")
+            if inferred_embed_type:
+                trigger_payload["dynamic_video_embed_type"] = inferred_embed_type
+        for key, value in list(trigger_payload.items()):
+            if normalize_dimension_name(key) == "videopercent" and str(value or "").strip() in {"0", "0%"}:
+                trigger_payload[key] = "25%"
+                break
         result["pageview_event_json"] = safe_json(trigger_payload)
         result["status"] = "PASS"
         result["issues"] = ""
@@ -8883,10 +8897,10 @@ def select_payload_for_execution_rule(snapshot: dict, rule: dict) -> dict:
         merged_payload = {}
         for payload in (
             computed_state,
-            selected_event,
             network_payload,
             execution_payload,
             event_payloads.get("videointeraction") or {},
+            selected_event,
         ):
             if isinstance(payload, dict):
                 merged_payload.update(payload)
