@@ -2671,6 +2671,47 @@ def _click_video_controls_in_current_context(driver) -> bool:
         return False
 
 
+def _click_video_controls_quick_in_current_context(driver) -> bool:
+    try:
+        return bool(
+            driver.execute_script(
+                """
+                const selectors = [
+                  ".video-player-container [aria-label*='play' i]",
+                  ".VideoSwiper_videoContainer [aria-label*='play' i]",
+                  ".video-player-container [class*='play' i]",
+                  ".VideoSwiper_videoContainer [class*='play' i]",
+                  ".video-player-container [role='button']",
+                  ".VideoSwiper_videoContainer [role='button']",
+                  ".video-player-container button",
+                  ".VideoSwiper_videoContainer button"
+                ];
+                const visible = (element) => {
+                  if (!element) return false;
+                  const rect = element.getBoundingClientRect();
+                  return !!(rect.width && rect.height);
+                };
+                for (const selector of selectors) {
+                  const elements = Array.from(document.querySelectorAll(selector));
+                  for (const element of elements) {
+                    if (!visible(element)) continue;
+                    try {
+                      element.scrollIntoView({ block: "center", inline: "center" });
+                    } catch (e) {}
+                    try {
+                      element.click();
+                      return true;
+                    } catch (e) {}
+                  }
+                }
+                return false;
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
 def _click_video_text_targets_in_current_context(driver) -> bool:
     xpath_candidates = [
         "//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'view this video also')]",
@@ -3295,7 +3336,7 @@ def audit_video_interaction_url(
         time.sleep(0.3)
 
     report_step("Clicking player controls again...", 0.68)
-    clicked_controls_after_reset = _click_video_controls_in_current_context(driver)
+    clicked_controls_after_reset = _click_video_controls_quick_in_current_context(driver)
     if clicked_controls_after_reset:
         time.sleep(0.3)
     else:
