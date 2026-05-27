@@ -3483,7 +3483,7 @@ def audit_video_interaction_url(
             matched_normalized = normalized_matches
             matched_video_event = dict(selected_transport_event)
 
-        if matched_video_event and _video_event_percent_value(matched_video_event) == "25%":
+        if matched_video_event:
             break
 
         remaining = max(0.0, deadline - time.time())
@@ -11435,7 +11435,7 @@ This capture is split into three layers:
                     video_capture_result = audit_video_interaction_url(
                         driver,
                         normalized_url,
-                        timeout_seconds=20,
+                        timeout_seconds=6,
                         step_reporter=report_video_step,
                     )
                     video_progress.progress(0.8)
