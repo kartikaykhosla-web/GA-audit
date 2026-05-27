@@ -2997,6 +2997,31 @@ def seek_video_progress(driver, target_percent: float = 26.0) -> bool:
     return updated
 
 
+def accelerate_visible_video_playback(driver) -> bool:
+    try:
+        accelerated = driver.execute_script(
+            """
+            const videos = Array.from(document.querySelectorAll("video"));
+            let updated = false;
+            videos.forEach((video) => {
+              const rect = video.getBoundingClientRect();
+              if (!rect.width || !rect.height) return;
+              try {
+                video.muted = true;
+                video.defaultMuted = true;
+                video.playsInline = true;
+                video.playbackRate = Math.max(Number(video.playbackRate || 1), 8);
+                updated = true;
+              } catch (e) {}
+            });
+            return updated;
+            """
+        )
+        return bool(accelerated)
+    except Exception:
+        return False
+
+
 def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
     try:
         diagnostics = driver.execute_script(
@@ -3421,8 +3446,8 @@ def audit_video_interaction_url(
         if played_visible:
             time.sleep(0.1)
 
-    report_step("Advancing video to 25% milestone...", 0.74)
-    seeked_to_25 = seek_video_progress(driver, target_percent=26.0)
+    report_step("Preparing video for 25% milestone capture...", 0.74)
+    seeked_to_25 = accelerate_visible_video_playback(driver)
     if seeked_to_25:
         time.sleep(0.8)
 
