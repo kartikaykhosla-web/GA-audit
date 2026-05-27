@@ -3317,28 +3317,28 @@ def audit_video_interaction_url(
     except Exception:
         pass
 
-    time.sleep(1.0)
+    time.sleep(0.5)
     report_step("Inspecting video placements...", 0.34)
     initial_dom_state = capture_video_dom_diagnostics(driver)
 
     report_step("Clicking initial video surface...", 0.42)
     clicked_initial = _click_article_hero_video_in_current_context(driver)
-    time.sleep(0.8)
+    time.sleep(0.45)
 
     report_step("Clicking player controls...", 0.52)
     clicked_controls = _click_video_controls_in_current_context(driver)
     if clicked_controls:
-        time.sleep(0.8)
+        time.sleep(0.45)
 
     report_step("Resetting visible video...", 0.60)
     reset_visible = _reset_visible_videos_in_current_context(driver)
     if reset_visible:
-        time.sleep(0.3)
+        time.sleep(0.15)
 
     report_step("Clicking player controls again...", 0.68)
     clicked_controls_after_reset = _click_video_controls_quick_in_current_context(driver)
     if clicked_controls_after_reset:
-        time.sleep(0.3)
+        time.sleep(0.15)
     else:
         try:
             played_visible = driver.execute_script(
@@ -3385,7 +3385,7 @@ def audit_video_interaction_url(
         }
     )
 
-    deadline = time.time() + min(20, max(8, int(timeout_seconds or 8)))
+    deadline = time.time() + min(8, max(4, int(timeout_seconds or 4)))
     preload_state: Dict[str, Any] = {}
     execution_events: List[Dict[str, Any]] = []
     execution_hits: List[Dict[str, Any]] = []
@@ -3426,7 +3426,7 @@ def audit_video_interaction_url(
 
         remaining = max(0.0, deadline - time.time())
         report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.84)
-        time.sleep(1.0)
+        time.sleep(0.5)
 
     if not matched_state:
         matched_state = preload_state
@@ -11372,7 +11372,7 @@ This capture is split into three layers:
                     headless=True,
                     performance_logs=False,
                     capture_network=False,
-                    page_load_timeout=20,
+                    page_load_timeout=10,
                 )
                 try:
                     driver.set_script_timeout(5)
