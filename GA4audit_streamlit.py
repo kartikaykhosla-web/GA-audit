@@ -1078,7 +1078,8 @@ GA4_PRELOAD_SCRIPT = r"""
                 });
             }
         }
-
+    } catch (error) {}
+})();
 """
 
 
