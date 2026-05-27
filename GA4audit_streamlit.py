@@ -1352,6 +1352,15 @@ def normalize_video_capture_matches(preload_state: Dict[str, Any]) -> Dict[str, 
             if command_name == "event" and canonical_event_name(gtag_event_name) == "videointeraction":
                 data_layer_video_events.append({"event": gtag_event_name, **gtag_params})
 
+    for event in data_layer_video_events:
+        if not isinstance(event, dict) or event.get("dynamic_video_embed_type"):
+            continue
+        section_name = str(event.get("section_name") or "").strip().lower()
+        if section_name == "view this video also":
+            event["dynamic_video_embed_type"] = "view this video also"
+        elif section_name == "featured video":
+            event["dynamic_video_embed_type"] = "in-house video"
+
     normalized_transport_hits: List[Dict[str, Any]] = []
     transport_video_events: List[Dict[str, Any]] = []
     for hit in preload_state.get("transportHits", []) or []:
@@ -2338,17 +2347,34 @@ ARTICLE_HERO_VIDEO_SELECTORS = [
     ".ArticleDetail_relatedvideo__wvgRP i.videoImage",
     ".ArticleDetail_relatedvideo__wvgRP [class*='play' i]",
     ".ArticleDetail_relatedvideo__wvgRP [role='button']",
+    ".ArticleDetail_relatedvideo__wvgRP media-theme-sutro",
+    ".ArticleDetail_relatedvideo__wvgRP youtube-video",
+    ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
     ".loop-div .point1",
     ".loop-div .point2",
     ".loop-container",
     ".relatedvideo img",
     ".relatedvideo .article",
     ".relatedvideo a",
+    ".relatedvideo media-theme-sutro",
+    ".relatedvideo youtube-video",
+    ".relatedvideo .video-player-container",
     "img[alt='video thumbnail']",
     "a[href*='/videos/' i]",
     "i.videoImage",
     ".Short_wrapper_fixed",
     ".ArticleDetail_relatedvideo__wvgRP",
+]
+
+ARTICLE_RELATED_VIDEO_SELECTORS = [
+    ".ArticleDetail_relatedvideo__wvgRP media-theme-sutro",
+    ".ArticleDetail_relatedvideo__wvgRP youtube-video",
+    ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
+    ".ArticleDetail_relatedvideo__wvgRP",
+    ".relatedvideo media-theme-sutro",
+    ".relatedvideo youtube-video",
+    ".relatedvideo .video-player-container",
+    ".relatedvideo",
 ]
 
 OPENED_VIDEO_SURFACE_SELECTORS = [
@@ -2449,6 +2475,8 @@ def _play_visible_videos_in_current_context(driver) -> bool:
             elements.forEach((video) => {
               const rect = video.getBoundingClientRect();
               if (!rect.width || !rect.height) return;
+              const src = String(video.currentSrc || video.src || "");
+              if (src.includes("vdo.ai") || src.includes("h5.vdo.ai")) return;
               try {
                 video.muted = true;
                 video.defaultMuted = true;
@@ -2476,6 +2504,8 @@ def _capture_primary_visible_video_state(driver) -> Dict[str, Any]:
             for (const video of videos) {
               const rect = video.getBoundingClientRect();
               if (!rect.width || !rect.height) continue;
+              const src = String(video.currentSrc || video.src || "");
+              if (src.includes("vdo.ai") || src.includes("h5.vdo.ai")) continue;
               return {
                 paused: !!video.paused,
                 currentTime: Number(video.currentTime || 0),
@@ -2483,6 +2513,7 @@ def _capture_primary_visible_video_state(driver) -> Dict[str, Any]:
                 readyState: Number(video.readyState || 0),
                 width: Number(rect.width || 0),
                 height: Number(rect.height || 0),
+                src: src,
               };
             }
             return {};
@@ -2712,6 +2743,75 @@ def _click_video_controls_quick_in_current_context(driver) -> bool:
         return False
 
 
+def _scroll_to_related_video_embed(driver) -> bool:
+    try:
+        for _ in range(8):
+            found = driver.execute_script(
+                """
+                const selectors = arguments[0];
+                for (const selector of selectors) {
+                  const element = document.querySelector(selector);
+                  if (!element) continue;
+                  try {
+                    element.scrollIntoView({ block: "center", inline: "center" });
+                  } catch (e) {}
+                  return true;
+                }
+                window.scrollBy(0, Math.max(600, Number(window.innerHeight || 0) * 0.75));
+                return false;
+                """,
+                ARTICLE_RELATED_VIDEO_SELECTORS,
+            )
+            time.sleep(0.25)
+            if found:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _click_related_video_embed(driver) -> bool:
+    try:
+        clicked = driver.execute_script(
+            """
+            const selectors = arguments[0];
+            const visible = (element) => {
+              if (!element) return false;
+              const rect = element.getBoundingClientRect();
+              return !!(rect.width && rect.height);
+            };
+            for (const selector of selectors) {
+              const elements = Array.from(document.querySelectorAll(selector));
+              for (const element of elements) {
+                if (!visible(element)) continue;
+                try {
+                  element.scrollIntoView({ block: "center", inline: "center" });
+                } catch (e) {}
+                const targets = [
+                  element.shadowRoot && element.shadowRoot.querySelector("button, [role='button'], video, iframe"),
+                  element.querySelector && element.querySelector("button, [role='button'], video, iframe"),
+                  element
+                ].filter(Boolean);
+                for (const target of targets) {
+                  try {
+                    target.click();
+                    return true;
+                  } catch (e) {}
+                }
+              }
+            }
+            return false;
+            """,
+            ARTICLE_RELATED_VIDEO_SELECTORS,
+        )
+        if clicked:
+            time.sleep(0.12)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _click_video_text_targets_in_current_context(driver) -> bool:
     xpath_candidates = [
         "//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'view this video also')]",
@@ -2908,6 +3008,8 @@ def _seek_visible_videos_in_current_context(driver, target_percent: float = 26.0
             videos.forEach((video) => {
               const rect = video.getBoundingClientRect();
               if (!rect.width || !rect.height) return;
+              const src = String(video.currentSrc || video.src || "");
+              if (src.includes("vdo.ai") || src.includes("h5.vdo.ai")) return;
               const duration = Number(video.duration || 0);
               if (!Number.isFinite(duration) || duration <= 1) return;
               const targetTime = Math.max(0.1, Math.min(duration - 0.25, duration * targetPercent / 100));
@@ -2976,6 +3078,8 @@ def _reset_visible_videos_in_current_context(driver) -> bool:
             document.querySelectorAll("video").forEach((video) => {
               const rect = video.getBoundingClientRect();
               if (!rect.width || !rect.height) return;
+              const src = String(video.currentSrc || video.src || "");
+              if (src.includes("vdo.ai") || src.includes("h5.vdo.ai")) return;
               try {
                 video.pause();
                 video.currentTime = 0;
@@ -3061,7 +3165,10 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
                 }),
               };
             });
-            output.videos = Array.from(document.querySelectorAll("video")).slice(0, 4).map((video, index) => {
+            output.videos = Array.from(document.querySelectorAll("video")).filter((video) => {
+              const src = String(video.currentSrc || video.src || "");
+              return !src.includes("vdo.ai") && !src.includes("h5.vdo.ai");
+            }).slice(0, 4).map((video, index) => {
               const rect = video.getBoundingClientRect();
               return {
                 index,
@@ -3077,6 +3184,20 @@ def capture_video_dom_diagnostics(driver) -> Dict[str, Any]:
                 src: String(video.currentSrc || video.src || ""),
               };
             });
+            const relatedEmbed = document.querySelector(
+              ".ArticleDetail_relatedvideo__wvgRP youtube-video, .relatedvideo youtube-video, " +
+              ".ArticleDetail_relatedvideo__wvgRP media-theme-sutro, .relatedvideo media-theme-sutro"
+            );
+            if (relatedEmbed) {
+              const rect = relatedEmbed.getBoundingClientRect();
+              output.relatedEmbed = {
+                visible: !!(rect.width && rect.height),
+                width: Number(rect.width || 0),
+                height: Number(rect.height || 0),
+                top: Number(rect.top || 0),
+                src: String(relatedEmbed.getAttribute("src") || "")
+              };
+            }
             return output;
             """
         )
@@ -3090,7 +3211,10 @@ def capture_video_playback_state(driver) -> Dict[str, Any]:
         playback_state = driver.execute_script(
             """
             const viewportHeight = Number(window.innerHeight || 0);
-            const videos = Array.from(document.querySelectorAll("video")).slice(0, 4).map((video, index) => {
+            const videos = Array.from(document.querySelectorAll("video")).filter((video) => {
+              const src = String(video.currentSrc || video.src || "");
+              return !src.includes("vdo.ai") && !src.includes("h5.vdo.ai");
+            }).slice(0, 4).map((video, index) => {
               const rect = video.getBoundingClientRect();
               return {
                 index,
@@ -3140,12 +3264,12 @@ def _build_inferred_video_event_params(dom_state: Dict[str, Any], debug_steps: L
     placement_b_visible = bool((selectors.get("placementBWrapper") or {}).get("visible"))
     opened_container_visible = bool((selectors.get("openedContainer") or {}).get("visible"))
 
-    if placement_a_visible or opened_container_visible:
-        inferred["dynamic_video_embed_type"] = "in-house video"
-        inferred.setdefault("section_name", "featured video")
-    elif placement_b_visible:
+    if placement_b_visible and not placement_a_visible:
         inferred["dynamic_video_embed_type"] = "view this video also"
         inferred.setdefault("section_name", "view this video also")
+    elif placement_a_visible or opened_container_visible:
+        inferred["dynamic_video_embed_type"] = "in-house video"
+        inferred.setdefault("section_name", "featured video")
 
     for step in debug_steps or []:
         if step.get("step") != "video_probe":
@@ -3385,7 +3509,9 @@ def audit_video_interaction_url(
         }
     )
 
-    deadline = time.time() + min(8, max(4, int(timeout_seconds or 4)))
+    primary_click_attempted = bool(clicked_initial or clicked_controls or clicked_controls_after_reset)
+    initial_poll_seconds = min(8, max(4, int(timeout_seconds or 4))) if primary_click_attempted else 2
+    deadline = time.time() + initial_poll_seconds
     preload_state: Dict[str, Any] = {}
     execution_events: List[Dict[str, Any]] = []
     execution_hits: List[Dict[str, Any]] = []
@@ -3427,6 +3553,61 @@ def audit_video_interaction_url(
         remaining = max(0.0, deadline - time.time())
         report_step(f"Polling for video_interaction event... {remaining:.1f}s left", 0.84)
         time.sleep(0.5)
+
+    if not matched_video_event:
+        report_step("Trying bottom related video embed...", 0.86)
+        related_found = _scroll_to_related_video_embed(driver)
+        time.sleep(0.25)
+        related_clicked_initial = _click_related_video_embed(driver)
+        time.sleep(0.45)
+        related_clicked_control = _click_related_video_embed(driver)
+        time.sleep(0.45)
+        _reset_visible_videos_in_current_context(driver)
+        time.sleep(0.12)
+        related_clicked_after_reset = _click_related_video_embed(driver)
+        debug_steps.append(
+            {
+                "step": "related_video_probe",
+                "related_found": bool(related_found),
+                "clicked_initial": bool(related_clicked_initial),
+                "clicked_control": bool(related_clicked_control),
+                "clicked_control_after_reset": bool(related_clicked_after_reset),
+            }
+        )
+
+        deadline = time.time() + min(8, max(4, int(timeout_seconds or 4)))
+        while time.time() < deadline:
+            preload_state = extract_preload_state(driver)
+            normalized_matches = normalize_video_capture_matches(preload_state)
+            execution_hits = normalized_matches.get("normalized_transport_hits", []) or []
+            execution_events = list(normalized_matches.get("gtag_video_events", []) or [])
+
+            data_layer_events = normalized_matches.get("data_layer_video_events", []) or []
+            gtag_events = normalized_matches.get("gtag_video_events", []) or []
+            transport_events = normalized_matches.get("transport_video_events", []) or []
+
+            if data_layer_events:
+                matched_capture_layer = "dataLayer"
+                matched_state = preload_state
+                matched_normalized = normalized_matches
+                matched_video_event = build_synthetic_ga4_event_from_datalayer(data_layer_events[-1])
+            elif gtag_events:
+                matched_capture_layer = "Execution"
+                matched_state = preload_state
+                matched_normalized = normalized_matches
+                matched_video_event = dict(gtag_events[-1])
+            elif transport_events:
+                matched_capture_layer = "Network"
+                matched_state = preload_state
+                matched_normalized = normalized_matches
+                matched_video_event = dict(transport_events[-1])
+
+            if matched_video_event:
+                break
+
+            remaining = max(0.0, deadline - time.time())
+            report_step(f"Polling related video_interaction event... {remaining:.1f}s left", 0.90)
+            time.sleep(0.5)
 
     if not matched_state:
         matched_state = preload_state
