@@ -8498,7 +8498,8 @@ def build_datalayer_snapshot_export(result: dict, target_event_name: Optional[st
     if target_event_key:
         matched_execution = find_event_by_name(execution_events, target_event_name)
         matched_network = find_event_by_name(network_events, target_event_name)
-        selected_event = snapshot_trigger_payload_from_event(matched_execution) or snapshot_trigger_payload_from_event(matched_network)
+        if not selected_event:
+            selected_event = snapshot_trigger_payload_from_event(matched_execution) or snapshot_trigger_payload_from_event(matched_network)
         if not selected_event and isinstance(data_layer, list):
             for item in reversed(data_layer):
                 if not isinstance(item, dict):
