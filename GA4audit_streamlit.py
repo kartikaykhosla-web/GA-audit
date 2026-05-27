@@ -3169,10 +3169,108 @@ def _build_inferred_video_event_params(dom_state: Dict[str, Any], debug_steps: L
             else:
                 fold_bucket = 100
             inferred["position_fold"] = str(fold_bucket)
-            inferred.setdefault("scroll_percent", f"{fold_bucket}%")
 
     inferred.setdefault("tvc_event_name", "video_interaction")
     return inferred
+
+
+def _video_event_percent_value(event: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(event, dict):
+        return ""
+
+    candidates: List[Any] = []
+    for container_key in ("params", "event_params", "raw_fields"):
+        container = event.get(container_key)
+        if isinstance(container, dict):
+            candidates.extend(
+                value
+                for key, value in container.items()
+                if normalize_dimension_name(key) == "videopercent"
+            )
+    candidates.extend(
+        value
+        for key, value in event.items()
+        if normalize_dimension_name(key) == "videopercent"
+    )
+
+    for value in candidates:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        if re.fullmatch(r"\d+(?:\.\d+)?", text):
+            text = f"{text}%"
+        return text
+    return ""
+
+
+def _event_has_normalized_field(event: Dict[str, Any], normalized_field: str) -> bool:
+    for key in event.keys():
+        if normalize_dimension_name(key) == normalized_field:
+            return True
+    for container_key in ("params", "event_params", "raw_fields"):
+        container = event.get(container_key)
+        if not isinstance(container, dict):
+            continue
+        if any(normalize_dimension_name(key) == normalized_field for key in container.keys()):
+            return True
+    return False
+
+
+def _copy_video_context_field(target: Dict[str, Any], source: Dict[str, Any], normalized_field: str) -> None:
+    if _event_has_normalized_field(target, normalized_field):
+        return
+
+    for key, value in source.items():
+        if normalize_dimension_name(key) == normalized_field and value not in (None, ""):
+            target[str(key)] = value
+            return
+
+    for container_key in ("params", "event_params", "raw_fields"):
+        source_container = source.get(container_key)
+        if not isinstance(source_container, dict):
+            continue
+        for key, value in source_container.items():
+            if normalize_dimension_name(key) != normalized_field or value in (None, ""):
+                continue
+            target_container = target.setdefault(container_key, {})
+            if isinstance(target_container, dict):
+                target_container[str(key)] = value
+            else:
+                target[str(key)] = value
+            return
+
+
+def _enrich_video_event_context(event: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    enriched = dict(event)
+    for container_key in ("params", "event_params", "raw_fields"):
+        if isinstance(event.get(container_key), dict):
+            enriched[container_key] = dict(event[container_key])
+
+    context_fields = (
+        "dynamicvideoembedtype",
+        "playertype",
+        "positionfold",
+        "sectionname",
+        "videoorientation",
+        "videoduration",
+        "videotitle",
+        "tvceventname",
+    )
+    for source in reversed(events or []):
+        if not isinstance(source, dict):
+            continue
+        for normalized_field in context_fields:
+            _copy_video_context_field(enriched, source, normalized_field)
+    return enriched
+
+
+def _select_video_event_for_validation(events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not events:
+        return None
+    for event in reversed(events):
+        if _video_event_percent_value(event) == "25%":
+            return _enrich_video_event_context(event, events)
+    return _enrich_video_event_context(events[-1], events)
 
 
 def audit_video_interaction_url(
@@ -3323,6 +3421,11 @@ def audit_video_interaction_url(
         if played_visible:
             time.sleep(0.1)
 
+    report_step("Advancing video to 25% milestone...", 0.74)
+    seeked_to_25 = seek_video_progress(driver, target_percent=26.0)
+    if seeked_to_25:
+        time.sleep(0.8)
+
     opened_dom_state = capture_video_dom_diagnostics(driver)
     video_state_after_open = capture_video_playback_state(driver)
     if isinstance(opened_dom_state, dict) and isinstance(video_state_after_open, dict):
@@ -3334,7 +3437,6 @@ def audit_video_interaction_url(
     debug_steps.append(
         {
             "step": "video_probe",
-            "scroll_percent": 0,
             "clicked_initial": bool(clicked_initial),
             "clicked_opened_surface": bool(clicked_initial),
             "clicked_play_controls": bool(clicked_controls or clicked_controls_after_reset),
@@ -3343,6 +3445,7 @@ def audit_video_interaction_url(
             "played_in_frame": False,
             "clicked_control": bool(clicked_controls),
             "clicked_control_after_reset": bool(clicked_controls_after_reset),
+            "seeked_to_25_percent": bool(seeked_to_25),
         }
     )
 
@@ -3366,23 +3469,27 @@ def audit_video_interaction_url(
         gtag_events = normalized_matches.get("gtag_video_events", []) or []
         transport_events = normalized_matches.get("transport_video_events", []) or []
 
-        if data_layer_events:
+        selected_data_layer_event = _select_video_event_for_validation(data_layer_events)
+        selected_gtag_event = _select_video_event_for_validation(gtag_events)
+        selected_transport_event = _select_video_event_for_validation(transport_events)
+
+        if selected_data_layer_event:
             matched_capture_layer = "dataLayer"
             matched_state = preload_state
             matched_normalized = normalized_matches
-            matched_video_event = build_synthetic_ga4_event_from_datalayer(data_layer_events[-1])
-        elif gtag_events:
+            matched_video_event = build_synthetic_ga4_event_from_datalayer(selected_data_layer_event)
+        elif selected_gtag_event:
             matched_capture_layer = "Execution"
             matched_state = preload_state
             matched_normalized = normalized_matches
-            matched_video_event = dict(gtag_events[-1])
-        elif transport_events:
+            matched_video_event = dict(selected_gtag_event)
+        elif selected_transport_event:
             matched_capture_layer = "Network"
             matched_state = preload_state
             matched_normalized = normalized_matches
-            matched_video_event = dict(transport_events[-1])
+            matched_video_event = dict(selected_transport_event)
 
-        if matched_video_event:
+        if matched_video_event and _video_event_percent_value(matched_video_event) == "25%":
             break
 
         remaining = max(0.0, deadline - time.time())
@@ -3398,15 +3505,18 @@ def audit_video_interaction_url(
 
     data_layer_video_events = matched_normalized.get("data_layer_video_events", []) or []
     transport_video_events = matched_normalized.get("transport_video_events", []) or []
-    if not matched_video_event and data_layer_video_events:
+    selected_data_layer_event = _select_video_event_for_validation(data_layer_video_events)
+    selected_execution_event = _select_video_event_for_validation(execution_events)
+    selected_transport_event = _select_video_event_for_validation(transport_video_events)
+    if selected_data_layer_event:
         matched_capture_layer = "dataLayer"
-        matched_video_event = build_synthetic_ga4_event_from_datalayer(data_layer_video_events[-1])
-    if not matched_video_event and execution_events:
+        matched_video_event = build_synthetic_ga4_event_from_datalayer(selected_data_layer_event)
+    elif selected_execution_event:
         matched_capture_layer = "Execution"
-        matched_video_event = dict(execution_events[-1])
-    if not matched_video_event and transport_video_events:
+        matched_video_event = dict(selected_execution_event)
+    elif selected_transport_event:
         matched_capture_layer = "Network"
-        matched_video_event = dict(transport_video_events[-1])
+        matched_video_event = dict(selected_transport_event)
 
     final_dom_state = capture_video_dom_diagnostics(driver)
     playback_state = capture_video_playback_state(driver)
@@ -3464,7 +3574,7 @@ def audit_video_interaction_url(
     if matched_video_event:
         trigger_payload = snapshot_trigger_payload_from_event(matched_video_event)
         if matched_capture_layer == "dataLayer" and data_layer_video_events:
-            trigger_payload = dict(data_layer_video_events[-1])
+            trigger_payload = dict(selected_data_layer_event or data_layer_video_events[-1])
         result["pageview_event_json"] = safe_json(trigger_payload)
         result["status"] = "PASS"
         result["issues"] = ""
@@ -6508,7 +6618,6 @@ def get_starter_template_seed(template: Optional[dict]) -> Optional[dict]:
 
 ARTICLE_DETAIL_BASE_VIDEO_FIELD_NORMALIZED = {
     "dynamicvideoembedtype",
-    "scrollpercent",
 }
 
 ARTICLE_DETAIL_SUPPLEMENTAL_RULES = [
@@ -6610,7 +6719,6 @@ VIDEO_INTERACTION_FIELD_NAMES = {
     "video_duration",
     "video_percent",
     "video_title",
-    "scroll_percent",
 }
 VIDEO_INTERACTION_FIELD_NORMALIZED = {
     "dynamicvideoembedtype",
@@ -6622,7 +6730,6 @@ VIDEO_INTERACTION_FIELD_NORMALIZED = {
     "videopercent",
     "videoduration",
     "videotitle",
-    "scrollpercent",
 }
 SCROLL_EVENT_FIELD_NORMALIZED = {
     "scrollpercent",
@@ -6664,14 +6771,6 @@ def build_default_article_detail_video_rules(template: Optional[dict]) -> List[d
             "field_name": "position_fold",
             "rule_type": "one_of",
             "expected_values": "25|50|75|100",
-        },
-        {
-            "rule_id": f"{base_rule_id}_scroll_percent",
-            "template_id": template_id,
-            "rule_scope": "execution",
-            "field_name": "scroll_percent",
-            "rule_type": "one_of",
-            "expected_values": "25%|50%|75%|100%",
         },
         {
             "rule_id": f"{base_rule_id}_section_name",
