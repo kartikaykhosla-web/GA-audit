@@ -2739,7 +2739,7 @@ def _click_video_controls_quick_in_current_context(driver) -> bool:
 
 def _scroll_to_related_video_embed(driver) -> bool:
     try:
-        for _ in range(6):
+        for _ in range(8):
             found = driver.execute_script(
                 """
                 const selectors = arguments[0];
@@ -2756,7 +2756,7 @@ def _scroll_to_related_video_embed(driver) -> bool:
                 """,
                 ARTICLE_RELATED_VIDEO_SELECTORS,
             )
-            time.sleep(0.18)
+            time.sleep(0.45)
             if found:
                 return True
     except Exception:
@@ -3435,7 +3435,7 @@ def audit_video_interaction_url(
     except Exception:
         pass
 
-    time.sleep(0.5)
+    time.sleep(1.0)
     report_step("Inspecting video placements...", 0.34)
     initial_dom_state = capture_video_dom_diagnostics(driver)
 
@@ -3551,13 +3551,13 @@ def audit_video_interaction_url(
     if not matched_video_event:
         report_step("Trying bottom related video embed...", 0.86)
         related_found = _scroll_to_related_video_embed(driver)
-        time.sleep(0.25)
+        time.sleep(0.4)
         related_clicked_initial = _click_related_video_embed(driver)
-        time.sleep(0.45)
+        time.sleep(0.8)
         related_clicked_control = _click_related_video_embed(driver)
-        time.sleep(0.45)
+        time.sleep(0.8)
         _reset_visible_videos_in_current_context(driver)
-        time.sleep(0.12)
+        time.sleep(0.3)
         related_clicked_after_reset = _click_related_video_embed(driver)
         debug_steps.append(
             {
@@ -3569,7 +3569,8 @@ def audit_video_interaction_url(
             }
         )
 
-        deadline = time.time() + min(4, max(3, int(timeout_seconds or 4)))
+        first_related_match_at = None
+        deadline = time.time() + 15
         while time.time() < deadline:
             preload_state = extract_preload_state(driver)
             normalized_matches = normalize_video_capture_matches(preload_state)
@@ -3597,7 +3598,18 @@ def audit_video_interaction_url(
                 matched_video_event = dict(transport_events[-1])
 
             if matched_video_event:
-                break
+                if first_related_match_at is None:
+                    first_related_match_at = time.time()
+                has_dynamic_embed_type = any(
+                    isinstance(event, dict)
+                    and (
+                        event.get("dynamic_video_embed_type")
+                        or ((event.get("params") or {}) if isinstance(event.get("params"), dict) else {}).get("dynamic_video_embed_type")
+                    )
+                    for event in [*data_layer_events, *gtag_events, *transport_events]
+                )
+                if has_dynamic_embed_type or time.time() - first_related_match_at >= 3:
+                    break
 
             remaining = max(0.0, deadline - time.time())
             report_step(f"Polling related video_interaction event... {remaining:.1f}s left", 0.90)
