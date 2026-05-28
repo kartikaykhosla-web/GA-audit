@@ -486,6 +486,9 @@ def click_first_visible(driver: webdriver.Chrome, selectors: List[str]) -> bool:
 
 
 def click_related_video_embed(driver: webdriver.Chrome) -> bool:
+    if click_first_visible(driver, RELATED_VIDEO_SELECTORS):
+        time.sleep(0.2)
+        return True
     try:
         clicked = driver.execute_script(
             """
@@ -524,7 +527,7 @@ def click_related_video_embed(driver: webdriver.Chrome) -> bool:
             return True
     except Exception:
         pass
-    return click_first_visible(driver, RELATED_VIDEO_SELECTORS)
+    return False
 
 
 def has_primary_video_target(driver: webdriver.Chrome) -> bool:
