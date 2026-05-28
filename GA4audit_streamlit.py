@@ -8542,21 +8542,6 @@ def build_synthetic_ga4_event_from_datalayer(entry: dict) -> Optional[dict]:
     }
 
 
-def video_mvp_result_has_events(mvp_result: Dict[str, Any]) -> bool:
-    matched = (mvp_result or {}).get("matched") or {}
-    return any(
-        matched.get(key)
-        for key in ("gtag_video_events", "data_layer_video_events", "transport_video_events")
-    )
-
-
-def video_mvp_result_used_related_fallback(mvp_result: Dict[str, Any]) -> bool:
-    for step in (mvp_result or {}).get("debug_steps") or []:
-        if isinstance(step, dict) and step.get("step") == "fallback_to_related_embed":
-            return True
-    return False
-
-
 def video_mvp_result_to_ga_result(mvp_result: Dict[str, Any], url: str) -> Dict[str, Any]:
     matched = (mvp_result or {}).get("matched") or {}
     data_layer_video_events = [
@@ -11729,18 +11714,6 @@ This capture is split into three layers:
                 video_progress.progress(0.25)
                 report_video_step("Running MVP video capture...", 0.35)
                 mvp_video_result = capture_video_event_mvp(url=normalized_url, headless=True)
-                if (
-                    not video_mvp_result_has_events(mvp_video_result)
-                    and video_mvp_result_used_related_fallback(mvp_video_result)
-                ):
-                    report_video_step("Retrying MVP capture with related embed target...", 0.62)
-                    related_mvp_video_result = capture_video_event_mvp(
-                        url=normalized_url,
-                        headless=True,
-                        prefer_related_embed=True,
-                    )
-                    if video_mvp_result_has_events(related_mvp_video_result):
-                        mvp_video_result = related_mvp_video_result
                 video_capture_result = video_mvp_result_to_ga_result(mvp_video_result, normalized_url)
                 for debug_step in (mvp_video_result or {}).get("debug_steps") or []:
                     report_video_step(str(debug_step))
