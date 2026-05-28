@@ -3736,9 +3736,6 @@ def audit_video_interaction_url(
 
 
 def single_audit_requires_video_playback(rules: Optional[List[dict]]) -> bool:
-    video_fields = {
-        normalize_dimension_name(value) for value in VIDEO_INTERACTION_FIELD_NAMES
-    }
     for rule in rules or []:
         rule_scope = str(rule.get("rule_scope") or "").strip().lower()
         field_name = str(rule.get("field_name") or "").strip()
@@ -3750,7 +3747,7 @@ def single_audit_requires_video_playback(rules: Optional[List[dict]]) -> bool:
         elif rule_scope == "execution":
             normalized_field_name = normalize_dimension_name(field_name)
             if (
-                normalized_field_name in video_fields
+                is_video_related_rule(rule)
                 and normalized_field_name not in ARTICLE_DETAIL_BASE_VIDEO_FIELD_NORMALIZED
             ):
                 return True
@@ -6878,6 +6875,10 @@ VIDEO_INTERACTION_FIELD_NORMALIZED = {
     "videoduration",
     "videotitle",
 }
+AMBIGUOUS_VIDEO_FIELD_NORMALIZED = {
+    "eventname",
+    "tvceventname",
+}
 SCROLL_EVENT_FIELD_NORMALIZED = {
     "scrollpercent",
 }
@@ -6995,15 +6996,19 @@ def is_video_related_rule(rule: dict) -> bool:
     rule_scope = str(rule.get("rule_scope") or "").strip().lower()
     field_name = _normalize_template_name_key(rule.get("field_name") or "")
     expected_values = _normalize_template_name_key(rule.get("expected_values") or "")
+    normalized_field_name = normalize_dimension_name(field_name)
 
     if rule_scope == "event" and "video_interaction" in f"{field_name} {expected_values}":
         return True
 
-    if rule_scope == "execution" and (
-        field_name in VIDEO_INTERACTION_FIELD_NAMES
-        or normalize_dimension_name(field_name) in VIDEO_INTERACTION_FIELD_NORMALIZED
-    ):
-        return True
+    if rule_scope == "execution":
+        if normalized_field_name in AMBIGUOUS_VIDEO_FIELD_NORMALIZED:
+            return "video_interaction" in expected_values
+        if (
+            field_name in VIDEO_INTERACTION_FIELD_NAMES
+            or normalized_field_name in VIDEO_INTERACTION_FIELD_NORMALIZED
+        ):
+            return True
 
     return False
 
@@ -7022,11 +7027,17 @@ def is_video_interaction_template(template: dict, rules_by_template: Optional[Di
         expected_values = _normalize_template_name_key(rule.get("expected_values") or "")
         if rule_scope == "event" and "video_interaction" in f"{field_name} {expected_values}":
             return True
-        if rule_scope == "execution" and (
-            field_name in VIDEO_INTERACTION_FIELD_NAMES
-            or normalize_dimension_name(field_name) in VIDEO_INTERACTION_FIELD_NORMALIZED
-        ):
-            return True
+        if rule_scope == "execution":
+            normalized_field_name = normalize_dimension_name(field_name)
+            if normalized_field_name in AMBIGUOUS_VIDEO_FIELD_NORMALIZED:
+                if "video_interaction" in expected_values:
+                    return True
+                continue
+            if (
+                field_name in VIDEO_INTERACTION_FIELD_NAMES
+                or normalized_field_name in VIDEO_INTERACTION_FIELD_NORMALIZED
+            ):
+                return True
     return False
 
 
