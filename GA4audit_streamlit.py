@@ -2342,22 +2342,13 @@ ARTICLE_HERO_VIDEO_SELECTORS = [
     ".Short_wrapper_fixed i.videoImage",
     ".Short_wrapper_fixed [class*='play' i]",
     ".Short_wrapper_fixed [role='button']",
-    ".ArticleDetail_relatedvideo__wvgRP img",
-    ".ArticleDetail_relatedvideo__wvgRP .article",
-    ".ArticleDetail_relatedvideo__wvgRP i.videoImage",
-    ".ArticleDetail_relatedvideo__wvgRP [class*='play' i]",
-    ".ArticleDetail_relatedvideo__wvgRP [role='button']",
     ".loop-div .point1",
     ".loop-div .point2",
     ".loop-container",
-    ".relatedvideo img",
-    ".relatedvideo .article",
-    ".relatedvideo a",
     "img[alt='video thumbnail']",
     "a[href*='/videos/' i]",
     "i.videoImage",
     ".Short_wrapper_fixed",
-    ".ArticleDetail_relatedvideo__wvgRP",
 ]
 
 ARTICLE_RELATED_VIDEO_SELECTORS = [
@@ -2774,6 +2765,31 @@ def _click_related_video_embed(driver) -> bool:
               const rect = element.getBoundingClientRect();
               return !!(rect.width && rect.height);
             };
+            const fireClick = (target) => {
+              try {
+                const rect = target.getBoundingClientRect();
+                const x = rect.left + rect.width / 2;
+                const y = rect.top + rect.height / 2;
+                ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((eventName) => {
+                  try {
+                    target.dispatchEvent(new MouseEvent(eventName, {
+                      view: window,
+                      bubbles: true,
+                      cancelable: true,
+                      buttons: 1,
+                      clientX: x,
+                      clientY: y
+                    }));
+                  } catch (e) {}
+                });
+                if (typeof target.click === "function") {
+                  target.click();
+                }
+                return true;
+              } catch (e) {
+                return false;
+              }
+            };
             for (const selector of selectors) {
               const elements = Array.from(document.querySelectorAll(selector));
               for (const element of elements) {
@@ -2787,10 +2803,9 @@ def _click_related_video_embed(driver) -> bool:
                   element
                 ].filter(Boolean);
                 for (const target of targets) {
-                  try {
-                    target.click();
+                  if (visible(target) && fireClick(target)) {
                     return true;
-                  } catch (e) {}
+                  }
                 }
               }
             }
@@ -3551,6 +3566,7 @@ def audit_video_interaction_url(
     if not matched_video_event:
         report_step("Trying bottom related video embed...", 0.86)
         related_found = _scroll_to_related_video_embed(driver)
+        related_state_after_scroll = capture_video_dom_diagnostics(driver)
         time.sleep(0.4)
         related_clicked_initial = _click_related_video_embed(driver)
         time.sleep(0.8)
@@ -3566,6 +3582,7 @@ def audit_video_interaction_url(
                 "clicked_initial": bool(related_clicked_initial),
                 "clicked_control": bool(related_clicked_control),
                 "clicked_control_after_reset": bool(related_clicked_after_reset),
+                "related_embed": (related_state_after_scroll or {}).get("relatedEmbed"),
             }
         )
 
