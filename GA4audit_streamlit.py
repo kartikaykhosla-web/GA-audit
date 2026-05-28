@@ -8290,6 +8290,8 @@ FIELD_ALIAS_NORMALIZED = {
     "category": {"category", "genre", "articlecategory", "pagecat", "pagecategory"},
     "subcategory": {"subcategory", "articlesubcategory"},
     "eventname": {"eventname", "event"},
+    "userid": {"userid", "uid", "loggeduserid", "clientiduser"},
+    "useridstaging": {"useridstaging", "tvcuseridstaging", "uid"},
     "userstatus": {"userstatus", "usertype", "loggeduserid", "registrationstatus"},
     "tags": {"tags", "tag", "keywords", "keyword", "articletags", "articaltags", "articlekeywords"},
 }
