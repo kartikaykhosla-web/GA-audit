@@ -8542,6 +8542,70 @@ def build_synthetic_ga4_event_from_datalayer(entry: dict) -> Optional[dict]:
     }
 
 
+def video_mvp_result_to_ga_result(mvp_result: Dict[str, Any], url: str) -> Dict[str, Any]:
+    matched = (mvp_result or {}).get("matched") or {}
+    data_layer_video_events = [
+        event
+        for event in matched.get("data_layer_video_events", []) or []
+        if isinstance(event, dict)
+    ]
+    gtag_video_events = [
+        event
+        for event in matched.get("gtag_video_events", []) or []
+        if isinstance(event, dict)
+    ]
+    transport_video_events = [
+        event
+        for event in matched.get("transport_video_events", []) or []
+        if isinstance(event, dict)
+    ]
+
+    execution_events = []
+    for event in data_layer_video_events:
+        synthetic_event = build_synthetic_ga4_event_from_datalayer(event)
+        if synthetic_event:
+            execution_events.append(synthetic_event)
+    for event in gtag_video_events:
+        execution_events.append(
+            {
+                "event_name": event.get("event_name") or "video_interaction",
+                "params": event.get("params") or {},
+                "user_properties": event.get("user_properties") or {},
+                "source": event.get("source") or "gtag",
+            }
+        )
+
+    selected_event = {}
+    if data_layer_video_events:
+        selected_event = dict(data_layer_video_events[-1])
+    elif execution_events:
+        selected_event = snapshot_trigger_payload_from_event(execution_events[-1])
+    elif transport_video_events:
+        selected_event = snapshot_trigger_payload_from_event(transport_video_events[-1])
+
+    capture_failed = not bool(data_layer_video_events or execution_events or transport_video_events)
+    return {
+        "page_url": url,
+        "preload_hook_installed": not bool((mvp_result or {}).get("error")),
+        "preload_hook_error": str((mvp_result or {}).get("error") or ""),
+        "consent_clicked": False,
+        "consent_clicks_json": "[]",
+        "all_datalayer_json": safe_json(sanitize_for_json(data_layer_video_events)),
+        "pageview_event_json": safe_json(sanitize_for_json(selected_event)),
+        "ga4_execution_events_json": safe_json(sanitize_for_json(execution_events)),
+        "ga4_network_events_json": safe_json(sanitize_for_json(transport_video_events)),
+        "ga4_execution_hits_json": "[]",
+        "ga4_network_hits_json": "[]",
+        "capture_failed": capture_failed,
+        "capture_failure_reason": "video_interaction was not observed during the MVP capture pass." if capture_failed else "",
+        "video_debug_steps_json": safe_json(sanitize_for_json((mvp_result or {}).get("debug_steps") or [])),
+        "video_dom_state_json": safe_json({"video_state": (mvp_result or {}).get("video_state") or {}}),
+        "video_visible_videos_json": safe_json([]),
+        "status": "FAIL" if capture_failed else "PASS",
+        "issues": "video_interaction was not observed during the MVP capture pass." if capture_failed else "",
+    }
+
+
 def merge_payload_field_values(existing_value, new_value):
     if new_value in (None, ""):
         return existing_value
@@ -11643,31 +11707,17 @@ This capture is split into three layers:
                     except Exception:
                         pass
 
-            video_status_box.write("Launching video capture browser...")
+            video_status_box.write("Launching MVP video capture...")
             try:
-                driver = create_driver(
-                    headless=True,
-                    performance_logs=False,
-                    capture_network=False,
-                    page_load_timeout=10,
-                )
-                try:
-                    driver.set_script_timeout(5)
-                except Exception:
-                    pass
-                try:
-                    video_progress.progress(0.25)
-                    video_status_box.write(f"Capturing video interaction for {normalized_url}")
-                    video_capture_result = audit_video_interaction_url(
-                        driver,
-                        normalized_url,
-                        timeout_seconds=6,
-                        step_reporter=report_video_step,
-                    )
-                    video_progress.progress(0.8)
-                finally:
-                    video_status_box.write("Closing video capture browser...")
-                    safe_quit_driver(driver)
+                from video_event_mvp import capture_video_event as capture_video_event_mvp
+
+                video_progress.progress(0.25)
+                report_video_step("Running MVP video capture...", 0.35)
+                mvp_video_result = capture_video_event_mvp(url=normalized_url, headless=True)
+                video_capture_result = video_mvp_result_to_ga_result(mvp_video_result, normalized_url)
+                for debug_step in (mvp_video_result or {}).get("debug_steps") or []:
+                    report_video_step(str(debug_step))
+                video_progress.progress(0.8)
             except Exception as exc:
                 st.error(f"Error capturing video interaction for {normalized_url}")
                 st.exception(exc)
