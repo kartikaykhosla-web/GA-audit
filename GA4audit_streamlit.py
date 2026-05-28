@@ -7014,11 +7014,7 @@ def is_video_related_rule(rule: dict) -> bool:
 
 
 def is_video_interaction_template(template: dict, rules_by_template: Optional[Dict[str, List[dict]]] = None) -> bool:
-    if template.get("_runtime_companion"):
-        return True
-
-    template_name = _normalize_template_name_key(template.get("template_name") or "")
-    if "video interaction" in template_name:
+    if is_explicit_video_interaction_template(template):
         return True
 
     for rule in get_rules_for_validation_template(template, rules_by_template):
@@ -7039,6 +7035,23 @@ def is_video_interaction_template(template: dict, rules_by_template: Optional[Di
             ):
                 return True
     return False
+
+
+def is_explicit_video_interaction_template(template: Optional[dict]) -> bool:
+    if not template:
+        return False
+    if template.get("_runtime_companion"):
+        return True
+    template_name = _normalize_template_name_key(template.get("template_name") or "")
+    return "video interaction" in template_name
+
+
+def strip_video_rules_for_primary_audit(rules: List[dict]) -> List[dict]:
+    return [
+        rule
+        for rule in rules or []
+        if not is_video_related_rule(rule)
+    ]
 
 
 def template_targets_article_detail_context(
@@ -7223,17 +7236,16 @@ def get_single_audit_template_rules(
     rules_by_template: Optional[Dict[str, List[dict]]] = None,
 ) -> List[dict]:
     template_rules_list = get_augmented_template_rules(template, rules_by_template)
+    explicit_video_template = is_explicit_video_interaction_template(template)
     if template_rules_list:
-        if is_article_detail_template(template, rules_by_template):
-            return [rule for rule in template_rules_list if keep_article_detail_base_rule(rule)]
-        if is_video_interaction_template(template, rules_by_template):
+        if explicit_video_template:
             video_rules = [rule for rule in template_rules_list if is_video_related_rule(rule)]
             if video_rules:
                 return merge_video_rules_with_defaults(video_rules, template)
             return build_default_article_detail_video_rules(template)
-        return template_rules_list
+        return strip_video_rules_for_primary_audit(template_rules_list)
 
-    if is_video_interaction_template(template, rules_by_template):
+    if explicit_video_template:
         return derive_video_rules_from_article_detail_template(
             template,
             all_templates,
