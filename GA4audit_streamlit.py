@@ -3459,9 +3459,9 @@ def audit_video_interaction_url(
     time.sleep(0.45)
 
     report_step("Clicking player controls...", 0.52)
-    clicked_controls = _click_video_controls_in_current_context(driver)
+    clicked_controls = _click_video_controls_quick_in_current_context(driver)
     if clicked_controls:
-        time.sleep(0.45)
+        time.sleep(0.15)
 
     report_step("Resetting visible video...", 0.60)
     reset_visible = _reset_visible_videos_in_current_context(driver)
@@ -3586,9 +3586,13 @@ def audit_video_interaction_url(
             }
         )
 
+        related_attempted = bool(
+            related_found
+            and (related_clicked_initial or related_clicked_control or related_clicked_after_reset)
+        )
         first_related_match_at = None
-        deadline = time.time() + 15
-        while time.time() < deadline:
+        deadline = time.time() + (8 if related_attempted else 0)
+        while related_attempted and time.time() < deadline:
             preload_state = extract_preload_state(driver)
             normalized_matches = normalize_video_capture_matches(preload_state)
             execution_hits = normalized_matches.get("normalized_transport_hits", []) or []
