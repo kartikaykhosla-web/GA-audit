@@ -9133,7 +9133,16 @@ def select_payload_for_execution_rule(snapshot: dict, rule: dict) -> dict:
                 merged_payload.update(payload)
         return merged_payload or execution_payload
 
-    return execution_payload
+    merged_payload = {}
+    for payload in (
+        selected_event,
+        computed_state,
+        execution_payload,
+        network_payload,
+    ):
+        if isinstance(payload, dict):
+            merged_payload.update(payload)
+    return merged_payload or execution_payload
 
 
 def evaluate_value_rule(rule_type: str, expected_values_text: str, actual_value: str):
