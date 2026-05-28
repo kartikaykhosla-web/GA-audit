@@ -8581,6 +8581,35 @@ def build_event_payload_lookup(execution_events, network_events):
     return payload_lookup
 
 
+def merge_datalayer_event_payloads(payload_lookup: Dict[str, dict], data_layer: list) -> Dict[str, dict]:
+    if not isinstance(payload_lookup, dict):
+        payload_lookup = {}
+    if not isinstance(data_layer, list):
+        return payload_lookup
+
+    for item in data_layer:
+        if not isinstance(item, dict):
+            continue
+        event_key = canonical_event_name(item.get("event"))
+        if not event_key:
+            continue
+        payload = {
+            key: value
+            for key, value in item.items()
+            if key != "event" and not str(key).startswith("gtm")
+        }
+        if not payload:
+            continue
+        group_payload = payload_lookup.setdefault(event_key, {})
+        for key, value in payload.items():
+            if key not in group_payload:
+                group_payload[key] = value
+            else:
+                group_payload[key] = merge_payload_field_values(group_payload.get(key), value)
+
+    return payload_lookup
+
+
 def include_snapshot_field(key: str) -> bool:
     key_text = str(key or "").strip()
     if not key_text:
@@ -8654,7 +8683,10 @@ def build_datalayer_snapshot_export(result: dict, target_event_name: Optional[st
                 if normalize_event_name(item.get("event")) == target_event_key:
                     selected_event = dict(item)
                     break
-        event_payloads = build_event_payload_lookup(execution_events, network_events)
+        event_payloads = merge_datalayer_event_payloads(
+            build_event_payload_lookup(execution_events, network_events),
+            data_layer,
+        )
         selected_index = None
         if selected_event:
             selected_index = find_matching_datalayer_index(data_layer, selected_event)
@@ -8736,7 +8768,10 @@ def build_datalayer_snapshot_export(result: dict, target_event_name: Optional[st
 
         execution_payload = snapshot_ga4_payload(matched_execution)
         network_payload = snapshot_ga4_payload(matched_network)
-        event_payloads = build_event_payload_lookup(execution_events, network_events)
+        event_payloads = merge_datalayer_event_payloads(
+            build_event_payload_lookup(execution_events, network_events),
+            data_layer,
+        )
         if not execution_payload and computed_state and selected_event:
             execution_payload = dict(computed_state)
 
