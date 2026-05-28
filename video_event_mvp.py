@@ -743,15 +743,6 @@ def normalize_video_events(state: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(entry, list) and len(entry) >= 2 and str(entry[0]).strip().lower() == "event" and str(entry[1]).strip().lower() == "video_interaction":
             data_layer_video.append({"event": entry[1], **(entry[2] if len(entry) > 2 and isinstance(entry[2], dict) else {})})
 
-    for event in data_layer_video:
-        if not isinstance(event, dict) or event.get("dynamic_video_embed_type"):
-            continue
-        section_name = str(event.get("section_name") or "").strip().lower()
-        if section_name == "view this video also":
-            event["dynamic_video_embed_type"] = "view this video also"
-        elif section_name == "featured video":
-            event["dynamic_video_embed_type"] = "in house video"
-
     transport_video = []
     for hit in transport_hits:
         if not isinstance(hit, dict):
@@ -759,6 +750,21 @@ def normalize_video_events(state: Dict[str, Any]) -> Dict[str, Any]:
         for event in decode_collect(str(hit.get("url") or ""), str(hit.get("bodyText") or "")):
             if str(event.get("event_name") or "").strip().lower() == "video_interaction":
                 transport_video.append({"transport": hit.get("api"), **event})
+
+    for event in [*gtag_video, *data_layer_video, *transport_video]:
+        if not isinstance(event, dict):
+            continue
+        params = event.get("params") if isinstance(event.get("params"), dict) else event
+        embed_type = str(params.get("dynamic_video_embed_type") or event.get("dynamic_video_embed_type") or "").strip().lower()
+        section_name = str(params.get("section_name") or event.get("section_name") or "").strip().lower()
+        normalized_embed_type = ""
+        if embed_type in {"in house video", "in-house video"} or section_name == "featured video":
+            normalized_embed_type = "in-house video"
+        elif embed_type == "view this video also" or section_name == "view this video also":
+            normalized_embed_type = "view this video also"
+        if normalized_embed_type:
+            params["dynamic_video_embed_type"] = normalized_embed_type
+            event["dynamic_video_embed_type"] = normalized_embed_type
 
     return {
         "gtag_video_events": gtag_video,
@@ -783,6 +789,32 @@ def normalized_has_field(normalized: Dict[str, Any], field_name: str) -> bool:
         if isinstance(params, dict) and params.get(field_name):
             return True
         if isinstance(event, dict) and event.get(field_name):
+            return True
+    return False
+
+
+def normalized_has_video_percent_milestone(normalized: Dict[str, Any]) -> bool:
+    values = []
+    for event in normalized.get("gtag_video_events") or []:
+        if not isinstance(event, dict):
+            continue
+        params = event.get("params") if isinstance(event.get("params"), dict) else {}
+        values.append(params.get("video_percent") or event.get("video_percent"))
+    for event in normalized.get("data_layer_video_events") or []:
+        if isinstance(event, dict):
+            values.append(event.get("video_percent"))
+    for event in normalized.get("transport_video_events") or []:
+        if not isinstance(event, dict):
+            continue
+        params = event.get("params") if isinstance(event.get("params"), dict) else {}
+        values.append(params.get("video_percent") or event.get("video_percent"))
+
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        match = re.search(r"\d+(?:\.\d+)?", text)
+        if match and float(match.group(0)) >= 25:
             return True
     return False
 
@@ -822,7 +854,7 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
         auto_target = prefer_related_embed is None
         primary_target_found = has_primary_video_target(driver)
         if prefer_related_embed is None:
-            prefer_related_embed = False
+            prefer_related_embed = not primary_target_found
         debug_steps.append(
             {
                 "step": "select_video_target",
@@ -911,7 +943,10 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
                 matched = normalized
                 if first_match_at is None:
                     first_match_at = time.time()
-                if normalized_has_field(normalized, "dynamic_video_embed_type") or time.time() - first_match_at >= 3:
+                if (
+                    normalized_has_field(normalized, "dynamic_video_embed_type")
+                    and normalized_has_video_percent_milestone(normalized)
+                ) or time.time() - first_match_at >= 10:
                     break
             time.sleep(1.0)
 
@@ -947,7 +982,10 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
                     matched = normalized
                     if first_match_at is None:
                         first_match_at = time.time()
-                    if normalized_has_field(normalized, "dynamic_video_embed_type") or time.time() - first_match_at >= 3:
+                    if (
+                        normalized_has_field(normalized, "dynamic_video_embed_type")
+                        and normalized_has_video_percent_milestone(normalized)
+                    ) or time.time() - first_match_at >= 10:
                         break
                 time.sleep(1.0)
 
