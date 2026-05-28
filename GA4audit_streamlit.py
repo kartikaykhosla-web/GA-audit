@@ -6767,7 +6767,7 @@ ARTICLE_DETAIL_BASE_VIDEO_FIELD_NORMALIZED = {
 ARTICLE_DETAIL_SUPPLEMENTAL_RULES = [
     {"rule_scope": "execution", "field_name": "article_subcategory", "rule_type": "regex", "expected_values": "^[A-Za-z][A-Za-z\\- ]*$"},
     {"rule_scope": "execution", "field_name": "scroll_percent", "rule_type": "one_of", "expected_values": "25%|50%|75%|100%"},
-    {"rule_scope": "execution", "field_name": "article_age", "rule_type": "regex", "expected_values": "^\\d{1,4}\\s+days\\s+ago$"},
+    {"rule_scope": "execution", "field_name": "article_age", "rule_type": "regex", "expected_values": "^\\d{1,4}\\s+(day|days|month|months|year|years)\\s+ago$"},
     {"rule_scope": "execution", "field_name": "dynamic_video_embed_type", "rule_type": "one_of", "expected_values": "in-house video|youtube embed"},
     {"rule_scope": "execution", "field_name": "embed_count", "rule_type": "regex", "expected_values": "^\\d+$"},
     {"rule_scope": "execution", "field_name": "genre", "rule_type": "regex", "expected_values": "^[A-Za-z ]+$"},
