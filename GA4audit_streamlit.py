@@ -8606,11 +8606,6 @@ def video_mvp_result_to_ga_result(mvp_result: Dict[str, Any], url: str) -> Dict[
     }
 
 
-def should_target_related_video_embed(normalized_url: str) -> bool:
-    path = urlparse(str(normalized_url or "")).path.lower()
-    return path.startswith("/business/share-market-")
-
-
 def merge_payload_field_values(existing_value, new_value):
     if new_value in (None, ""):
         return existing_value
@@ -11718,11 +11713,7 @@ This capture is split into three layers:
 
                 video_progress.progress(0.25)
                 report_video_step("Running MVP video capture...", 0.35)
-                mvp_video_result = capture_video_event_mvp(
-                    url=normalized_url,
-                    headless=True,
-                    prefer_related_embed=True if should_target_related_video_embed(normalized_url) else None,
-                )
+                mvp_video_result = capture_video_event_mvp(url=normalized_url, headless=True)
                 video_capture_result = video_mvp_result_to_ga_result(mvp_video_result, normalized_url)
                 for debug_step in (mvp_video_result or {}).get("debug_steps") or []:
                     report_video_step(str(debug_step))
