@@ -2347,18 +2347,12 @@ ARTICLE_HERO_VIDEO_SELECTORS = [
     ".ArticleDetail_relatedvideo__wvgRP i.videoImage",
     ".ArticleDetail_relatedvideo__wvgRP [class*='play' i]",
     ".ArticleDetail_relatedvideo__wvgRP [role='button']",
-    ".ArticleDetail_relatedvideo__wvgRP media-theme-sutro",
-    ".ArticleDetail_relatedvideo__wvgRP youtube-video",
-    ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
     ".loop-div .point1",
     ".loop-div .point2",
     ".loop-container",
     ".relatedvideo img",
     ".relatedvideo .article",
     ".relatedvideo a",
-    ".relatedvideo media-theme-sutro",
-    ".relatedvideo youtube-video",
-    ".relatedvideo .video-player-container",
     "img[alt='video thumbnail']",
     "a[href*='/videos/' i]",
     "i.videoImage",
@@ -2745,7 +2739,7 @@ def _click_video_controls_quick_in_current_context(driver) -> bool:
 
 def _scroll_to_related_video_embed(driver) -> bool:
     try:
-        for _ in range(8):
+        for _ in range(6):
             found = driver.execute_script(
                 """
                 const selectors = arguments[0];
@@ -2762,7 +2756,7 @@ def _scroll_to_related_video_embed(driver) -> bool:
                 """,
                 ARTICLE_RELATED_VIDEO_SELECTORS,
             )
-            time.sleep(0.25)
+            time.sleep(0.18)
             if found:
                 return True
     except Exception:
@@ -3575,7 +3569,7 @@ def audit_video_interaction_url(
             }
         )
 
-        deadline = time.time() + min(8, max(4, int(timeout_seconds or 4)))
+        deadline = time.time() + min(4, max(3, int(timeout_seconds or 4)))
         while time.time() < deadline:
             preload_state = extract_preload_state(driver)
             normalized_matches = normalize_video_capture_matches(preload_state)
