@@ -854,7 +854,7 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
         auto_target = prefer_related_embed is None
         primary_target_found = has_primary_video_target(driver)
         if prefer_related_embed is None:
-            prefer_related_embed = not primary_target_found
+            prefer_related_embed = False
         debug_steps.append(
             {
                 "step": "select_video_target",
