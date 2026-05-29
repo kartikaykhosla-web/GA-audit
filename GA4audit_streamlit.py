@@ -8619,12 +8619,21 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
 
     original_milestone_check = getattr(video_event_mvp, "normalized_has_video_percent_milestone", None)
     original_normalizer = getattr(video_event_mvp, "normalize_video_events", None)
+    original_preload_script = getattr(video_event_mvp, "PRELOAD_SCRIPT", None)
     original_related_selectors = list(getattr(video_event_mvp, "RELATED_VIDEO_SELECTORS", []) or [])
     try:
         if original_milestone_check is not None:
             video_event_mvp.normalized_has_video_percent_milestone = lambda normalized: True
         if original_normalizer is not None:
             video_event_mvp.normalize_video_events = normalize_video_capture_matches
+        if isinstance(original_preload_script, str):
+            video_event_mvp.PRELOAD_SCRIPT = original_preload_script.replace(
+                "list.length > 60",
+                "list.length > 300",
+            ).replace(
+                "list.length - 60",
+                "list.length - 300",
+            )
         if original_related_selectors:
             preferred_related_selectors = [
                 ".ArticleDetail_relatedvideo__wvgRP youtube-video",
@@ -8651,6 +8660,8 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
             video_event_mvp.normalized_has_video_percent_milestone = original_milestone_check
         if original_normalizer is not None:
             video_event_mvp.normalize_video_events = original_normalizer
+        if original_preload_script is not None:
+            video_event_mvp.PRELOAD_SCRIPT = original_preload_script
         if original_related_selectors:
             video_event_mvp.RELATED_VIDEO_SELECTORS = original_related_selectors
 
