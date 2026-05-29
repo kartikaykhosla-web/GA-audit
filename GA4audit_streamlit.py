@@ -8618,13 +8618,55 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
         return video_event_mvp.capture_video_event(url=normalized_url, headless=headless)
 
     original_milestone_check = getattr(video_event_mvp, "normalized_has_video_percent_milestone", None)
+    original_related_selectors = list(getattr(video_event_mvp, "RELATED_VIDEO_SELECTORS", []) or [])
     try:
         if original_milestone_check is not None:
             video_event_mvp.normalized_has_video_percent_milestone = lambda normalized: True
+        if original_related_selectors:
+            preferred_related_selectors = [
+                ".ArticleDetail_relatedvideo__wvgRP youtube-video",
+                ".relatedvideo youtube-video",
+                ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
+                ".relatedvideo .video-player-container",
+                ".ArticleDetail_relatedvideo__wvgRP media-theme-sutro",
+                ".relatedvideo media-theme-sutro",
+                ".ArticleDetail_relatedvideo__wvgRP",
+                ".relatedvideo",
+            ]
+            video_event_mvp.RELATED_VIDEO_SELECTORS = [
+                selector
+                for selector in preferred_related_selectors
+                if selector in original_related_selectors
+            ] + [
+                selector
+                for selector in original_related_selectors
+                if selector not in preferred_related_selectors
+            ]
         return video_event_mvp.capture_video_event(url=normalized_url, headless=headless)
     finally:
         if original_milestone_check is not None:
             video_event_mvp.normalized_has_video_percent_milestone = original_milestone_check
+        if original_related_selectors:
+            video_event_mvp.RELATED_VIDEO_SELECTORS = original_related_selectors
+
+
+def add_mvp_capture_summary(mvp_result: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(mvp_result, dict):
+        return mvp_result
+    matched = mvp_result.get("matched") if isinstance(mvp_result.get("matched"), dict) else {}
+    summary_step = {
+        "step": "mvp_result_summary",
+        "counts": mvp_result.get("counts") or {},
+        "matched_counts": {
+            "gtag_video_events": len(matched.get("gtag_video_events") or []),
+            "data_layer_video_events": len(matched.get("data_layer_video_events") or []),
+            "transport_video_events": len(matched.get("transport_video_events") or []),
+        },
+    }
+    debug_steps = list(mvp_result.get("debug_steps") or [])
+    if not any(isinstance(step, dict) and step.get("step") == "mvp_result_summary" for step in debug_steps):
+        debug_steps.append(summary_step)
+    return {**mvp_result, "debug_steps": debug_steps}
 
 
 def merge_payload_field_values(existing_value, new_value):
@@ -11733,6 +11775,7 @@ This capture is split into three layers:
                 video_progress.progress(0.25)
                 report_video_step("Running MVP video capture...", 0.35)
                 mvp_video_result = capture_video_event_for_ga(normalized_url, headless=True)
+                mvp_video_result = add_mvp_capture_summary(mvp_video_result)
                 video_capture_result = video_mvp_result_to_ga_result(mvp_video_result, normalized_url)
                 for debug_step in (mvp_video_result or {}).get("debug_steps") or []:
                     report_video_step(str(debug_step))
