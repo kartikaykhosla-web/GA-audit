@@ -8606,6 +8606,27 @@ def video_mvp_result_to_ga_result(mvp_result: Dict[str, Any], url: str) -> Dict[
     }
 
 
+def is_bottom_video_url(normalized_url: str) -> bool:
+    path = urlparse(str(normalized_url or "")).path.lower()
+    return path.startswith("/business/share-market-")
+
+
+def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Dict[str, Any]:
+    import video_event_mvp
+
+    if not is_bottom_video_url(normalized_url):
+        return video_event_mvp.capture_video_event(url=normalized_url, headless=headless)
+
+    original_milestone_check = getattr(video_event_mvp, "normalized_has_video_percent_milestone", None)
+    try:
+        if original_milestone_check is not None:
+            video_event_mvp.normalized_has_video_percent_milestone = lambda normalized: True
+        return video_event_mvp.capture_video_event(url=normalized_url, headless=headless)
+    finally:
+        if original_milestone_check is not None:
+            video_event_mvp.normalized_has_video_percent_milestone = original_milestone_check
+
+
 def merge_payload_field_values(existing_value, new_value):
     if new_value in (None, ""):
         return existing_value
@@ -11709,11 +11730,9 @@ This capture is split into three layers:
 
             video_status_box.write("Launching MVP video capture...")
             try:
-                from video_event_mvp import capture_video_event as capture_video_event_mvp
-
                 video_progress.progress(0.25)
                 report_video_step("Running MVP video capture...", 0.35)
-                mvp_video_result = capture_video_event_mvp(url=normalized_url, headless=True)
+                mvp_video_result = capture_video_event_for_ga(normalized_url, headless=True)
                 video_capture_result = video_mvp_result_to_ga_result(mvp_video_result, normalized_url)
                 for debug_step in (mvp_video_result or {}).get("debug_steps") or []:
                     report_video_step(str(debug_step))
