@@ -8611,11 +8611,40 @@ def should_use_ga_related_video_capture(normalized_url: str) -> bool:
     return path.startswith("/business/share-market-")
 
 
+def ga_click_related_video_embed(driver) -> bool:
+    selectors = [
+        ".ArticleDetail_relatedvideo__wvgRP youtube-video",
+        ".ArticleDetail_relatedvideo__wvgRP media-theme-sutro",
+        ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
+        ".relatedvideo youtube-video",
+        ".relatedvideo media-theme-sutro",
+        ".relatedvideo .video-player-container",
+    ]
+    for selector in selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        except Exception:
+            continue
+        for element in elements[:3]:
+            try:
+                if not element.is_displayed():
+                    continue
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                    element,
+                )
+                time.sleep(0.15)
+                ActionChains(driver).move_to_element(element).pause(0.1).click().perform()
+                return True
+            except Exception:
+                continue
+    return False
+
+
 def capture_related_video_event_for_ga(url: str, headless: bool = True) -> Dict[str, Any]:
     from video_event_mvp import (
         accept_common_consent,
         capture_primary_video_state,
-        click_related_video_embed,
         create_driver,
         extract_state,
         normalize_video_events,
@@ -8670,13 +8699,13 @@ def capture_related_video_event_for_ga(url: str, headless: bool = True) -> Dict[
         debug_steps.append({"step": "scroll_to_related_video_embed", "success": related_found})
         time.sleep(0.4)
 
-        clicked_initial = click_related_video_embed(driver)
+        clicked_initial = ga_click_related_video_embed(driver)
         time.sleep(0.8)
-        clicked_control = click_related_video_embed(driver)
+        clicked_control = ga_click_related_video_embed(driver)
         time.sleep(0.8)
         reset_visible_videos(driver)
         time.sleep(0.3)
-        clicked_control_after_reset = click_related_video_embed(driver)
+        clicked_control_after_reset = ga_click_related_video_embed(driver)
         debug_steps.append(
             {
                 "step": "related_video_probe",
