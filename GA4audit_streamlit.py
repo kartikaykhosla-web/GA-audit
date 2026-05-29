@@ -8634,8 +8634,69 @@ def ga_click_related_video_embed(driver) -> bool:
                     element,
                 )
                 time.sleep(0.15)
-                ActionChains(driver).move_to_element(element).pause(0.1).click().perform()
-                return True
+                try:
+                    ActionChains(driver).move_to_element(element).pause(0.1).click().perform()
+                    return True
+                except Exception:
+                    pass
+                rect = driver.execute_script(
+                    """
+                    const rect = arguments[0].getBoundingClientRect();
+                    return {
+                        x: rect.left + rect.width / 2,
+                        y: rect.top + rect.height / 2,
+                        width: rect.width,
+                        height: rect.height
+                    };
+                    """,
+                    element,
+                )
+                if not rect or not rect.get("width") or not rect.get("height"):
+                    continue
+                x = float(rect.get("x") or 0)
+                y = float(rect.get("y") or 0)
+                try:
+                    driver.execute_cdp_cmd(
+                        "Input.dispatchMouseEvent",
+                        {"type": "mouseMoved", "x": x, "y": y, "button": "none"},
+                    )
+                    driver.execute_cdp_cmd(
+                        "Input.dispatchMouseEvent",
+                        {"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1},
+                    )
+                    driver.execute_cdp_cmd(
+                        "Input.dispatchMouseEvent",
+                        {"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1},
+                    )
+                    return True
+                except Exception:
+                    pass
+                try:
+                    clicked = driver.execute_script(
+                        """
+                        const element = arguments[0];
+                        const rect = element.getBoundingClientRect();
+                        const target = (
+                            element.shadowRoot &&
+                            element.shadowRoot.querySelector("button, [role='button'], video, iframe")
+                        ) || element.querySelector("button, [role='button'], video, iframe") || element;
+                        ["pointerdown", "mousedown", "mouseup", "click"].forEach((type) => {
+                            target.dispatchEvent(new MouseEvent(type, {
+                                bubbles: true,
+                                cancelable: true,
+                                view: window,
+                                clientX: rect.left + rect.width / 2,
+                                clientY: rect.top + rect.height / 2
+                            }));
+                        });
+                        return true;
+                        """,
+                        element,
+                    )
+                    if clicked:
+                        return True
+                except Exception:
+                    pass
             except Exception:
                 continue
     return False
