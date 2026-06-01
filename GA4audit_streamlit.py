@@ -11984,6 +11984,37 @@ This capture is split into three layers:
                             hide_index=True,
                         )
                 with st.expander("Video capture debug", expanded=False):
+                    copyable_debug_response = {
+                        "video_debug_steps": load_json_payload(
+                            video_capture_result.get("video_debug_steps_json", ""),
+                            [],
+                        ),
+                        "video_dom_state": load_json_payload(
+                            video_capture_result.get("video_dom_state_json", ""),
+                            {},
+                        ),
+                        "visible_video_elements": load_json_payload(
+                            video_capture_result.get("video_visible_videos_json", ""),
+                            [],
+                        ),
+                        "bottom_video_diagnostics": load_json_payload(
+                            video_capture_result.get("bottom_video_diagnostics_json", ""),
+                            {},
+                        ),
+                        "execution_stage_ga4_values": load_json_payload(
+                            video_capture_result.get("ga4_execution_events_json", ""),
+                            [],
+                        ),
+                        "execution_transport_hits": load_json_payload(
+                            video_capture_result.get("ga4_execution_hits_json", ""),
+                            [],
+                        ),
+                    }
+                    st.markdown("### Copy debug response")
+                    st.code(
+                        json.dumps(copyable_debug_response, ensure_ascii=False, indent=2),
+                        language="json",
+                    )
                     render_json_block(
                         "Video debug steps",
                         video_capture_result.get("video_debug_steps_json", ""),
