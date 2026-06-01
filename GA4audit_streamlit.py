@@ -8601,6 +8601,7 @@ def video_mvp_result_to_ga_result(mvp_result: Dict[str, Any], url: str) -> Dict[
         "video_debug_steps_json": safe_json(sanitize_for_json((mvp_result or {}).get("debug_steps") or [])),
         "video_dom_state_json": safe_json({"video_state": (mvp_result or {}).get("video_state") or {}}),
         "video_visible_videos_json": safe_json([]),
+        "bottom_video_diagnostics_json": safe_json(sanitize_for_json((mvp_result or {}).get("bottom_video_diagnostics") or {})),
         "status": "FAIL" if capture_failed else "PASS",
         "issues": "video_interaction was not observed during the MVP capture pass." if capture_failed else "",
     }
@@ -8609,6 +8610,105 @@ def video_mvp_result_to_ga_result(mvp_result: Dict[str, Any], url: str) -> Dict[
 def is_bottom_video_url(normalized_url: str) -> bool:
     path = urlparse(str(normalized_url or "")).path.lower()
     return path.startswith("/business/share-market-")
+
+
+def summarize_bottom_video_state(preload_state: Dict[str, Any]) -> Dict[str, Any]:
+    data_layer_event_counts: Dict[str, int] = {}
+    for push_entry in (preload_state or {}).get("dataLayerPushes", []) or []:
+        if not isinstance(push_entry, dict):
+            continue
+        entry = push_entry.get("entry")
+        event_name = ""
+        if isinstance(entry, dict):
+            event_name = str(entry.get("event") or entry.get("1") or entry.get(1) or "").strip()
+        elif isinstance(entry, list) and len(entry) >= 2:
+            event_name = str(entry[1] or "").strip() if str(entry[0] or "").strip().lower() == "event" else ""
+        if event_name:
+            data_layer_event_counts[event_name] = data_layer_event_counts.get(event_name, 0) + 1
+
+    transport_event_counts: Dict[str, int] = {}
+    transport_samples: List[Dict[str, Any]] = []
+    for hit in (preload_state or {}).get("transportHits", []) or []:
+        if not isinstance(hit, dict):
+            continue
+        url = str(hit.get("url") or "")
+        body_text = _truncate_text(str(hit.get("bodyText") or ""))
+        decoded_events = decode_ga4_collect_request(url, body_text)
+        decoded_names = []
+        for event in decoded_events:
+            event_name = str(event.get("event_name") or "").strip()
+            if not event_name:
+                continue
+            decoded_names.append(event_name)
+            transport_event_counts[event_name] = transport_event_counts.get(event_name, 0) + 1
+        transport_samples.append(
+            {
+                "api": hit.get("api"),
+                "decoded_event_names": decoded_names,
+                "url_prefix": url[:240],
+            }
+        )
+
+    return {
+        "data_layer_event_counts": data_layer_event_counts,
+        "transport_event_counts": transport_event_counts,
+        "transport_samples": transport_samples[-30:],
+    }
+
+
+def inspect_bottom_video_dom(driver) -> List[Dict[str, Any]]:
+    try:
+        return driver.execute_script(
+            """
+            const selectors = arguments[0];
+            const describe = (element, selector, scope) => {
+              if (!element) return null;
+              const rect = element.getBoundingClientRect();
+              return {
+                selector,
+                scope,
+                tag: String(element.tagName || "").toLowerCase(),
+                id: String(element.id || ""),
+                class_name: String(element.className || ""),
+                aria_label: String(element.getAttribute && element.getAttribute("aria-label") || ""),
+                src: String(element.getAttribute && element.getAttribute("src") || ""),
+                visible: !!(rect.width && rect.height),
+                rect: {
+                  top: Number(rect.top || 0),
+                  left: Number(rect.left || 0),
+                  width: Number(rect.width || 0),
+                  height: Number(rect.height || 0)
+                },
+                html: String(element.outerHTML || "").slice(0, 500)
+              };
+            };
+            const output = [];
+            for (const selector of selectors) {
+              for (const element of Array.from(document.querySelectorAll(selector)).slice(0, 4)) {
+                output.push(describe(element, selector, "document"));
+                if (!element.shadowRoot) continue;
+                for (const child of Array.from(
+                  element.shadowRoot.querySelectorAll("button, [role='button'], video, iframe, youtube-video, media-theme-sutro")
+                ).slice(0, 8)) {
+                  output.push(describe(child, selector, "shadowRoot"));
+                }
+              }
+            }
+            return output.filter(Boolean);
+            """,
+            [
+                ".ArticleDetail_relatedvideo__wvgRP",
+                ".ArticleDetail_relatedvideo__wvgRP youtube-video",
+                ".ArticleDetail_relatedvideo__wvgRP media-theme-sutro",
+                ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
+                ".relatedvideo",
+                ".relatedvideo youtube-video",
+                ".relatedvideo media-theme-sutro",
+                ".relatedvideo .video-player-container",
+            ],
+        ) or []
+    except Exception as exc:
+        return [{"error": str(exc)}]
 
 
 def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Dict[str, Any]:
@@ -8621,11 +8721,39 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
     original_normalizer = getattr(video_event_mvp, "normalize_video_events", None)
     original_preload_script = getattr(video_event_mvp, "PRELOAD_SCRIPT", None)
     original_related_selectors = list(getattr(video_event_mvp, "RELATED_VIDEO_SELECTORS", []) or [])
+    original_scroll_to_related = getattr(video_event_mvp, "scroll_to_related_video_embed", None)
+    original_click_related = getattr(video_event_mvp, "click_related_video_embed", None)
+    latest_preload_state: Dict[str, Any] = {}
+    bottom_diagnostics: Dict[str, Any] = {"click_attempts": []}
+
+    def diagnostic_normalizer(preload_state: Dict[str, Any]) -> Dict[str, Any]:
+        latest_preload_state.clear()
+        latest_preload_state.update(preload_state or {})
+        return normalize_video_capture_matches(preload_state)
+
+    def diagnostic_scroll_to_related(driver) -> bool:
+        bottom_diagnostics["dom_before_scroll"] = inspect_bottom_video_dom(driver)
+        success = bool(original_scroll_to_related(driver))
+        bottom_diagnostics["dom_after_scroll"] = inspect_bottom_video_dom(driver)
+        return success
+
+    def diagnostic_click_related(driver) -> bool:
+        before_click = inspect_bottom_video_dom(driver)
+        success = bool(original_click_related(driver))
+        bottom_diagnostics["click_attempts"].append(
+            {
+                "success": success,
+                "dom_before_click": before_click,
+                "dom_after_click": inspect_bottom_video_dom(driver),
+            }
+        )
+        return success
+
     try:
         if original_milestone_check is not None:
             video_event_mvp.normalized_has_video_percent_milestone = lambda normalized: True
         if original_normalizer is not None:
-            video_event_mvp.normalize_video_events = normalize_video_capture_matches
+            video_event_mvp.normalize_video_events = diagnostic_normalizer
         if isinstance(original_preload_script, str):
             video_event_mvp.PRELOAD_SCRIPT = original_preload_script.replace(
                 "list.length > 60",
@@ -8654,7 +8782,31 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
                 for selector in original_related_selectors
                 if selector not in preferred_related_selectors
             ]
-        return video_event_mvp.capture_video_event(url=normalized_url, headless=headless)
+        if original_scroll_to_related is not None:
+            video_event_mvp.scroll_to_related_video_embed = diagnostic_scroll_to_related
+        if original_click_related is not None:
+            video_event_mvp.click_related_video_embed = diagnostic_click_related
+        result = video_event_mvp.capture_video_event(url=normalized_url, headless=headless)
+        capture_state = summarize_bottom_video_state(latest_preload_state)
+        debug_steps = list((result or {}).get("debug_steps") or [])
+        debug_steps.append(
+            {
+                "step": "bottom_video_diagnostics",
+                "dom_before_scroll_count": len(bottom_diagnostics.get("dom_before_scroll") or []),
+                "dom_after_scroll_count": len(bottom_diagnostics.get("dom_after_scroll") or []),
+                "click_attempt_count": len(bottom_diagnostics.get("click_attempts") or []),
+                "data_layer_event_counts": capture_state.get("data_layer_event_counts") or {},
+                "transport_event_counts": capture_state.get("transport_event_counts") or {},
+            }
+        )
+        return {
+            **(result or {}),
+            "debug_steps": debug_steps,
+            "bottom_video_diagnostics": {
+                "dom": bottom_diagnostics,
+                "capture_state": capture_state,
+            },
+        }
     finally:
         if original_milestone_check is not None:
             video_event_mvp.normalized_has_video_percent_milestone = original_milestone_check
@@ -8664,6 +8816,10 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
             video_event_mvp.PRELOAD_SCRIPT = original_preload_script
         if original_related_selectors:
             video_event_mvp.RELATED_VIDEO_SELECTORS = original_related_selectors
+        if original_scroll_to_related is not None:
+            video_event_mvp.scroll_to_related_video_embed = original_scroll_to_related
+        if original_click_related is not None:
+            video_event_mvp.click_related_video_embed = original_click_related
 
 
 def add_mvp_capture_summary(mvp_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -11881,6 +12037,11 @@ This capture is split into three layers:
                         "Visible video elements",
                         video_capture_result.get("video_visible_videos_json", ""),
                         "No visible video elements were observed.",
+                    )
+                    render_json_block(
+                        "Bottom video diagnostics",
+                        video_capture_result.get("bottom_video_diagnostics_json", ""),
+                        "No bottom video diagnostics were recorded.",
                     )
                     render_event_list(
                         "Execution-stage GA4 values",
