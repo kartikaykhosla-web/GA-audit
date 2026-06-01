@@ -8711,6 +8711,61 @@ def inspect_bottom_video_dom(driver) -> List[Dict[str, Any]]:
         return [{"error": str(exc)}]
 
 
+def click_bottom_video_shadow_play_control(driver) -> Dict[str, Any]:
+    try:
+        return driver.execute_script(
+            """
+            const themes = Array.from(document.querySelectorAll(
+              ".ArticleDetail_relatedvideo__wvgRP media-theme-sutro, .relatedvideo media-theme-sutro"
+            ));
+            for (const theme of themes) {
+              if (!theme.shadowRoot) continue;
+              const playButton = theme.shadowRoot.querySelector(
+                "media-play-button, [role='button'][aria-label='play'], [role='button'][aria-label='pause']"
+              );
+              if (!playButton) continue;
+              const rect = playButton.getBoundingClientRect();
+              if (!rect.width || !rect.height) continue;
+              const labelBefore = String(playButton.getAttribute("aria-label") || "");
+              const pausedBefore = playButton.hasAttribute("mediapaused");
+              if (labelBefore.toLowerCase() === "pause" || !pausedBefore) {
+                return {
+                  success: true,
+                  method: "shadow_play_button_already_playing",
+                  aria_label_before_click: labelBefore,
+                  mediapaused_before_click: pausedBefore
+                };
+              }
+              try {
+                playButton.scrollIntoView({block: "center", inline: "center"});
+              } catch (error) {}
+              playButton.click();
+              return {
+                success: true,
+                method: "shadow_play_button",
+                aria_label_before_click: labelBefore,
+                mediapaused_before_click: pausedBefore
+              };
+            }
+            return {
+              success: false,
+              method: "shadow_play_button",
+              reason: "play_button_not_found"
+            };
+            """
+        ) or {
+            "success": False,
+            "method": "shadow_play_button",
+            "reason": "empty_result",
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "method": "shadow_play_button",
+            "error": str(exc),
+        }
+
+
 def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Dict[str, Any]:
     import video_event_mvp
 
@@ -8739,10 +8794,15 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
 
     def diagnostic_click_related(driver) -> bool:
         before_click = inspect_bottom_video_dom(driver)
-        success = bool(original_click_related(driver))
+        shadow_play_click = click_bottom_video_shadow_play_control(driver)
+        success = bool(shadow_play_click.get("success"))
+        if not success:
+            success = bool(original_click_related(driver))
+        time.sleep(0.15)
         bottom_diagnostics["click_attempts"].append(
             {
                 "success": success,
+                "shadow_play_click": shadow_play_click,
                 "dom_before_click": before_click,
                 "dom_after_click": inspect_bottom_video_dom(driver),
             }
