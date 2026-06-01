@@ -8720,6 +8720,7 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
     original_normalizer = getattr(video_event_mvp, "normalize_video_events", None)
     original_scroll_to_related = getattr(video_event_mvp, "scroll_to_related_video_embed", None)
     original_click_related = getattr(video_event_mvp, "click_related_video_embed", None)
+    original_preload_script = getattr(video_event_mvp, "PRELOAD_SCRIPT", None)
     latest_preload_state: Dict[str, Any] = {}
     bottom_diagnostics: Dict[str, Any] = {"click_attempts": []}
 
@@ -8747,6 +8748,14 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
         return success
 
     try:
+        if isinstance(original_preload_script, str):
+            video_event_mvp.PRELOAD_SCRIPT = original_preload_script.replace(
+                "list.length > 60",
+                "list.length > 300",
+            ).replace(
+                "list.length - 60",
+                "list.length - 300",
+            )
         if original_normalizer is not None:
             video_event_mvp.normalize_video_events = diagnostic_normalizer
         if original_scroll_to_related is not None:
@@ -8775,6 +8784,8 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
             },
         }
     finally:
+        if original_preload_script is not None:
+            video_event_mvp.PRELOAD_SCRIPT = original_preload_script
         if original_normalizer is not None:
             video_event_mvp.normalize_video_events = original_normalizer
         if original_scroll_to_related is not None:
