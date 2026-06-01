@@ -31,8 +31,14 @@ PRELOAD_SCRIPT = r"""
     var state = window.__videoMvpState = window.__videoMvpState || {
       dataLayerPushes: [],
       gtagCalls: [],
-      transportHits: []
+      transportHits: [],
+      dataLayerVideoInteractions: [],
+      gtagVideoInteractions: [],
+      transportVideoInteractions: []
     };
+    state.dataLayerVideoInteractions = state.dataLayerVideoInteractions || [];
+    state.gtagVideoInteractions = state.gtagVideoInteractions || [];
+    state.transportVideoInteractions = state.transportVideoInteractions || [];
 
     function trim(list) {
       if (list.length > 60) {
@@ -90,6 +96,15 @@ PRELOAD_SCRIPT = r"""
       } catch (e) {}
     }
 
+    function preserveVideoInteraction(target, payload) {
+      try {
+        state[target].push(Object.assign({ timestamp: Date.now() }, payload));
+        if (state[target].length > 10) {
+          state[target].splice(0, state[target].length - 10);
+        }
+      } catch (e) {}
+    }
+
     function isInterestingUrl(url) {
       if (typeof url !== "string") return false;
       return (
@@ -121,12 +136,16 @@ PRELOAD_SCRIPT = r"""
     function recordTransport(api, url, method, body) {
       try {
         if (!isInterestingUrl(url)) return;
-        push("transportHits", {
+        var payload = {
           api: api,
           url: String(url || ""),
           method: String(method || "GET").toUpperCase(),
           bodyText: asText(body)
-        });
+        };
+        push("transportHits", payload);
+        if ((payload.url + "&" + payload.bodyText).indexOf("video_interaction") !== -1) {
+          preserveVideoInteraction("transportVideoInteractions", payload);
+        }
       } catch (e) {}
     }
 
@@ -140,10 +159,14 @@ PRELOAD_SCRIPT = r"""
       });
       list.push = function () {
         var args = Array.prototype.slice.call(arguments);
-        push("dataLayerPushes", {
+        var payload = {
           entry: safeClone(args[0], 0),
           event: args[0] && args[0].event ? args[0].event : ""
-        });
+        };
+        push("dataLayerPushes", payload);
+        if (String(payload.event || "").toLowerCase() === "video_interaction") {
+          preserveVideoInteraction("dataLayerVideoInteractions", payload);
+        }
         return originalPush.apply(this, arguments);
       };
       return list;
@@ -166,13 +189,17 @@ PRELOAD_SCRIPT = r"""
       if (original && original.__videoMvpWrapped) return original;
       var wrapped = function () {
         var args = Array.prototype.slice.call(arguments);
-        push("gtagCalls", {
+        var payload = {
           command: args[0],
           event_name: args[0] === "event" ? args[1] : "",
           params: args[0] === "event" && args[2] && typeof args[2] === "object"
             ? safeClone(args[2], 0)
             : null
-        });
+        };
+        push("gtagCalls", payload);
+        if (String(payload.event_name || "").toLowerCase() === "video_interaction") {
+          preserveVideoInteraction("gtagVideoInteractions", payload);
+        }
         if (typeof original === "function") {
           return original.apply(this, arguments);
         }
@@ -731,6 +758,11 @@ def normalize_video_events(state: Dict[str, Any]) -> Dict[str, Any]:
         call for call in gtag_calls
         if isinstance(call, dict) and str(call.get("event_name") or "").strip().lower() == "video_interaction"
     ]
+    if not gtag_video:
+        gtag_video = [
+            call for call in state.get("gtagVideoInteractions", []) or []
+            if isinstance(call, dict) and str(call.get("event_name") or "").strip().lower() == "video_interaction"
+        ]
 
     data_layer_video = []
     for push_entry in data_layer_pushes:
@@ -743,6 +775,17 @@ def normalize_video_events(state: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(entry, list) and len(entry) >= 2 and str(entry[0]).strip().lower() == "event" and str(entry[1]).strip().lower() == "video_interaction":
             data_layer_video.append({"event": entry[1], **(entry[2] if len(entry) > 2 and isinstance(entry[2], dict) else {})})
 
+    if not data_layer_video:
+        for push_entry in state.get("dataLayerVideoInteractions", []) or []:
+            if not isinstance(push_entry, dict):
+                continue
+            entry = push_entry.get("entry")
+            if isinstance(entry, dict) and str(entry.get("event") or "").strip().lower() == "video_interaction":
+                data_layer_video.append(entry)
+                continue
+            if isinstance(entry, list) and len(entry) >= 2 and str(entry[0]).strip().lower() == "event" and str(entry[1]).strip().lower() == "video_interaction":
+                data_layer_video.append({"event": entry[1], **(entry[2] if len(entry) > 2 and isinstance(entry[2], dict) else {})})
+
     transport_video = []
     for hit in transport_hits:
         if not isinstance(hit, dict):
@@ -750,6 +793,14 @@ def normalize_video_events(state: Dict[str, Any]) -> Dict[str, Any]:
         for event in decode_collect(str(hit.get("url") or ""), str(hit.get("bodyText") or "")):
             if str(event.get("event_name") or "").strip().lower() == "video_interaction":
                 transport_video.append({"transport": hit.get("api"), **event})
+
+    if not transport_video:
+        for hit in state.get("transportVideoInteractions", []) or []:
+            if not isinstance(hit, dict):
+                continue
+            for event in decode_collect(str(hit.get("url") or ""), str(hit.get("bodyText") or "")):
+                if str(event.get("event_name") or "").strip().lower() == "video_interaction":
+                    transport_video.append({"transport": hit.get("api"), **event})
 
     for event in [*gtag_video, *data_layer_video, *transport_video]:
         if not isinstance(event, dict):
