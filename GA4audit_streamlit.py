@@ -8711,71 +8711,13 @@ def inspect_bottom_video_dom(driver) -> List[Dict[str, Any]]:
         return [{"error": str(exc)}]
 
 
-def click_bottom_video_shadow_play_control(driver) -> Dict[str, Any]:
-    try:
-        return driver.execute_script(
-            """
-            const themes = Array.from(document.querySelectorAll(
-              ".ArticleDetail_relatedvideo__wvgRP media-theme-sutro, .relatedvideo media-theme-sutro"
-            ));
-            for (const theme of themes) {
-              if (!theme.shadowRoot) continue;
-              const playButton = theme.shadowRoot.querySelector(
-                "media-play-button, [role='button'][aria-label='play'], [role='button'][aria-label='pause']"
-              );
-              if (!playButton) continue;
-              const rect = playButton.getBoundingClientRect();
-              if (!rect.width || !rect.height) continue;
-              const labelBefore = String(playButton.getAttribute("aria-label") || "");
-              const pausedBefore = playButton.hasAttribute("mediapaused");
-              if (labelBefore.toLowerCase() === "pause" || !pausedBefore) {
-                return {
-                  success: true,
-                  method: "shadow_play_button_already_playing",
-                  aria_label_before_click: labelBefore,
-                  mediapaused_before_click: pausedBefore
-                };
-              }
-              try {
-                playButton.scrollIntoView({block: "center", inline: "center"});
-              } catch (error) {}
-              playButton.click();
-              return {
-                success: true,
-                method: "shadow_play_button",
-                aria_label_before_click: labelBefore,
-                mediapaused_before_click: pausedBefore
-              };
-            }
-            return {
-              success: false,
-              method: "shadow_play_button",
-              reason: "play_button_not_found"
-            };
-            """
-        ) or {
-            "success": False,
-            "method": "shadow_play_button",
-            "reason": "empty_result",
-        }
-    except Exception as exc:
-        return {
-            "success": False,
-            "method": "shadow_play_button",
-            "error": str(exc),
-        }
-
-
 def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Dict[str, Any]:
     import video_event_mvp
 
     if not is_bottom_video_url(normalized_url):
         return video_event_mvp.capture_video_event(url=normalized_url, headless=headless)
 
-    original_milestone_check = getattr(video_event_mvp, "normalized_has_video_percent_milestone", None)
     original_normalizer = getattr(video_event_mvp, "normalize_video_events", None)
-    original_preload_script = getattr(video_event_mvp, "PRELOAD_SCRIPT", None)
-    original_related_selectors = list(getattr(video_event_mvp, "RELATED_VIDEO_SELECTORS", []) or [])
     original_scroll_to_related = getattr(video_event_mvp, "scroll_to_related_video_embed", None)
     original_click_related = getattr(video_event_mvp, "click_related_video_embed", None)
     latest_preload_state: Dict[str, Any] = {}
@@ -8784,7 +8726,7 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
     def diagnostic_normalizer(preload_state: Dict[str, Any]) -> Dict[str, Any]:
         latest_preload_state.clear()
         latest_preload_state.update(preload_state or {})
-        return normalize_video_capture_matches(preload_state)
+        return original_normalizer(preload_state)
 
     def diagnostic_scroll_to_related(driver) -> bool:
         bottom_diagnostics["dom_before_scroll"] = inspect_bottom_video_dom(driver)
@@ -8794,15 +8736,10 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
 
     def diagnostic_click_related(driver) -> bool:
         before_click = inspect_bottom_video_dom(driver)
-        shadow_play_click = click_bottom_video_shadow_play_control(driver)
-        success = bool(shadow_play_click.get("success"))
-        if not success:
-            success = bool(original_click_related(driver))
-        time.sleep(0.15)
+        success = bool(original_click_related(driver))
         bottom_diagnostics["click_attempts"].append(
             {
                 "success": success,
-                "shadow_play_click": shadow_play_click,
                 "dom_before_click": before_click,
                 "dom_after_click": inspect_bottom_video_dom(driver),
             }
@@ -8810,38 +8747,8 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
         return success
 
     try:
-        if original_milestone_check is not None:
-            video_event_mvp.normalized_has_video_percent_milestone = lambda normalized: True
         if original_normalizer is not None:
             video_event_mvp.normalize_video_events = diagnostic_normalizer
-        if isinstance(original_preload_script, str):
-            video_event_mvp.PRELOAD_SCRIPT = original_preload_script.replace(
-                "list.length > 60",
-                "list.length > 300",
-            ).replace(
-                "list.length - 60",
-                "list.length - 300",
-            )
-        if original_related_selectors:
-            preferred_related_selectors = [
-                ".ArticleDetail_relatedvideo__wvgRP youtube-video",
-                ".relatedvideo youtube-video",
-                ".ArticleDetail_relatedvideo__wvgRP .video-player-container",
-                ".relatedvideo .video-player-container",
-                ".ArticleDetail_relatedvideo__wvgRP media-theme-sutro",
-                ".relatedvideo media-theme-sutro",
-                ".ArticleDetail_relatedvideo__wvgRP",
-                ".relatedvideo",
-            ]
-            video_event_mvp.RELATED_VIDEO_SELECTORS = [
-                selector
-                for selector in preferred_related_selectors
-                if selector in original_related_selectors
-            ] + [
-                selector
-                for selector in original_related_selectors
-                if selector not in preferred_related_selectors
-            ]
         if original_scroll_to_related is not None:
             video_event_mvp.scroll_to_related_video_embed = diagnostic_scroll_to_related
         if original_click_related is not None:
@@ -8868,14 +8775,8 @@ def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Di
             },
         }
     finally:
-        if original_milestone_check is not None:
-            video_event_mvp.normalized_has_video_percent_milestone = original_milestone_check
         if original_normalizer is not None:
             video_event_mvp.normalize_video_events = original_normalizer
-        if original_preload_script is not None:
-            video_event_mvp.PRELOAD_SCRIPT = original_preload_script
-        if original_related_selectors:
-            video_event_mvp.RELATED_VIDEO_SELECTORS = original_related_selectors
         if original_scroll_to_related is not None:
             video_event_mvp.scroll_to_related_video_embed = original_scroll_to_related
         if original_click_related is not None:
