@@ -6,6 +6,8 @@ import time
 import base64
 import shutil
 import subprocess
+import sys
+import tempfile
 import functools
 import signal
 import threading
@@ -8712,11 +8714,35 @@ def inspect_bottom_video_dom(driver) -> List[Dict[str, Any]]:
 
 
 def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Dict[str, Any]:
-    import importlib
-    import video_event_mvp
-
-    video_event_mvp = importlib.reload(video_event_mvp)
-    return video_event_mvp.capture_video_event(url=normalized_url, headless=headless)
+    mvp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "video_event_mvp.py")
+    output_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(prefix="video-event-mvp-", suffix=".json", delete=False) as output_file:
+            output_path = output_file.name
+        command = [sys.executable, mvp_path, "--url", normalized_url, "--output", output_path]
+        if headless:
+            command.append("--headless")
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        with open(output_path, "r", encoding="utf-8") as output_file:
+            result = json.load(output_file)
+        if completed.returncode and not result.get("error"):
+            result["error"] = (completed.stderr or completed.stdout or "MVP capture subprocess failed.").strip()
+        return result
+    except subprocess.TimeoutExpired:
+        return {"error": "MVP capture subprocess timed out after 180 seconds.", "url": normalized_url, "debug_steps": []}
+    except Exception as exc:
+        return {"error": str(exc), "url": normalized_url, "debug_steps": []}
+    finally:
+        if output_path:
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
 
 
 def add_mvp_capture_summary(mvp_result: Dict[str, Any]) -> Dict[str, Any]:
