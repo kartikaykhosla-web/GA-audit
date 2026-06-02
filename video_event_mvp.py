@@ -495,6 +495,27 @@ def click_related_video_embed(driver: webdriver.Chrome) -> bool:
               const rect = element.getBoundingClientRect();
               return !!(rect.width && rect.height);
             };
+            const themes = Array.from(document.querySelectorAll(
+              ".ArticleDetail_relatedvideo__wvgRP media-theme-sutro, .relatedvideo media-theme-sutro"
+            ));
+            for (const theme of themes) {
+              if (!visible(theme) || !theme.shadowRoot) continue;
+              const playButton = theme.shadowRoot.querySelector(
+                "media-play-button, [role='button'][aria-label='play'], [role='button'][aria-label='pause']"
+              );
+              if (!visible(playButton)) continue;
+              const label = String(playButton.getAttribute("aria-label") || "").toLowerCase();
+              if (label === "pause" || !playButton.hasAttribute("mediapaused")) {
+                return true;
+              }
+              try {
+                playButton.scrollIntoView({ block: "center", inline: "center" });
+              } catch (e) {}
+              try {
+                playButton.click();
+                return true;
+              } catch (e) {}
+            }
             for (const selector of selectors) {
               const elements = Array.from(document.querySelectorAll(selector));
               for (const element of elements) {
