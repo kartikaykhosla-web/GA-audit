@@ -8712,13 +8712,11 @@ def inspect_bottom_video_dom(driver) -> List[Dict[str, Any]]:
 
 
 def capture_video_event_for_ga(normalized_url: str, headless: bool = True) -> Dict[str, Any]:
+    import importlib
     import video_event_mvp
 
-    return video_event_mvp.capture_video_event(
-        url=normalized_url,
-        headless=headless,
-        prefer_related_embed=True if is_bottom_video_url(normalized_url) else None,
-    )
+    video_event_mvp = importlib.reload(video_event_mvp)
+    return video_event_mvp.capture_video_event(url=normalized_url, headless=headless)
 
 
 def add_mvp_capture_summary(mvp_result: Dict[str, Any]) -> Dict[str, Any]:
