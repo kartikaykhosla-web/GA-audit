@@ -568,6 +568,35 @@ def get_supabase_settings() -> Dict[str, str]:
     }
 
 
+def supabase_is_configured() -> bool:
+    settings = get_supabase_settings()
+    return bool(settings["url"] and settings["key"])
+
+
+def configured_storage_backend() -> str:
+    if neon_is_configured():
+        return "neon"
+    if sheet_storage_is_configured():
+        return "google_sheets"
+    if supabase_is_configured():
+        return "supabase"
+    return ""
+
+
+def require_storage_backend() -> str:
+    backend = configured_storage_backend()
+    if backend:
+        print(f"Bulk audit worker storage backend: {backend}", flush=True)
+        return backend
+    raise RuntimeError(
+        "Bulk audit worker storage is not configured. Add matching GitHub Actions "
+        "repository secrets for the storage backend used by Streamlit: "
+        "NEON_DATABASE_URL/DATABASE_URL/POSTGRES_URL, or "
+        "GCP_SERVICE_ACCOUNT_JSON plus GOOGLE_SHEET_ID/SHEETS_SPREADSHEET_ID, or "
+        "SUPABASE_URL plus SUPABASE_SERVICE_ROLE_KEY."
+    )
+
+
 def supabase_headers(prefer: str = "") -> Dict[str, str]:
     settings = get_supabase_settings()
     headers = {
@@ -2388,6 +2417,7 @@ def main():
     parser.add_argument("--job-id", required=True)
     args = parser.parse_args()
 
+    require_storage_backend()
     job = load_job(args.job_id)
     payload = job.get("payload") or {}
     if isinstance(payload, str):
