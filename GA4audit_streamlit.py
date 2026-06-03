@@ -5857,6 +5857,25 @@ def neon_cancel_bulk_audit_job(job_id: str) -> Tuple[bool, str]:
     return True, "Bulk audit stop requested."
 
 
+def neon_mark_bulk_audit_job_dispatched(job_id: str) -> Tuple[bool, str]:
+    ensure_neon_ready()
+    if not str(job_id or "").strip():
+        return False, "Job ID is missing."
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE bulk_audit_jobs
+                SET status = %s, started_at = %s
+                WHERE job_id = %s AND COALESCE(status, '') = %s
+                """,
+                ("dispatched", datetime.now(timezone.utc).isoformat(), job_id, "queued"),
+            )
+            if cur.rowcount == 0:
+                return False, "Bulk audit job was already picked up or could not be found."
+    return True, "Bulk audit dispatched to GitHub Actions."
+
+
 def neon_load_bulk_audit_results(job_id: str) -> Tuple[List[dict], str]:
     ensure_neon_ready()
     if not job_id:
@@ -6648,6 +6667,54 @@ def cancel_bulk_audit_job(job_id: str) -> Tuple[bool, str]:
             prefer="return=minimal",
         )
         return True, "Bulk audit stop requested."
+    except Exception as exc:
+        return False, str(exc)
+
+
+def mark_bulk_audit_job_dispatched(job_id: str) -> Tuple[bool, str]:
+    if neon_is_configured():
+        try:
+            return neon_mark_bulk_audit_job_dispatched(job_id)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
+    if sheet_storage_is_configured():
+        if not str(job_id or "").strip():
+            return False, "Job ID is missing."
+        try:
+            worksheet = get_bulk_jobs_worksheet()
+            row_index = _find_sheet_row_by_first_column(worksheet, job_id)
+            if row_index is None:
+                return False, "Bulk audit job not found."
+            _update_sheet_row(
+                worksheet,
+                BULK_JOB_HEADERS,
+                row_index,
+                {
+                    "status": "dispatched",
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return True, "Bulk audit dispatched to GitHub Actions."
+        except Exception as exc:
+            return False, str(exc)
+
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+    if not str(job_id or "").strip():
+        return False, "Job ID is missing."
+    try:
+        supabase_request(
+            "PATCH",
+            SUPABASE_BULK_JOB_TABLE,
+            params={"job_id": f"eq.{job_id}", "status": "eq.queued"},
+            payload={
+                "status": "dispatched",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            },
+            prefer="return=minimal",
+        )
+        return True, "Bulk audit dispatched to GitHub Actions."
     except Exception as exc:
         return False, str(exc)
 
@@ -12347,9 +12414,12 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     job_id = response
                     trigger_success, trigger_message = trigger_bulk_audit_workflow(job_id)
                     if trigger_success:
+                        dispatch_marked, dispatch_message = mark_bulk_audit_job_dispatched(job_id)
                         st.session_state["latest_bulk_audit_job_id"] = job_id
                         st.session_state["bulk_audit_force_latest_job_id"] = job_id
-                        st.success(f"Bulk audit started in GitHub Actions. Job ID: {job_id}")
+                        if not dispatch_marked:
+                            st.warning(dispatch_message)
+                        st.success(f"Bulk audit dispatched to GitHub Actions. Job ID: {job_id}")
                     else:
                         st.error(trigger_message)
 
@@ -12408,8 +12478,13 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                 elif milestone_key not in st.session_state:
                     st.session_state[milestone_key] = progress_milestone
 
-                if job_status in {"queued", "running"} and st_autorefresh:
+                active_job_statuses = {"queued", "dispatched", "running"}
+                if job_status in active_job_statuses and st_autorefresh:
                     st.caption("Auto-refreshing job status while this audit is in progress.")
+                    if job_status in {"queued", "dispatched"}:
+                        st.caption(
+                            "GitHub Actions is starting the worker. The first status update can take about a minute while dependencies install."
+                        )
                     st_autorefresh(interval=10000, key=f"bulk_audit_autorefresh_{selected_job_id}")
 
                 st.progress((job_completed / job_total) if job_total else 0)
@@ -12428,7 +12503,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                 stop_clicked = action_cols[1].button(
                     "Stop audit",
                     key=f"stop_bulk_job_{selected_job_id}",
-                    disabled=job_status not in {"queued", "running"},
+                    disabled=job_status not in active_job_statuses,
                 )
                 if stop_clicked:
                     cancel_success, cancel_message = cancel_bulk_audit_job(selected_job_id)
