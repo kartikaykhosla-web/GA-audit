@@ -743,6 +743,27 @@ def decode_collect(url: str, body_text: str = "") -> List[Dict[str, Any]]:
     return [event for event in events if event.get("event_name")]
 
 
+def data_layer_entry_to_event(entry: Any) -> Dict[str, Any]:
+    if isinstance(entry, dict) and str(entry.get("event") or "").strip():
+        return dict(entry)
+
+    command = None
+    event_name = None
+    params = {}
+    if isinstance(entry, list):
+        command = entry[0] if entry else None
+        event_name = entry[1] if len(entry) > 1 else None
+        params = entry[2] if len(entry) > 2 and isinstance(entry[2], dict) else {}
+    elif isinstance(entry, dict) and "0" in entry:
+        command = entry.get("0")
+        event_name = entry.get("1")
+        params = entry.get("2") if isinstance(entry.get("2"), dict) else {}
+
+    if str(command or "").strip().lower() == "event" and str(event_name or "").strip():
+        return {"event": event_name, **params}
+    return {}
+
+
 def normalize_video_events(state: Dict[str, Any]) -> Dict[str, Any]:
     gtag_calls = state.get("gtagCalls", []) or []
     data_layer_pushes = state.get("dataLayerPushes", []) or []
@@ -758,11 +779,9 @@ def normalize_video_events(state: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(push_entry, dict):
             continue
         entry = push_entry.get("entry")
-        if isinstance(entry, dict) and str(entry.get("event") or "").strip().lower() == "video_interaction":
-            data_layer_video.append(entry)
-            continue
-        if isinstance(entry, list) and len(entry) >= 2 and str(entry[0]).strip().lower() == "event" and str(entry[1]).strip().lower() == "video_interaction":
-            data_layer_video.append({"event": entry[1], **(entry[2] if len(entry) > 2 and isinstance(entry[2], dict) else {})})
+        event = data_layer_entry_to_event(entry)
+        if str(event.get("event") or "").strip().lower() == "video_interaction":
+            data_layer_video.append(event)
 
     for event in data_layer_video:
         if not isinstance(event, dict) or event.get("dynamic_video_embed_type"):
@@ -801,15 +820,16 @@ def summarize_capture_state_for_debug(state: Dict[str, Any]) -> Dict[str, Any]:
         event_name = ""
         keys: List[str] = []
         candidate_text = ""
+        event = data_layer_entry_to_event(entry)
         if isinstance(entry, dict):
-            event_name = str(entry.get("event") or "")
+            event_name = str(event.get("event") or entry.get("event") or "")
             keys = [str(key) for key in list(entry.keys())[:20]]
             try:
                 candidate_text = json.dumps(entry, ensure_ascii=False)
             except Exception:
                 candidate_text = str(entry)
         elif isinstance(entry, list):
-            event_name = str(entry[1] if len(entry) > 1 and str(entry[0]).lower() == "event" else (entry[0] if entry else ""))
+            event_name = str(event.get("event") or (entry[0] if entry else ""))
             keys = [f"list[{len(entry)}]"]
             try:
                 candidate_text = json.dumps(entry, ensure_ascii=False)
