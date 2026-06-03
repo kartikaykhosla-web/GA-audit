@@ -8513,6 +8513,92 @@ def snapshot_trigger_payload_from_event(event):
     return payload
 
 
+def parse_video_percent_value(value: Any) -> Optional[float]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def normalize_mvp_dynamic_video_embed_type(value: Any) -> Any:
+    text = str(value or "").strip()
+    if text.lower() == "in house video":
+        return "in-house video"
+    return value
+
+
+def get_video_event_field_value(event: Dict[str, Any], field_name: str) -> Any:
+    if not isinstance(event, dict):
+        return None
+    normalized_target = normalize_dimension_name(field_name)
+    for payload in (event, event.get("params") or {}, event.get("raw_fields") or {}):
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            clean_key = str(key or "")
+            for prefix in ("ep.", "epn.", "epf.", "up.", "upn."):
+                if clean_key.startswith(prefix):
+                    clean_key = clean_key.split(".", 1)[1]
+                    break
+            if normalize_dimension_name(clean_key) == normalized_target:
+                return value
+    return None
+
+
+def score_video_event_payload(event: Dict[str, Any]) -> float:
+    if not isinstance(event, dict):
+        return -1.0
+    score = 0.0
+    percent = parse_video_percent_value(get_video_event_field_value(event, "video_percent"))
+    if percent is not None:
+        score += percent
+        if percent >= 25:
+            score += 1000
+    if get_video_event_field_value(event, "dynamic_video_embed_type") not in (None, ""):
+        score += 100
+    for field_name in ("player_type", "position_fold", "section_name", "video_duration", "video_title"):
+        if get_video_event_field_value(event, field_name) not in (None, ""):
+            score += 10
+    return score
+
+
+def normalize_mvp_video_event_fields(event: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(event, dict):
+        return event
+    normalized_event = dict(event)
+    for payload in (normalized_event, normalized_event.get("params") or {}, normalized_event.get("raw_fields") or {}):
+        if not isinstance(payload, dict):
+            continue
+        for key, value in list(payload.items()):
+            clean_key = str(key or "")
+            for prefix in ("ep.", "epn.", "epf.", "up.", "upn."):
+                if clean_key.startswith(prefix):
+                    clean_key = clean_key.split(".", 1)[1]
+                    break
+            if normalize_dimension_name(clean_key) == "dynamicvideoembedtype":
+                payload[key] = normalize_mvp_dynamic_video_embed_type(value)
+    if not get_video_event_field_value(normalized_event, "dynamic_video_embed_type"):
+        section_name = str(get_video_event_field_value(normalized_event, "section_name") or "").strip().lower()
+        if section_name == "view this video also":
+            normalized_event["dynamic_video_embed_type"] = "view this video also"
+        elif section_name == "featured video":
+            normalized_event["dynamic_video_embed_type"] = "in-house video"
+    return normalized_event
+
+
+def select_best_video_event(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    candidates = [event for event in events or [] if isinstance(event, dict)]
+    if not candidates:
+        return {}
+    return max(candidates, key=score_video_event_payload)
+
+
 def build_synthetic_ga4_event_from_datalayer(entry: dict) -> Optional[dict]:
     if not isinstance(entry, dict):
         return None
@@ -8547,17 +8633,17 @@ def build_synthetic_ga4_event_from_datalayer(entry: dict) -> Optional[dict]:
 def video_mvp_result_to_ga_result(mvp_result: Dict[str, Any], url: str) -> Dict[str, Any]:
     matched = (mvp_result or {}).get("matched") or {}
     data_layer_video_events = [
-        event
+        normalize_mvp_video_event_fields(event)
         for event in matched.get("data_layer_video_events", []) or []
         if isinstance(event, dict)
     ]
     gtag_video_events = [
-        event
+        normalize_mvp_video_event_fields(event)
         for event in matched.get("gtag_video_events", []) or []
         if isinstance(event, dict)
     ]
     transport_video_events = [
-        event
+        normalize_mvp_video_event_fields(event)
         for event in matched.get("transport_video_events", []) or []
         if isinstance(event, dict)
     ]
@@ -8577,13 +8663,17 @@ def video_mvp_result_to_ga_result(mvp_result: Dict[str, Any], url: str) -> Dict[
             }
         )
 
-    selected_event = {}
-    if data_layer_video_events:
-        selected_event = dict(data_layer_video_events[-1])
-    elif execution_events:
-        selected_event = snapshot_trigger_payload_from_event(execution_events[-1])
-    elif transport_video_events:
-        selected_event = snapshot_trigger_payload_from_event(transport_video_events[-1])
+    selected_event_candidates = []
+    best_data_layer_event = select_best_video_event(data_layer_video_events)
+    if best_data_layer_event:
+        selected_event_candidates.append(dict(best_data_layer_event))
+    best_execution_event = select_best_video_event(execution_events)
+    if best_execution_event:
+        selected_event_candidates.append(snapshot_trigger_payload_from_event(best_execution_event))
+    best_transport_event = select_best_video_event(transport_video_events)
+    if best_transport_event:
+        selected_event_candidates.append(snapshot_trigger_payload_from_event(best_transport_event))
+    selected_event = select_best_video_event(selected_event_candidates)
 
     capture_failed = not bool(data_layer_video_events or execution_events or transport_video_events)
     return {

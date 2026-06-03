@@ -1910,22 +1910,88 @@ def mvp_transport_event_to_ga_event(event: dict) -> Optional[dict]:
     }
 
 
+def normalize_mvp_dynamic_video_embed_type(value: Any) -> Any:
+    text = str(value or "").strip()
+    if text.lower() == "in house video":
+        return "in-house video"
+    return value
+
+
+def normalize_mvp_event_fields(event: dict) -> dict:
+    if not isinstance(event, dict):
+        return event
+    normalized_event = dict(event)
+    for payload in (normalized_event, normalized_event.get("params") or {}, normalized_event.get("raw_fields") or {}):
+        if not isinstance(payload, dict):
+            continue
+        for key, value in list(payload.items()):
+            clean_key = str(key or "")
+            for prefix in ("ep.", "epn.", "epf.", "up.", "upn."):
+                if clean_key.startswith(prefix):
+                    clean_key = clean_key.split(".", 1)[1]
+                    break
+            if normalize_dimension_name(clean_key) == "dynamicvideoembedtype":
+                payload[key] = normalize_mvp_dynamic_video_embed_type(value)
+    if mvp_event_field_value(normalized_event, "dynamic_video_embed_type") in (None, ""):
+        section_name = str(mvp_event_field_value(normalized_event, "section_name") or "").strip().lower()
+        if section_name == "view this video also":
+            normalized_event["dynamic_video_embed_type"] = "view this video also"
+        elif section_name == "featured video":
+            normalized_event["dynamic_video_embed_type"] = "in-house video"
+    return normalized_event
+
+
+def mvp_event_field_value(event: dict, field_name: str) -> Any:
+    if not isinstance(event, dict):
+        return None
+    normalized_target = normalize_dimension_name(field_name)
+    for payload in (event, event.get("params") or {}, event.get("raw_fields") or {}):
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            clean_key = str(key or "")
+            for prefix in ("ep.", "epn.", "epf.", "up.", "upn."):
+                if clean_key.startswith(prefix):
+                    clean_key = clean_key.split(".", 1)[1]
+                    break
+            if normalize_dimension_name(clean_key) == normalized_target:
+                return value
+    return None
+
+
+def mvp_video_event_score(event: dict) -> float:
+    if not isinstance(event, dict):
+        return -1.0
+    score = 0.0
+    percent = parse_percent_value(mvp_event_field_value(event, "video_percent"))
+    if percent is not None:
+        score += percent
+        if percent >= 25:
+            score += 1000
+    if mvp_event_field_value(event, "dynamic_video_embed_type") not in (None, ""):
+        score += 100
+    for field_name in ("player_type", "position_fold", "section_name", "video_duration", "video_title"):
+        if mvp_event_field_value(event, field_name) not in (None, ""):
+            score += 10
+    return score
+
+
 def mvp_matched_events_to_ga_events(mvp_result: Dict[str, Any]) -> List[dict]:
     matched = mvp_result.get("matched") if isinstance(mvp_result.get("matched"), dict) else {}
     events: List[dict] = []
     for event in matched.get("data_layer_video_events") or []:
-        ga_event = mvp_data_layer_event_to_ga_event(event)
+        ga_event = mvp_data_layer_event_to_ga_event(normalize_mvp_event_fields(event))
         if ga_event:
             events.append(ga_event)
     for event in matched.get("gtag_video_events") or []:
-        ga_event = mvp_gtag_event_to_ga_event(event)
+        ga_event = mvp_gtag_event_to_ga_event(normalize_mvp_event_fields(event))
         if ga_event:
             events.append(ga_event)
     for event in matched.get("transport_video_events") or []:
-        ga_event = mvp_transport_event_to_ga_event(event)
+        ga_event = mvp_transport_event_to_ga_event(normalize_mvp_event_fields(event))
         if ga_event:
             events.append(ga_event)
-    return merge_ga_events(events)
+    return sorted(merge_ga_events(events), key=mvp_video_event_score)
 
 
 def audit_video_mvp_url(plan_row: dict, wait_seconds: int) -> dict:

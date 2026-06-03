@@ -684,6 +684,106 @@ def reset_visible_videos(driver: webdriver.Chrome) -> None:
         pass
 
 
+def seek_video_progress(driver: webdriver.Chrome, target_percent: float = 26.0) -> bool:
+    try:
+        return bool(
+            driver.execute_script(
+                """
+                const targetPercent = Math.max(1, Math.min(95, Number(arguments[0] || 26)));
+                const visible = (element) => {
+                  if (!element) return false;
+                  const rect = element.getBoundingClientRect();
+                  return !!(rect.width && rect.height);
+                };
+                const asNumber = (value) => {
+                  const numberValue = Number(value);
+                  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : 0;
+                };
+                const durationFor = (element) => {
+                  const candidates = [
+                    element && element.duration,
+                    element && element.mediaDuration,
+                    element && element.getAttribute && element.getAttribute("duration"),
+                    element && element.getAttribute && element.getAttribute("mediaduration")
+                  ];
+                  if (element && element.shadowRoot) {
+                    const timeDisplay = element.shadowRoot.querySelector("[mediaduration], media-time-display");
+                    if (timeDisplay) {
+                      candidates.push(timeDisplay.getAttribute("mediaduration"));
+                      candidates.push(timeDisplay.mediaDuration);
+                      candidates.push(timeDisplay.duration);
+                    }
+                  }
+                  for (const candidate of candidates) {
+                    const parsed = asNumber(candidate);
+                    if (parsed) return parsed;
+                  }
+                  return 0;
+                };
+                const targets = [];
+                const addTarget = (element) => {
+                  if (element && visible(element) && !targets.includes(element)) targets.push(element);
+                };
+                document.querySelectorAll(
+                  ".ArticleDetail_relatedvideo__wvgRP media-theme-sutro, .relatedvideo media-theme-sutro, " +
+                  ".ArticleDetail_relatedvideo__wvgRP youtube-video, .relatedvideo youtube-video, video"
+                ).forEach(addTarget);
+                let acted = false;
+                for (const target of targets) {
+                  const duration = durationFor(target);
+                  const seconds = duration ? duration * targetPercent / 100 : 35;
+                  try {
+                    target.currentTime = seconds;
+                    acted = true;
+                  } catch (e) {}
+                  try {
+                    if (typeof target.seek === "function") {
+                      target.seek(seconds);
+                      acted = true;
+                    }
+                  } catch (e) {}
+                  try {
+                    const media = target.media || target.assignedSlot && target.assignedSlot.media;
+                    if (media) {
+                      media.currentTime = seconds;
+                      acted = true;
+                    }
+                  } catch (e) {}
+                  try {
+                    const roots = [target.shadowRoot, target.querySelector && target].filter(Boolean);
+                    for (const root of roots) {
+                      const iframe = root.querySelector && root.querySelector("iframe[src*='youtube']");
+                      if (!iframe || !iframe.contentWindow) continue;
+                      iframe.contentWindow.postMessage(JSON.stringify({
+                        event: "command",
+                        func: "seekTo",
+                        args: [seconds, true]
+                      }), "*");
+                      iframe.contentWindow.postMessage(JSON.stringify({
+                        event: "command",
+                        func: "playVideo",
+                        args: []
+                      }), "*");
+                      acted = true;
+                    }
+                  } catch (e) {}
+                  try {
+                    if (typeof target.play === "function") {
+                      const promise = target.play();
+                      if (promise && typeof promise.catch === "function") promise.catch(() => {});
+                      acted = true;
+                    }
+                  } catch (e) {}
+                }
+                return acted;
+                """,
+                target_percent,
+            )
+        )
+    except Exception:
+        return False
+
+
 def capture_primary_video_state(driver: webdriver.Chrome) -> Dict[str, Any]:
     try:
         return driver.execute_script(
@@ -750,6 +850,70 @@ def extract_state(driver: webdriver.Chrome) -> Dict[str, Any]:
         ) or {}
     except Exception:
         return {}
+
+
+def parse_video_percent(value: Any) -> Optional[float]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def normalize_dynamic_video_embed_type(value: Any) -> Any:
+    text = str(value or "").strip()
+    if text.lower() == "in house video":
+        return "in-house video"
+    return value
+
+
+def video_event_field(event: Dict[str, Any], field_name: str) -> Any:
+    if not isinstance(event, dict):
+        return None
+    normalized_target = str(field_name or "").replace("_", "").lower()
+    for payload in (event, event.get("params") or {}, event.get("raw_fields") or {}):
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            clean_key = str(key or "")
+            for prefix in ("ep.", "epn.", "epf.", "up.", "upn."):
+                if clean_key.startswith(prefix):
+                    clean_key = clean_key.split(".", 1)[1]
+                    break
+            if clean_key.replace("_", "").lower() == normalized_target:
+                return value
+    return None
+
+
+def video_event_score(event: Dict[str, Any]) -> float:
+    if not isinstance(event, dict):
+        return -1.0
+    score = 0.0
+    percent = parse_video_percent(video_event_field(event, "video_percent"))
+    if percent is not None:
+        score += percent
+        if percent >= 25:
+            score += 1000
+    if video_event_field(event, "dynamic_video_embed_type") not in (None, ""):
+        score += 100
+    for field_name in ("player_type", "position_fold", "section_name", "video_duration", "video_title"):
+        if video_event_field(event, field_name) not in (None, ""):
+            score += 10
+    return score
+
+
+def normalized_has_minimum_video_percent(normalized: Dict[str, Any], minimum_percent: float = 25.0) -> bool:
+    for group_name in ("data_layer_video_events", "gtag_video_events", "transport_video_events"):
+        for event in (normalized or {}).get(group_name) or []:
+            percent = parse_video_percent(video_event_field(event, "video_percent"))
+            if percent is not None and percent >= minimum_percent:
+                return True
+    return False
 
 
 def decode_collect(url: str, body_text: str = "") -> List[Dict[str, Any]]:
@@ -826,12 +990,14 @@ def normalize_video_events(state: Dict[str, Any]) -> Dict[str, Any]:
 
     for event in data_layer_video:
         if not isinstance(event, dict) or event.get("dynamic_video_embed_type"):
+            if isinstance(event, dict) and event.get("dynamic_video_embed_type"):
+                event["dynamic_video_embed_type"] = normalize_dynamic_video_embed_type(event.get("dynamic_video_embed_type"))
             continue
         section_name = str(event.get("section_name") or "").strip().lower()
         if section_name == "view this video also":
             event["dynamic_video_embed_type"] = "view this video also"
         elif section_name == "featured video":
-            event["dynamic_video_embed_type"] = "in house video"
+            event["dynamic_video_embed_type"] = "in-house video"
 
     transport_video = []
     for hit in transport_hits:
@@ -839,6 +1005,17 @@ def normalize_video_events(state: Dict[str, Any]) -> Dict[str, Any]:
             continue
         for event in decode_collect(str(hit.get("url") or ""), str(hit.get("bodyText") or "")):
             if str(event.get("event_name") or "").strip().lower() == "video_interaction":
+                params = event.get("params") if isinstance(event.get("params"), dict) else {}
+                raw_fields = event.get("raw_fields") if isinstance(event.get("raw_fields"), dict) else {}
+                for payload in (params, raw_fields):
+                    for key, value in list(payload.items()):
+                        clean_key = str(key or "")
+                        for prefix in ("ep.", "epn.", "epf.", "up.", "upn."):
+                            if clean_key.startswith(prefix):
+                                clean_key = clean_key.split(".", 1)[1]
+                                break
+                        if clean_key.replace("_", "").lower() == "dynamicvideoembedtype":
+                            payload[key] = normalize_dynamic_video_embed_type(value)
                 transport_video.append({"transport": hit.get("api"), **event})
 
     return {
@@ -1062,6 +1239,11 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
                 "clicked_control_after_reset": clicked_control_after_reset,
             }
         )
+        seek_attempted = seek_video_progress(driver, target_percent=26.0) if any(
+            (clicked_initial, clicked_control, clicked_control_after_reset)
+        ) else False
+        if seek_attempted:
+            debug_steps.append({"step": "seek_video_progress", "success": True, "target_percent": 26})
 
         start = time.time()
         matched = None
@@ -1069,7 +1251,7 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
         latest_state = {}
         latest_video_state = {}
         any_click = clicked_initial or clicked_control or clicked_control_after_reset
-        poll_seconds = 20 if any_click else 2
+        poll_seconds = 26 if any_click else 2
         while time.time() - start < poll_seconds:
             latest_state = extract_state(driver)
             normalized = normalize_video_events(latest_state)
@@ -1078,7 +1260,7 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
                 matched = normalized
                 if first_match_at is None:
                     first_match_at = time.time()
-                if normalized_has_field(normalized, "dynamic_video_embed_type") or time.time() - first_match_at >= 3:
+                if normalized_has_minimum_video_percent(normalized, 25.0) or time.time() - first_match_at >= 18:
                     break
             time.sleep(1.0)
 
@@ -1095,18 +1277,22 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
             reset_visible_videos(driver)
             time.sleep(0.3)
             clicked_control_after_reset = click_related_video_embed(driver)
+            seek_attempted = seek_video_progress(driver, target_percent=26.0) if any(
+                (clicked_initial, clicked_control, clicked_control_after_reset)
+            ) else False
             debug_steps.append(
                 {
                     "step": "fallback_video_probe",
                     "clicked_initial": clicked_initial,
                     "clicked_control": clicked_control,
                     "clicked_control_after_reset": clicked_control_after_reset,
+                    "seek_attempted": seek_attempted,
                 }
             )
 
             start = time.time()
             first_match_at = None
-            while time.time() - start < 15:
+            while time.time() - start < 26:
                 latest_state = extract_state(driver)
                 normalized = normalize_video_events(latest_state)
                 latest_video_state = capture_primary_video_state(driver)
@@ -1114,7 +1300,7 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
                     matched = normalized
                     if first_match_at is None:
                         first_match_at = time.time()
-                    if normalized_has_field(normalized, "dynamic_video_embed_type") or time.time() - first_match_at >= 3:
+                    if normalized_has_minimum_video_percent(normalized, 25.0) or time.time() - first_match_at >= 18:
                         break
                 time.sleep(1.0)
 
