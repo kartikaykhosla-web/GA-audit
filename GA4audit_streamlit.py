@@ -8764,6 +8764,149 @@ def add_mvp_capture_summary(mvp_result: Dict[str, Any]) -> Dict[str, Any]:
     return {**mvp_result, "debug_steps": debug_steps}
 
 
+def capture_video_interaction_for_app(normalized_url: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    mvp_video_result = capture_video_event_for_ga(normalized_url, headless=True)
+    mvp_video_result = add_mvp_capture_summary(mvp_video_result)
+    return mvp_video_result, video_mvp_result_to_ga_result(mvp_video_result, normalized_url)
+
+
+def build_video_capture_debug_response(video_capture_result: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "video_debug_steps": load_json_payload(
+            video_capture_result.get("video_debug_steps_json", ""),
+            [],
+        ),
+        "video_dom_state": load_json_payload(
+            video_capture_result.get("video_dom_state_json", ""),
+            {},
+        ),
+        "visible_video_elements": load_json_payload(
+            video_capture_result.get("video_visible_videos_json", ""),
+            [],
+        ),
+        "bottom_video_diagnostics": load_json_payload(
+            video_capture_result.get("bottom_video_diagnostics_json", ""),
+            {},
+        ),
+        "execution_stage_ga4_values": load_json_payload(
+            video_capture_result.get("ga4_execution_events_json", ""),
+            [],
+        ),
+        "execution_transport_hits": load_json_payload(
+            video_capture_result.get("ga4_execution_hits_json", ""),
+            [],
+        ),
+    }
+
+
+def render_video_capture_debug(video_capture_result: Dict[str, Any]) -> None:
+    st.markdown("### Copy debug response")
+    st.code(
+        json.dumps(build_video_capture_debug_response(video_capture_result), ensure_ascii=False, indent=2),
+        language="json",
+    )
+    render_json_block(
+        "Video debug steps",
+        video_capture_result.get("video_debug_steps_json", ""),
+        "No video diagnostic steps were recorded.",
+    )
+    render_json_block(
+        "Video DOM state",
+        video_capture_result.get("video_dom_state_json", ""),
+        "No video DOM diagnostics were recorded.",
+    )
+    render_json_block(
+        "Visible video elements",
+        video_capture_result.get("video_visible_videos_json", ""),
+        "No visible video elements were observed.",
+    )
+    render_json_block(
+        "Bottom video diagnostics",
+        video_capture_result.get("bottom_video_diagnostics_json", ""),
+        "No bottom video diagnostics were recorded.",
+    )
+    render_event_list(
+        "Execution-stage GA4 values",
+        video_capture_result.get("ga4_execution_events_json", ""),
+        "No execution-stage GA4 events were captured in the video pass.",
+    )
+    render_event_list(
+        "Execution transport hits (pre-network)",
+        video_capture_result.get("ga4_execution_hits_json", ""),
+        "No transport hits were captured in the video pass.",
+    )
+
+
+def render_video_interaction_capture_result(
+    video_capture_result: Dict[str, Any],
+    video_capture_template: dict,
+    video_capture_rules: List[dict],
+) -> None:
+    st.markdown("### Video Interaction Capture")
+    companion_summary = build_audit_focus_summary(video_capture_result, video_capture_template)
+    companion_snapshot = build_datalayer_snapshot_export(
+        video_capture_result,
+        target_event_name="video_interaction",
+    )
+    companion_execution_df, _ = build_execution_validation_rows(
+        companion_snapshot,
+        video_capture_rules,
+        include_unmatched_fields=False,
+    )
+    companion_event_df = build_event_validation_rows(
+        companion_summary["event_rows"],
+        video_capture_rules,
+        include_unmatched_observed_events=False,
+    )
+
+    companion_exec_col, companion_event_col = st.columns(2)
+    with companion_exec_col:
+        st.markdown(f"#### {video_capture_template.get('template_name') or 'Video interaction'}")
+        st.caption("Execution checks")
+        if companion_execution_df.empty:
+            st.info("No video execution values were captured in this pass.")
+        else:
+            st.dataframe(
+                style_validation_table(companion_execution_df, "Validation"),
+                use_container_width=True,
+                hide_index=True,
+            )
+    with companion_event_col:
+        st.markdown("#### Video Event")
+        if companion_event_df.empty:
+            st.info("No video interaction event rules were available for this pass.")
+        else:
+            companion_event_display_columns = [
+                "event_name",
+                "status",
+                "times_fired",
+                "capture_layer",
+            ]
+            if "expected" in companion_event_df.columns:
+                companion_event_display_columns.append("expected")
+            if "validation" in companion_event_df.columns:
+                companion_event_display_columns.append("validation")
+            companion_event_display_df = companion_event_df[companion_event_display_columns].rename(
+                columns={
+                    "event_name": "Event",
+                    "status": "Status",
+                    "times_fired": "Times Fired",
+                    "capture_layer": "Seen In",
+                    "expected": "Expected",
+                    "validation": "Validation",
+                }
+            )
+            st.dataframe(
+                style_validation_table(companion_event_display_df, "Validation")
+                if "Validation" in companion_event_display_df.columns
+                else companion_event_display_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+    with st.expander("Video capture debug", expanded=False):
+        render_video_capture_debug(video_capture_result)
+
+
 def merge_payload_field_values(existing_value, new_value):
     if new_value in (None, ""):
         return existing_value
@@ -9926,6 +10069,13 @@ def build_domain_audit_plan_from_templates(
         if not template_id or template_id in seen_template_ids:
             return
         seen_template_ids.add(template_id)
+        is_video_capture = (
+            not is_article_detail_template(plan_template, rules_by_template)
+            and is_video_interaction_template(
+                plan_template,
+                rules_by_template,
+            )
+        )
         plan_rows.append(
             {
                 "template": plan_template,
@@ -9936,6 +10086,7 @@ def build_domain_audit_plan_from_templates(
                 "override_url": override_raw,
                 "parent_template_id": parent_template_id,
                 "is_companion_template": bool(parent_template_id),
+                "capture_mode": "video_mvp" if is_video_capture else "standard",
             }
         )
 
@@ -9972,6 +10123,10 @@ def compact_domain_audit_plan(plan_rows: List[dict]) -> List[dict]:
                 "template_name": row.get("template_name") or "Unnamed template",
                 "sample_url": row.get("sample_url") or "",
                 "sample_error": row.get("sample_error") or "",
+                "override_url": row.get("override_url") or "",
+                "parent_template_id": row.get("parent_template_id") or "",
+                "is_companion_template": bool(row.get("is_companion_template")),
+                "capture_mode": row.get("capture_mode") or "standard",
             }
         )
     return compact_rows
@@ -11270,7 +11425,7 @@ This capture is split into three layers:
                     active_templates,
                     template_rules_by_template,
                 )
-                if is_video_interaction_template(template)
+                if is_video_interaction_template(template, template_rules_by_template)
             ]
 
     wait_seconds = st.slider(
@@ -11338,6 +11493,15 @@ This capture is split into three layers:
                 selected_template,
                 template_rules_by_template,
             )
+            video_capture_template = next(
+                (
+                    companion_template
+                    for companion_template in companion_validation_templates
+                    if is_video_interaction_template(companion_template, template_rules_by_template)
+                ),
+                None,
+            )
+            should_capture_companion_video = article_detail_fast_path and bool(video_capture_template)
             if article_detail_fast_path:
                 requires_video_playback = single_audit_requires_video_playback(selected_template_rules)
                 requires_scroll_capture = False
@@ -11360,7 +11524,7 @@ This capture is split into three layers:
                 )
             # Keep companion validation inside the same browser session; a second
             # auto-launched browser pass was the main source of the slow/crash loop.
-            total_audit_passes = 1
+            total_audit_passes = 1 + (1 if should_capture_companion_video else 0)
             completed_audit_passes = 0
             companion_results_by_template_id: Dict[str, Dict[str, Any]] = {}
 
@@ -11399,6 +11563,18 @@ This capture is split into three layers:
             except Exception as exc:
                 st.error(f"Error auditing {normalized_url}")
                 st.exception(exc)
+
+            if should_capture_companion_video and video_capture_template:
+                video_capture_template_id = str(video_capture_template.get("template_id") or "").strip()
+                try:
+                    status_box.write("Capturing video interaction companion...")
+                    _, video_capture_result = capture_video_interaction_for_app(normalized_url)
+                    companion_results_by_template_id[video_capture_template_id] = video_capture_result
+                    completed_audit_passes += 1
+                    progress.progress(completed_audit_passes / total_audit_passes)
+                except Exception as exc:
+                    st.error(f"Error capturing video interaction for {normalized_url}")
+                    st.exception(exc)
             progress.progress(1.0)
 
             status_box.write("Done.")
@@ -11694,6 +11870,9 @@ This capture is split into three layers:
                                                 use_container_width=True,
                                                 hide_index=True,
                                             )
+                                    if companion_result.get("video_debug_steps_json"):
+                                        with st.expander("Video capture debug", expanded=False):
+                                            render_video_capture_debug(companion_result)
 
                     st.markdown("### Comscore")
                     if capture_failed:
@@ -11869,9 +12048,7 @@ This capture is split into three layers:
             try:
                 video_progress.progress(0.25)
                 report_video_step("Running MVP video capture...", 0.35)
-                mvp_video_result = capture_video_event_for_ga(normalized_url, headless=True)
-                mvp_video_result = add_mvp_capture_summary(mvp_video_result)
-                video_capture_result = video_mvp_result_to_ga_result(mvp_video_result, normalized_url)
+                mvp_video_result, video_capture_result = capture_video_interaction_for_app(normalized_url)
                 for debug_step in (mvp_video_result or {}).get("debug_steps") or []:
                     report_video_step(str(debug_step))
                 video_progress.progress(0.8)
@@ -11882,131 +12059,11 @@ This capture is split into three layers:
             video_status_box.write("Done.")
 
             if video_capture_result:
-                st.markdown("### Video Interaction Capture")
-                companion_summary = build_audit_focus_summary(video_capture_result, video_capture_template)
-                companion_snapshot = build_datalayer_snapshot_export(
+                render_video_interaction_capture_result(
                     video_capture_result,
-                    target_event_name="video_interaction",
-                )
-                companion_execution_df, _ = build_execution_validation_rows(
-                    companion_snapshot,
+                    video_capture_template,
                     video_capture_rules,
-                    include_unmatched_fields=False,
                 )
-                companion_event_df = build_event_validation_rows(
-                    companion_summary["event_rows"],
-                    video_capture_rules,
-                    include_unmatched_observed_events=False,
-                )
-
-                companion_exec_col, companion_event_col = st.columns(2)
-                with companion_exec_col:
-                    st.markdown(f"#### {video_capture_template.get('template_name') or 'Video interaction'}")
-                    st.caption("Execution checks")
-                    if companion_execution_df.empty:
-                        st.info("No video execution values were captured in this pass.")
-                    else:
-                        st.dataframe(
-                            style_validation_table(companion_execution_df, "Validation"),
-                            use_container_width=True,
-                            hide_index=True,
-                        )
-                with companion_event_col:
-                    st.markdown("#### Video Event")
-                    if companion_event_df.empty:
-                        st.info("No video interaction event rules were available for this pass.")
-                    else:
-                        companion_event_display_columns = [
-                            "event_name",
-                            "status",
-                            "times_fired",
-                            "capture_layer",
-                        ]
-                        if "expected" in companion_event_df.columns:
-                            companion_event_display_columns.append("expected")
-                        if "validation" in companion_event_df.columns:
-                            companion_event_display_columns.append("validation")
-                        companion_event_display_df = companion_event_df[
-                            companion_event_display_columns
-                        ].rename(
-                            columns={
-                                "event_name": "Event",
-                                "status": "Status",
-                                "times_fired": "Times Fired",
-                                "capture_layer": "Seen In",
-                                "expected": "Expected",
-                                "validation": "Validation",
-                            }
-                        )
-                        st.dataframe(
-                            style_validation_table(companion_event_display_df, "Validation")
-                            if "Validation" in companion_event_display_df.columns
-                            else companion_event_display_df,
-                            use_container_width=True,
-                            hide_index=True,
-                        )
-                with st.expander("Video capture debug", expanded=False):
-                    copyable_debug_response = {
-                        "video_debug_steps": load_json_payload(
-                            video_capture_result.get("video_debug_steps_json", ""),
-                            [],
-                        ),
-                        "video_dom_state": load_json_payload(
-                            video_capture_result.get("video_dom_state_json", ""),
-                            {},
-                        ),
-                        "visible_video_elements": load_json_payload(
-                            video_capture_result.get("video_visible_videos_json", ""),
-                            [],
-                        ),
-                        "bottom_video_diagnostics": load_json_payload(
-                            video_capture_result.get("bottom_video_diagnostics_json", ""),
-                            {},
-                        ),
-                        "execution_stage_ga4_values": load_json_payload(
-                            video_capture_result.get("ga4_execution_events_json", ""),
-                            [],
-                        ),
-                        "execution_transport_hits": load_json_payload(
-                            video_capture_result.get("ga4_execution_hits_json", ""),
-                            [],
-                        ),
-                    }
-                    st.markdown("### Copy debug response")
-                    st.code(
-                        json.dumps(copyable_debug_response, ensure_ascii=False, indent=2),
-                        language="json",
-                    )
-                    render_json_block(
-                        "Video debug steps",
-                        video_capture_result.get("video_debug_steps_json", ""),
-                        "No video diagnostic steps were recorded.",
-                    )
-                    render_json_block(
-                        "Video DOM state",
-                        video_capture_result.get("video_dom_state_json", ""),
-                        "No video DOM diagnostics were recorded.",
-                    )
-                    render_json_block(
-                        "Visible video elements",
-                        video_capture_result.get("video_visible_videos_json", ""),
-                        "No visible video elements were observed.",
-                    )
-                    render_json_block(
-                        "Bottom video diagnostics",
-                        video_capture_result.get("bottom_video_diagnostics_json", ""),
-                        "No bottom video diagnostics were recorded.",
-                    )
-                    render_event_list(
-                        "Execution-stage GA4 values",
-                        video_capture_result.get("ga4_execution_events_json", ""),
-                        "No execution-stage GA4 events were captured in the video pass.",
-                    )
-                    render_event_list(
-                        "Execution transport hits (pre-network)",
-                        video_capture_result.get("ga4_execution_hits_json", ""),
-                        "No transport hits were captured in the video pass.",
-                    )
 
 
 if active_section == "Domain Audit":
@@ -12152,6 +12209,9 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                             "Validation Path": "Companion"
                             if row.get("is_companion_template")
                             else "Primary",
+                            "Capture": "MVP video"
+                            if row.get("capture_mode") == "video_mvp"
+                            else "Standard",
                             "Template": row["template_name"],
                             "Sample URL": row["sample_url"] or "Not available",
                             "Override URL": row.get("override_url") or "",

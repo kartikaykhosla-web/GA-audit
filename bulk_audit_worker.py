@@ -2,6 +2,9 @@ import argparse
 import json
 import os
 import re
+import subprocess
+import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -1818,7 +1821,198 @@ def validate_rule(rule: dict, actual: Any) -> Optional[str]:
     return None
 
 
+def run_video_mvp_capture(sample_url: str) -> Dict[str, Any]:
+    mvp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "video_event_mvp.py")
+    if not os.path.exists(mvp_path):
+        raise RuntimeError("video_event_mvp.py is missing from the bulk worker checkout.")
+
+    output_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(prefix="bulk-video-event-mvp-", suffix=".json", delete=False) as output_file:
+            output_path = output_file.name
+        completed = subprocess.run(
+            [sys.executable, mvp_path, "--url", sample_url, "--output", output_path, "--headless"],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        with open(output_path, "r", encoding="utf-8") as output_file:
+            result = json.load(output_file)
+        if completed.returncode and not result.get("error"):
+            result["error"] = (completed.stderr or completed.stdout or "MVP capture subprocess failed.").strip()
+        return result
+    except subprocess.TimeoutExpired:
+        return {"error": "MVP capture subprocess timed out after 180 seconds.", "url": sample_url, "debug_steps": []}
+    finally:
+        if output_path:
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
+
+
+def mvp_data_layer_event_to_ga_event(event: dict) -> Optional[dict]:
+    if not isinstance(event, dict):
+        return None
+    event_name = str(event.get("event") or "").strip()
+    if not event_name:
+        command = str(event.get("0") or event.get(0) or "").strip().lower()
+        if command == "event":
+            event_name = str(event.get("1") or event.get(1) or "").strip()
+    if not event_name:
+        return None
+    gtag_params = event.get("2") or event.get(2)
+    if isinstance(gtag_params, dict):
+        params = dict(gtag_params)
+    else:
+        params = {
+            str(key): value
+            for key, value in event.items()
+            if str(key) not in {"event", "0", "1", "2"} and not str(key).startswith("gtm")
+        }
+    return {
+        "event_name": normalize_event_name(event_name),
+        "params": params,
+        "status": "Observed",
+        "url": "",
+        "source": "mvp_datalayer",
+    }
+
+
+def mvp_gtag_event_to_ga_event(event: dict) -> Optional[dict]:
+    if not isinstance(event, dict):
+        return None
+    event_name = str(event.get("event_name") or "").strip()
+    if not event_name:
+        return None
+    return {
+        "event_name": normalize_event_name(event_name),
+        "params": event.get("params") if isinstance(event.get("params"), dict) else {},
+        "status": "Observed",
+        "url": "",
+        "source": "mvp_gtag",
+    }
+
+
+def mvp_transport_event_to_ga_event(event: dict) -> Optional[dict]:
+    if not isinstance(event, dict):
+        return None
+    event_name = str(event.get("event_name") or "").strip()
+    if not event_name:
+        return None
+    params = event.get("params") if isinstance(event.get("params"), dict) else {}
+    return {
+        "event_name": normalize_event_name(event_name),
+        "params": params,
+        "status": "Observed",
+        "url": event.get("url") or "",
+        "source": f"mvp_{event.get('transport') or 'transport'}",
+    }
+
+
+def mvp_matched_events_to_ga_events(mvp_result: Dict[str, Any]) -> List[dict]:
+    matched = mvp_result.get("matched") if isinstance(mvp_result.get("matched"), dict) else {}
+    events: List[dict] = []
+    for event in matched.get("data_layer_video_events") or []:
+        ga_event = mvp_data_layer_event_to_ga_event(event)
+        if ga_event:
+            events.append(ga_event)
+    for event in matched.get("gtag_video_events") or []:
+        ga_event = mvp_gtag_event_to_ga_event(event)
+        if ga_event:
+            events.append(ga_event)
+    for event in matched.get("transport_video_events") or []:
+        ga_event = mvp_transport_event_to_ga_event(event)
+        if ga_event:
+            events.append(ga_event)
+    return merge_ga_events(events)
+
+
+def audit_video_mvp_url(plan_row: dict, wait_seconds: int) -> dict:
+    del wait_seconds
+    template = plan_row.get("template") or {}
+    rules = plan_row.get("rules") or []
+    sample_url = plan_row.get("sample_url") or ""
+    if plan_row.get("sample_error") or not sample_url:
+        raise RuntimeError(plan_row.get("sample_error") or "No sample URL available.")
+
+    start = time.time()
+    mvp_result = run_video_mvp_capture(sample_url)
+    ga_events = mvp_matched_events_to_ga_events(mvp_result)
+    event_names = [event.get("event_name") for event in ga_events if event.get("event_name")]
+    event_set = sorted({name for name in event_names if name})
+    canonical_event_set = {canonical_event_name(name) for name in event_set}
+    video_interaction_present = "video_interaction" in canonical_event_set or any(
+        is_video_interaction_event(event) for event in ga_events
+    )
+
+    execution_values: Dict[str, Any] = {}
+    for event in ga_events:
+        params = event.get("params") or {}
+        if isinstance(params, dict):
+            execution_values.update({key: value for key, value in params.items() if value not in (None, "")})
+
+    execution_failures = []
+    event_failures = []
+    for rule in rules:
+        scope = str(rule.get("rule_scope") or "").strip()
+        field_name = str(rule.get("field_name") or "").strip()
+        if scope == "event":
+            canonical_rule_event = canonical_event_name(field_name)
+            if canonical_rule_event == "video_interaction":
+                if not video_interaction_present:
+                    event_failures.append(f"Event {field_name} not fired")
+                continue
+            if canonical_rule_event not in canonical_event_set:
+                event_failures.append(f"Event {field_name} not fired")
+        elif scope == "execution":
+            failure = validate_rule(rule, resolve_field_value(field_name, execution_values, ga_events))
+            if failure:
+                execution_failures.append(failure)
+
+    issues = []
+    if mvp_result.get("error"):
+        issues.append(str(mvp_result.get("error")))
+    if not video_interaction_present:
+        issues.append("video_interaction was not observed during the MVP capture pass")
+    issues.extend(execution_failures[:5])
+    issues.extend(event_failures[:5])
+
+    audit_outcome = "Issue" if issues else "Pass"
+    return {
+        "domain": plan_row.get("domain_name") or "",
+        "template_name": template.get("template_name") or plan_row.get("template_name") or "Unnamed template",
+        "sample_url": sample_url,
+        "audit_outcome": audit_outcome,
+        "implementation_status": "PASS" if audit_outcome == "Pass" else "ISSUE",
+        "pageview_triggered": False,
+        "pageview_source": "Not checked in MVP video capture",
+        "ga_present": bool(ga_events),
+        "events_count": len(event_set),
+        "events_fired": ", ".join(event_set) or "None",
+        "container_id": "Not checked",
+        "measurement_id": "Not checked",
+        "comscore_present": False,
+        "chartbeat_present": False,
+        "issues": "; ".join(issues) or "None",
+        "execution_failures": execution_failures,
+        "event_failures": event_failures,
+        "audit_duration_seconds": round(time.time() - start, 2),
+        "detail_payload": {
+            "capture_mode": "video_mvp",
+            "execution_values": execution_values,
+            "events": build_event_summary(ga_events),
+            "mvp_counts": mvp_result.get("counts") or {},
+            "mvp_debug_steps": (mvp_result.get("debug_steps") or [])[-10:],
+            "bottom_video_diagnostics": mvp_result.get("bottom_video_diagnostics") or {},
+        },
+    }
+
+
 def audit_url(plan_row: dict, wait_seconds: int) -> dict:
+    if str(plan_row.get("capture_mode") or "").strip().lower() == "video_mvp":
+        return audit_video_mvp_url(plan_row, wait_seconds)
+
     template = plan_row.get("template") or {}
     rules = plan_row.get("rules") or []
     sample_url = plan_row.get("sample_url") or ""
