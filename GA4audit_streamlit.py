@@ -11,6 +11,7 @@ import tempfile
 import functools
 import signal
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Tuple, Optional, Set, Callable
