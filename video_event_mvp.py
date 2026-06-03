@@ -789,6 +789,86 @@ def normalize_video_events(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def summarize_capture_state_for_debug(state: Dict[str, Any]) -> Dict[str, Any]:
+    data_layer_event_counts: Dict[str, int] = {}
+    data_layer_tail: List[Dict[str, Any]] = []
+    data_layer_video_candidates: List[Dict[str, Any]] = []
+
+    for index, push_entry in enumerate((state or {}).get("dataLayerPushes", []) or []):
+        if not isinstance(push_entry, dict):
+            continue
+        entry = push_entry.get("entry")
+        event_name = ""
+        keys: List[str] = []
+        candidate_text = ""
+        if isinstance(entry, dict):
+            event_name = str(entry.get("event") or "")
+            keys = [str(key) for key in list(entry.keys())[:20]]
+            try:
+                candidate_text = json.dumps(entry, ensure_ascii=False)
+            except Exception:
+                candidate_text = str(entry)
+        elif isinstance(entry, list):
+            event_name = str(entry[1] if len(entry) > 1 and str(entry[0]).lower() == "event" else (entry[0] if entry else ""))
+            keys = [f"list[{len(entry)}]"]
+            try:
+                candidate_text = json.dumps(entry, ensure_ascii=False)
+            except Exception:
+                candidate_text = str(entry)
+        else:
+            event_name = str(entry or "")
+            candidate_text = event_name
+        event_name = event_name or "(no event)"
+        data_layer_event_counts[event_name] = data_layer_event_counts.get(event_name, 0) + 1
+        compact_entry = {"index": index, "event": event_name, "keys": keys}
+        data_layer_tail.append(compact_entry)
+        lowered = candidate_text.lower()
+        if "video" in lowered or "interaction" in lowered:
+            data_layer_video_candidates.append(compact_entry)
+
+    transport_event_counts: Dict[str, int] = {}
+    transport_tail: List[Dict[str, Any]] = []
+    transport_video_candidates: List[Dict[str, Any]] = []
+    for index, hit in enumerate((state or {}).get("transportHits", []) or []):
+        if not isinstance(hit, dict):
+            continue
+        url = str(hit.get("url") or "")
+        body_text = str(hit.get("bodyText") or "")
+        decoded_names = [str(event.get("event_name") or "") for event in decode_collect(url, body_text)]
+        for event_name in decoded_names:
+            transport_event_counts[event_name] = transport_event_counts.get(event_name, 0) + 1
+        compact_hit = {
+            "index": index,
+            "api": hit.get("api"),
+            "decoded_event_names": decoded_names,
+            "url_prefix": url[:320],
+        }
+        transport_tail.append(compact_hit)
+        lowered = f"{url}\n{body_text}\n{' '.join(decoded_names)}".lower()
+        if "video" in lowered or "interaction" in lowered:
+            transport_video_candidates.append(compact_hit)
+
+    return {
+        "data_layer_event_counts": data_layer_event_counts,
+        "data_layer_tail": data_layer_tail[-20:],
+        "data_layer_video_candidates": data_layer_video_candidates[-20:],
+        "transport_event_counts": transport_event_counts,
+        "transport_tail": transport_tail[-20:],
+        "transport_video_candidates": transport_video_candidates[-20:],
+        "contains_video_interaction": {
+            "data_layer": any(
+                str(item.get("event") or "").strip().lower() == "video_interaction"
+                for item in data_layer_tail
+            ),
+            "transport": any(
+                str(name).strip().lower() == "video_interaction"
+                for item in transport_tail
+                for name in item.get("decoded_event_names", [])
+            ),
+        },
+    }
+
+
 def normalized_has_field(normalized: Dict[str, Any], field_name: str) -> bool:
     for event in normalized.get("gtag_video_events") or []:
         params = event.get("params") if isinstance(event, dict) else {}
@@ -975,10 +1055,23 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
         if matched is None:
             matched = normalize_video_events(latest_state)
 
+        capture_diagnostics = summarize_capture_state_for_debug(matched["raw_state"])
+        debug_steps.append(
+            {
+                "step": "capture_event_diagnostics",
+                "data_layer_event_counts": capture_diagnostics["data_layer_event_counts"],
+                "transport_event_counts": capture_diagnostics["transport_event_counts"],
+                "contains_video_interaction": capture_diagnostics["contains_video_interaction"],
+            }
+        )
+
         result = {
             "url": url,
             "debug_steps": debug_steps,
             "video_state": latest_video_state,
+            "bottom_video_diagnostics": {
+                "capture_state": capture_diagnostics,
+            },
             "matched": {
                 "gtag_video_events": matched["gtag_video_events"],
                 "data_layer_video_events": matched["data_layer_video_events"],
