@@ -5495,7 +5495,11 @@ def _compact_plan_for_storage(domain_name: str, plan_rows: List[dict]) -> List[d
     compact_plan = []
     for row in compact_domain_audit_plan(plan_rows):
         template = dict(row.get("template") or {})
-        rules = get_rules_for_validation_template(template, template_rules_by_template)
+        rules = get_effective_template_rules(
+            template,
+            active_templates,
+            template_rules_by_template,
+        )
         compact_plan.append(
             {
                 **row,
@@ -6561,7 +6565,11 @@ def create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict]
     compact_plan = []
     for row in compact_domain_audit_plan(plan_rows):
         template = dict(row.get("template") or {})
-        rules = get_rules_for_validation_template(template, template_rules_by_template)
+        rules = get_effective_template_rules(
+            template,
+            active_templates,
+            template_rules_by_template,
+        )
         compact_plan.append(
             {
                 **row,
@@ -6794,6 +6802,142 @@ def bulk_result_records_to_report_rows(result_records: List[dict]) -> List[dict]
     return rows
 
 
+def is_bulk_video_companion_result(row: dict) -> bool:
+    detail_payload = row.get("detail_payload") or {}
+    capture_mode = str(detail_payload.get("capture_mode") or "").strip().lower()
+    pageview_source = str(row.get("pageview_source") or "").strip().lower()
+    return capture_mode == "video_mvp" or "not checked in mvp video capture" in pageview_source
+
+
+def is_primary_article_detail_result(row: dict) -> bool:
+    template_name = _normalize_template_name_key(row.get("template_name") or "")
+    return "article detail" in template_name and "video interaction" not in template_name
+
+
+def is_video_only_failure_text(value: Any) -> bool:
+    normalized = normalize_dimension_name(value)
+    return any(
+        video_field in normalized
+        for video_field in VIDEO_INTERACTION_FIELD_NORMALIZED
+        if video_field not in AMBIGUOUS_VIDEO_FIELD_NORMALIZED
+    ) or "videointeraction" in normalized
+
+
+def applicable_bulk_failure_rows(row: dict) -> Tuple[List[str], List[str]]:
+    execution_failures = [str(value) for value in (row.get("execution_failures") or []) if str(value).strip()]
+    event_failures = [str(value) for value in (row.get("event_failures") or []) if str(value).strip()]
+    if not is_primary_article_detail_result(row):
+        return execution_failures, event_failures
+    return (
+        [value for value in execution_failures if not is_video_only_failure_text(value)],
+        [value for value in event_failures if not is_video_only_failure_text(value)],
+    )
+
+
+def is_vendor_only_issue_text(value: Any) -> bool:
+    issue_text = str(value or "").strip().lower()
+    if not issue_text or not any(vendor in issue_text for vendor in ("comscore", "chartbeat")):
+        return False
+    ga_markers = (
+        "ga4",
+        "gtm",
+        "gtag",
+        "datalayer",
+        "page_view",
+        "pageview",
+        "template validation",
+        "execution validation",
+        "event validation",
+        "audit did not complete",
+        "capture failed",
+    )
+    return not any(marker in issue_text for marker in ga_markers) and not re.search(r"\bga\b", issue_text)
+
+
+def applicable_bulk_issue_parts(row: dict) -> List[str]:
+    issue_parts = [
+        part.strip()
+        for part in re.split(r"[;|]+", str(row.get("issues") or ""))
+        if part.strip() and part.strip().lower() not in {"none", "pass"}
+    ]
+    if not is_primary_article_detail_result(row):
+        return issue_parts
+    raw_execution_failures = [
+        str(value)
+        for value in (row.get("execution_failures") or [])
+        if str(value).strip()
+    ]
+    raw_event_failures = [
+        str(value)
+        for value in (row.get("event_failures") or [])
+        if str(value).strip()
+    ]
+    applicable_execution_failures, applicable_event_failures = applicable_bulk_failure_rows(row)
+    removed_video_execution_failure = len(applicable_execution_failures) < len(raw_execution_failures)
+    removed_video_event_failure = len(applicable_event_failures) < len(raw_event_failures)
+    return [
+        part
+        for part in issue_parts
+        if not is_video_only_failure_text(part)
+        and not (
+            removed_video_execution_failure
+            and "execution validation mismatch" in part.lower()
+        )
+        and not (
+            removed_video_event_failure
+            and "event validation mismatch" in part.lower()
+        )
+    ]
+
+
+def bulk_result_issue_flags(row: dict) -> Dict[str, bool]:
+    video_companion = is_bulk_video_companion_result(row)
+    execution_failures, event_failures = applicable_bulk_failure_rows(row)
+    issue_parts = applicable_bulk_issue_parts(row)
+    ga_issue_parts = [part for part in issue_parts if not is_vendor_only_issue_text(part)]
+
+    ga_issue = bool(
+        not row.get("ga_present")
+        or (not video_companion and not row.get("pageview_triggered"))
+        or execution_failures
+        or event_failures
+        or ga_issue_parts
+    )
+    comscore_issue = bool(
+        not video_companion
+        and (
+            not row.get("comscore_present")
+            or any("comscore" in part.lower() for part in issue_parts)
+        )
+    )
+    chartbeat_issue = bool(
+        not video_companion
+        and (
+            not row.get("chartbeat_present")
+            or any("chartbeat" in part.lower() for part in issue_parts)
+        )
+    )
+    return {
+        "ga_issue": ga_issue,
+        "comscore_issue": comscore_issue,
+        "chartbeat_issue": chartbeat_issue,
+        "any_issue": ga_issue or comscore_issue or chartbeat_issue,
+    }
+
+
+def bulk_result_display_issues(row: dict) -> str:
+    issue_flags = bulk_result_issue_flags(row)
+    issue_parts = applicable_bulk_issue_parts(row)
+    ga_issue_parts = [part for part in issue_parts if not is_vendor_only_issue_text(part)]
+    if issue_flags["ga_issue"] and not ga_issue_parts:
+        issue_parts.append("GA/page_view or template validation issue")
+    if issue_flags["comscore_issue"] and not any("comscore" in part.lower() for part in issue_parts):
+        issue_parts.append("Comscore request not observed")
+    if issue_flags["chartbeat_issue"] and not any("chartbeat" in part.lower() for part in issue_parts):
+        issue_parts.append("Chartbeat request not observed")
+    return " | ".join(dict.fromkeys(issue_parts)) or "None"
+
+
 def _bulk_event_value_map(values: Any) -> Dict[str, List[str]]:
     value_map: Dict[str, List[str]] = {}
     if not isinstance(values, dict):
@@ -6980,7 +7124,7 @@ def render_bulk_audit_result_detail(
                 "comscore_present": bool(row.get("comscore_present")),
                 "chartbeat_present": bool(row.get("chartbeat_present")),
                 "events_fired": row.get("events_fired") or "None",
-                "issues": row.get("issues") or "None",
+                "issues": bulk_result_display_issues(row),
             }
         ]
     )
@@ -7271,12 +7415,6 @@ def _rule_field_merge_key(rule: dict) -> Tuple[str, str]:
         str(rule.get("rule_scope") or "").strip().lower(),
         normalize_dimension_name(rule.get("field_name") or ""),
     )
-
-
-def keep_article_detail_base_rule(rule: dict) -> bool:
-    if not is_video_related_rule(rule):
-        return True
-    return normalize_dimension_name(rule.get("field_name") or "") in ARTICLE_DETAIL_BASE_VIDEO_FIELD_NORMALIZED
 
 
 def get_augmented_template_rules(
@@ -7701,7 +7839,7 @@ def get_effective_template_rules(
         return []
 
     if is_article_detail_template(template, rules_by_template):
-        return [rule for rule in template_rules_list if keep_article_detail_base_rule(rule)]
+        return strip_video_rules_for_primary_audit(template_rules_list)
 
     return template_rules_list
 
@@ -11106,15 +11244,44 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
         )
 
     generated_at = datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S %Z")
-    issue_rows = [row for row in report_rows if row.get("audit_outcome") == "Issue"]
-    passed_rows = [row for row in report_rows if row.get("audit_outcome") != "Issue"]
+    report_issue_flags = [
+        (row, bulk_result_issue_flags(row))
+        for row in report_rows
+    ]
+    issue_rows = [
+        row
+        for row, issue_flags in report_issue_flags
+        if issue_flags["any_issue"]
+    ]
+    passed_rows = [
+        row
+        for row, issue_flags in report_issue_flags
+        if not issue_flags["any_issue"]
+    ]
+    ga_issue_count = sum(
+        1
+        for _, issue_flags in report_issue_flags
+        if issue_flags["ga_issue"]
+    )
+    comscore_issue_count = sum(
+        1
+        for _, issue_flags in report_issue_flags
+        if issue_flags["comscore_issue"]
+    )
+    chartbeat_issue_count = sum(
+        1
+        for _, issue_flags in report_issue_flags
+        if issue_flags["chartbeat_issue"]
+    )
 
     elements: List[Any] = [
         Paragraph(f"GA4 Domain Audit Report: {html.escape(str(domain_name or 'Unknown domain'))}", title_style),
         Paragraph(
             html.escape(
                 f"Generated {generated_at}. Tested {len(report_rows)} template URL(s): "
-                f"{len(issue_rows)} with issue(s), {len(passed_rows)} passed."
+                f"{len(issue_rows)} with issue(s), {len(passed_rows)} passed. "
+                f"GA issues: {ga_issue_count}; Comscore issues: {comscore_issue_count}; "
+                f"Chartbeat issues: {chartbeat_issue_count}."
             ),
             body_style,
         ),
@@ -11125,15 +11292,15 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
     if issue_rows:
         add_table(
             elements,
-            ["Template", "URL", "GA Fired", "Comscore", "Chartbeat", "Issues"],
+            ["Template", "URL", "GA Issue", "Comscore Issue", "Chartbeat Issue", "Issues"],
             [
                 [
                     row.get("template_name"),
                     row.get("sample_url"),
-                    "Yes" if row.get("ga_present") else "No",
-                    "Yes" if row.get("comscore_present") else "No",
-                    "Yes" if row.get("chartbeat_present") else "No",
-                    row.get("issues") or "Issue observed",
+                    "Yes" if bulk_result_issue_flags(row)["ga_issue"] else "No",
+                    "Yes" if bulk_result_issue_flags(row)["comscore_issue"] else "No",
+                    "Yes" if bulk_result_issue_flags(row)["chartbeat_issue"] else "No",
+                    bulk_result_display_issues(row),
                 ]
                 for row in issue_rows
             ],
@@ -11150,14 +11317,14 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
             [
                 row.get("template_name"),
                 row.get("sample_url"),
-                row.get("audit_outcome"),
+                "Issue" if bulk_result_issue_flags(row)["any_issue"] else "Pass",
                 "Yes" if row.get("ga_present") else "No",
                 f"{'Yes' if row.get('pageview_triggered') else 'No'} ({row.get('pageview_source')})",
                 f"{row.get('events_count')} - {row.get('events_fired')}",
                 f"{row.get('measurement_id')} / {row.get('container_id')}",
                 "Yes" if row.get("comscore_present") else "No",
                 "Yes" if row.get("chartbeat_present") else "No",
-                row.get("issues") or "None",
+                bulk_result_display_issues(row),
             ]
             for row in report_rows
         ],
@@ -11166,9 +11333,10 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
 
     detailed_rows = []
     for row in report_rows:
-        for failure in row.get("execution_failures") or []:
+        execution_failures, event_failures = applicable_bulk_failure_rows(row)
+        for failure in execution_failures:
             detailed_rows.append([row.get("template_name"), row.get("sample_url"), "Execution", failure])
-        for failure in row.get("event_failures") or []:
+        for failure in event_failures:
             detailed_rows.append([row.get("template_name"), row.get("sample_url"), "Event", failure])
 
     if detailed_rows:
@@ -11185,16 +11353,17 @@ def build_domain_audit_pdf(domain_name: str, report_rows: List[dict]) -> bytes:
         elements.append(Paragraph(f"URL Audit Detail {index}: {html.escape(str(row.get('template_name') or 'Template'))}", heading_style))
         elements.append(Paragraph(html.escape(str(row.get("sample_url") or "")), body_style))
         elements.append(Spacer(1, 6))
-        if row.get("issues"):
+        display_issues = bulk_result_display_issues(row)
+        if display_issues != "None":
             elements.append(Paragraph("Issues", subheading_style))
-            elements.append(Paragraph(html.escape(str(row.get("issues") or "")), body_style))
+            elements.append(Paragraph(html.escape(display_issues), body_style))
             elements.append(Spacer(1, 6))
         add_table(
             elements,
             ["Outcome", "GA Fired", "Pageview", "Events", "Measurement ID", "Container ID", "Comscore", "Chartbeat"],
             [
                 [
-                    row.get("audit_outcome"),
+                    "Issue" if bulk_result_issue_flags(row)["any_issue"] else "Pass",
                     "Yes" if row.get("ga_present") else "No",
                     f"{'Yes' if row.get('pageview_triggered') else 'No'} ({row.get('pageview_source')})",
                     f"{row.get('events_count')} - {row.get('events_fired')}",
@@ -12927,21 +13096,51 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     st.markdown("### Latest Domain Audit Report")
                     st.caption(f"Domain: {report_domain}")
 
-                issue_rows = [row for row in report_rows if row.get("audit_outcome") == "Issue"]
+                report_issue_flags = [
+                    (row, bulk_result_issue_flags(row))
+                    for row in report_rows
+                ]
+                issue_rows = [
+                    row
+                    for row, issue_flags in report_issue_flags
+                    if issue_flags["any_issue"]
+                ]
+                ga_issue_count = sum(
+                    1
+                    for _, issue_flags in report_issue_flags
+                    if issue_flags["ga_issue"]
+                )
+                comscore_issue_count = sum(
+                    1
+                    for _, issue_flags in report_issue_flags
+                    if issue_flags["comscore_issue"]
+                )
+                chartbeat_issue_count = sum(
+                    1
+                    for _, issue_flags in report_issue_flags
+                    if issue_flags["chartbeat_issue"]
+                )
                 metric_col1, metric_col2, metric_col3 = st.columns(3)
                 metric_col1.metric("URLs tested", len(report_rows))
                 metric_col2.metric("URLs with issues", len(issue_rows))
                 metric_col3.metric("Passed", len(report_rows) - len(issue_rows))
+                issue_metric_col1, issue_metric_col2, issue_metric_col3 = st.columns(3)
+                issue_metric_col1.metric("GA issues", ga_issue_count)
+                issue_metric_col2.metric("Comscore issues", comscore_issue_count)
+                issue_metric_col3.metric("Chartbeat issues", chartbeat_issue_count)
+                st.caption(
+                    "Comscore and Chartbeat issue counts exclude video-interaction companion captures because those vendor checks are not run in that pass."
+                )
 
                 issues_df = pd.DataFrame(
                     [
                         {
                             "Template": row.get("template_name"),
                             "URL": row.get("sample_url"),
-                            "GA Fired": "Yes" if row.get("ga_present") else "No",
-                            "Comscore Fired": "Yes" if row.get("comscore_present") else "No",
-                            "Chartbeat Fired": "Yes" if row.get("chartbeat_present") else "No",
-                            "Issues": row.get("issues"),
+                            "GA Issue": "Yes" if bulk_result_issue_flags(row)["ga_issue"] else "No",
+                            "Comscore Issue": "Yes" if bulk_result_issue_flags(row)["comscore_issue"] else "No",
+                            "Chartbeat Issue": "Yes" if bulk_result_issue_flags(row)["chartbeat_issue"] else "No",
+                            "Issues": bulk_result_display_issues(row),
                         }
                         for row in issue_rows
                     ]
@@ -12957,9 +13156,10 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                         {
                             "Template": row.get("template_name"),
                             "URL": row.get("sample_url"),
-                            "Outcome": row.get("audit_outcome"),
+                            "Outcome": "Issue" if bulk_result_issue_flags(row)["any_issue"] else "Pass",
                             "Implementation Status": row.get("implementation_status"),
                             "GA Fired": "Yes" if row.get("ga_present") else "No",
+                            "GA Issue": "Yes" if bulk_result_issue_flags(row)["ga_issue"] else "No",
                             "Pageview Triggered": "Yes" if row.get("pageview_triggered") else "No",
                             "Pageview Source": row.get("pageview_source"),
                             "Event Count": row.get("events_count"),
@@ -12967,8 +13167,10 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                             "Measurement ID": row.get("measurement_id"),
                             "Container ID": row.get("container_id"),
                             "Comscore Fired": "Yes" if row.get("comscore_present") else "No",
+                            "Comscore Issue": "Yes" if bulk_result_issue_flags(row)["comscore_issue"] else "No",
                             "Chartbeat Fired": "Yes" if row.get("chartbeat_present") else "No",
-                            "Issues": row.get("issues") or "None",
+                            "Chartbeat Issue": "Yes" if bulk_result_issue_flags(row)["chartbeat_issue"] else "No",
+                            "Issues": bulk_result_display_issues(row),
                         }
                         for row in report_rows
                     ]
