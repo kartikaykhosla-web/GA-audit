@@ -6794,141 +6794,398 @@ def bulk_result_records_to_report_rows(result_records: List[dict]) -> List[dict]
     return rows
 
 
-def _bulk_detail_text(value: Any, limit: int = 500) -> str:
-    if isinstance(value, (dict, list)):
-        try:
-            text = json.dumps(value, ensure_ascii=False, sort_keys=True)
-        except Exception:
-            text = str(value)
-    else:
-        text = str(value if value is not None else "")
-    return text if len(text) <= limit else f"{text[:limit - 3]}..."
+def _bulk_event_value_map(values: Any) -> Dict[str, List[str]]:
+    value_map: Dict[str, List[str]] = {}
+    if not isinstance(values, dict):
+        return value_map
+    for key, raw_values in values.items():
+        candidates = raw_values if isinstance(raw_values, list) else [raw_values]
+        formatted_values = []
+        for value in candidates:
+            formatted = format_exact_value(value)
+            if formatted and formatted not in formatted_values:
+                formatted_values.append(formatted)
+        if formatted_values:
+            value_map[str(key)] = formatted_values
+    return value_map
 
 
-def _bulk_event_summary_rows(row: dict) -> Tuple[List[dict], List[dict]]:
+def _bulk_field_rows_to_payload(rows: Any) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        field_name = str(row.get("Field") or row.get("field") or "").strip()
+        if field_name:
+            payload[field_name] = row.get("Value") if "Value" in row else row.get("value")
+    return payload
+
+
+def build_bulk_audit_url_view_model(row: dict) -> Dict[str, Any]:
     detail_payload = row.get("detail_payload") or {}
     events = detail_payload.get("events") or []
-    summary_rows = []
-    value_rows = []
+    event_rows = []
+    event_payloads: Dict[str, dict] = {}
+    debug_events = []
 
     for event in events if isinstance(events, list) else []:
         if not isinstance(event, dict):
             continue
         event_name = str(event.get("event_name") or "collect")
-        values = event.get("values") if isinstance(event.get("values"), dict) else {}
+        values = _bulk_event_value_map(event.get("values"))
         sources = event.get("sources") if isinstance(event.get("sources"), list) else []
-        summary_rows.append(
+        event_payload = {
+            key: value_list[0] if len(value_list) == 1 else value_list
+            for key, value_list in values.items()
+        }
+        event_payloads[canonical_event_name(event_name)] = event_payload
+        debug_events.append(
             {
-                "Event": event_name,
-                "Times Fired": int(event.get("times_fired") or 0),
-                "Seen In": ", ".join(str(source) for source in sources if source) or "Captured",
-                "Captured Fields": ", ".join(str(key) for key in values.keys()) or "None",
+                "event_name": event_name,
+                "times_fired": int(event.get("times_fired") or 0),
+                "sources": sources,
+                "params": event_payload,
             }
         )
-        for field_name, field_values in values.items():
-            value_rows.append(
+        event_rows.append(
+            {
+                "event_name": event_name,
+                "status": "Captured in network",
+                "times_fired": int(event.get("times_fired") or 0),
+                "capture_layer": "Network",
+                "key_values_seen": concise_event_highlights(values),
+                "details": build_event_detail_rows(values),
+                "technical_details": build_event_detail_rows(values, internal_only=True),
+            }
+        )
+
+    if not event_rows:
+        for stored_event in detail_payload.get("event_rows") or []:
+            if not isinstance(stored_event, dict):
+                continue
+            event_rows.append(
                 {
-                    "Event": event_name,
-                    "Field": field_name,
-                    "Value": _bulk_detail_text(field_values),
+                    "event_name": stored_event.get("event_name") or stored_event.get("Event") or "collect",
+                    "status": stored_event.get("status") or stored_event.get("Status") or "Captured",
+                    "times_fired": stored_event.get("times_fired") or stored_event.get("Times Fired") or "",
+                    "capture_layer": stored_event.get("capture_layer") or stored_event.get("Seen In") or "Captured",
+                    "key_values_seen": "",
+                    "details": [],
+                    "technical_details": [],
                 }
             )
 
-    if not summary_rows:
+    if not event_rows:
         event_names = [
             name.strip()
             for name in str(row.get("events_fired") or "").split(",")
             if name.strip() and name.strip().lower() != "none"
         ]
-        summary_rows = [
+        event_rows = [
             {
-                "Event": event_name,
-                "Times Fired": "",
-                "Seen In": "Captured",
-                "Captured Fields": "Stored summary only",
+                "event_name": event_name,
+                "status": "Captured in network",
+                "times_fired": "",
+                "capture_layer": "Network",
+                "key_values_seen": "",
+                "details": [],
+                "technical_details": [],
             }
             for event_name in event_names
         ]
 
-    return summary_rows, value_rows
+    data_layer_state = detail_payload.get("dataLayer_state") or {}
+    if not isinstance(data_layer_state, dict):
+        data_layer_state = {}
+    if not data_layer_state:
+        data_layer_state = _bulk_field_rows_to_payload(detail_payload.get("computed_rows"))
+    execution_values = detail_payload.get("execution_values") or {}
+    if not isinstance(execution_values, dict):
+        execution_values = {}
+    if not execution_values:
+        execution_values = _bulk_field_rows_to_payload(detail_payload.get("execution_rows"))
+
+    pageview_payload = event_payloads.get("pageview") or {}
+    stored_trigger_event = _bulk_field_rows_to_payload(detail_payload.get("trigger_rows"))
+    selected_event = (
+        stored_trigger_event
+        or ({"event": "page_view", **pageview_payload} if pageview_payload else {})
+    )
+    computed_state = dict(data_layer_state)
+    execution_payload = dict(execution_values or pageview_payload or computed_state)
+    network_payload = dict(pageview_payload or execution_payload)
+    ordered_keys = build_snapshot_ordered_keys(
+        selected_event,
+        computed_state,
+        execution_payload,
+        network_payload,
+    )
+    snapshot = {
+        "selected_index": None,
+        "selected_event": selected_event,
+        "computed_state": computed_state,
+        "execution_payload": execution_payload,
+        "network_payload": network_payload,
+        "event_payloads": event_payloads,
+        "trigger_df": snapshot_rows_from_payload(selected_event, ordered_keys),
+        "computed_df": snapshot_rows_from_payload(computed_state, ordered_keys),
+        "execution_df": snapshot_rows_from_payload(execution_payload, ordered_keys),
+        "network_df": snapshot_rows_from_payload(network_payload, ordered_keys),
+    }
+
+    comscore_hits = detail_payload.get("comscore_hits") or []
+    chartbeat_hits = detail_payload.get("chartbeat_hits") or []
+    comscore_rows = (
+        build_comscore_capture_rows(comscore_hits)
+        if isinstance(comscore_hits, list) and comscore_hits
+        else detail_payload.get("comscore_rows") or []
+    )
+    chartbeat_rows = (
+        build_chartbeat_capture_rows(chartbeat_hits)
+        if isinstance(chartbeat_hits, list) and chartbeat_hits
+        else detail_payload.get("chartbeat_rows") or []
+    )
+    return {
+        "snapshot": snapshot,
+        "event_payloads": event_payloads,
+        "event_rows": event_rows,
+        "debug_events": debug_events,
+        "comscore_hits": comscore_hits if isinstance(comscore_hits, list) else [],
+        "comscore_rows": comscore_rows if isinstance(comscore_rows, list) else [],
+        "chartbeat_hits": chartbeat_hits if isinstance(chartbeat_hits, list) else [],
+        "chartbeat_rows": chartbeat_rows if isinstance(chartbeat_rows, list) else [],
+        "detail_payload": detail_payload,
+    }
 
 
-def _bulk_vendor_hit_rows(hits: Any) -> List[dict]:
-    rows = []
-    for hit in hits if isinstance(hits, list) else []:
-        if not isinstance(hit, dict):
-            continue
-        rows.append(
+def render_bulk_audit_result_detail(
+    row: dict,
+    selected_template: Optional[dict] = None,
+    selected_template_rules: Optional[List[dict]] = None,
+) -> None:
+    selected_template_rules = selected_template_rules or []
+    view_model = build_bulk_audit_url_view_model(row)
+    snapshot = view_model["snapshot"]
+    event_rows = view_model["event_rows"]
+    comscore_rows = view_model["comscore_rows"]
+    chartbeat_rows = view_model["chartbeat_rows"]
+    detail_payload = row.get("detail_payload") or {}
+
+    summary_df = pd.DataFrame(
+        [
             {
-                "Source": hit.get("source") or "Captured",
-                "Status": hit.get("status") or hit.get("response_status") or "Observed",
-                "Request URL": hit.get("url") or hit.get("request_url") or "",
-                "Parameters": _bulk_detail_text(hit.get("params") or {}),
+                "page_url": row.get("sample_url"),
+                "pageview_triggered": bool(row.get("pageview_triggered")),
+                "pageview_source": row.get("pageview_source") or "Not fired",
+                "comscore_present": bool(row.get("comscore_present")),
+                "chartbeat_present": bool(row.get("chartbeat_present")),
+                "events_fired": row.get("events_fired") or "None",
+                "issues": row.get("issues") or "None",
+            }
+        ]
+    )
+    st.subheader("Summary")
+    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+    st.download_button(
+        "Download audit summary CSV",
+        summary_df.to_csv(index=False).encode("utf-8"),
+        export_filename("ga4_audit_summary", "csv"),
+        "text/csv",
+        key=f"download_bulk_audit_summary_{row.get('result_id') or row.get('template_id') or 'selected'}",
+    )
+
+    stat_col1, stat_col2, stat_col3, stat_col4, stat_col5, stat_col6, stat_col7 = st.columns(7)
+    stat_col1.metric("Pageview Triggered", "Yes" if row.get("pageview_triggered") else "No")
+    stat_col2.metric("Pageview Source", row.get("pageview_source") or "Not fired")
+    stat_col3.metric("Events Fired", str(int(row.get("events_count") or 0)))
+    stat_col4.metric("Container ID", row.get("container_id") or "Not found")
+    stat_col5.metric("Measurement ID", row.get("measurement_id") or "Not found")
+    stat_col6.metric("Comscore", "Yes" if row.get("comscore_present") else "No")
+    stat_col7.metric("Chartbeat", "Yes" if row.get("chartbeat_present") else "No")
+
+    if selected_template:
+        st.caption(
+            f"Template validation active: **{selected_template.get('template_name') or row.get('template_name') or 'Unnamed template'}**"
+        )
+        if not selected_template_rules:
+            st.info("This template has no rules yet. Add execution-field or event rules in Template Manager.")
+
+    st.markdown("### DataLayer Snapshot")
+    st.caption(
+        "Primary audit view. This is the closest in-app match to the GTM dataLayer extension, using exact raw values from the captured run."
+    )
+    st.caption("Selected dataLayer index: Unavailable in this stored bulk run")
+
+    trigger_col, state_col, exec_col = st.columns(3)
+    with trigger_col:
+        st.markdown("#### Trigger Event")
+        if snapshot["trigger_df"].empty:
+            st.info("Trigger event was not accessible in this run.")
+        else:
+            st.dataframe(snapshot["trigger_df"], use_container_width=True, hide_index=True)
+    with state_col:
+        st.markdown("#### Computed State")
+        if snapshot["computed_df"].empty:
+            st.info("Computed state could not be built for this run.")
+        else:
+            st.dataframe(snapshot["computed_df"], use_container_width=True, hide_index=True)
+    with exec_col:
+        st.markdown("#### Execution Payload")
+        execution_display_df, _ = build_execution_validation_rows(
+            snapshot,
+            selected_template_rules,
+        ) if selected_template_rules else (snapshot["execution_df"], [])
+        if execution_display_df.empty:
+            st.info("No execution payload matched this event.")
+        elif selected_template_rules and "Validation" in execution_display_df.columns:
+            st.dataframe(
+                style_validation_table(execution_display_df, "Validation"),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.dataframe(execution_display_df, use_container_width=True, hide_index=True)
+
+    st.markdown("### Events")
+    event_df = (
+        build_event_validation_rows(event_rows, selected_template_rules)
+        if selected_template_rules
+        else pd.DataFrame(event_rows)
+    )
+    if event_df.empty:
+        st.info("No GA4 events were detected during the audit window.")
+    else:
+        st.caption("Quick event summary only. Use DataLayer Snapshot above for the detailed field-by-field audit.")
+        event_display_columns = ["event_name", "status", "times_fired", "capture_layer"]
+        if "expected" in event_df.columns:
+            event_display_columns.append("expected")
+        if "validation" in event_df.columns:
+            event_display_columns.append("validation")
+        event_display_df = event_df[event_display_columns].rename(
+            columns={
+                "event_name": "Event",
+                "status": "Status",
+                "times_fired": "Times Fired",
+                "capture_layer": "Seen In",
+                "expected": "Expected",
+                "validation": "Validation",
             }
         )
-    return rows
+        if "Validation" in event_display_df.columns:
+            st.dataframe(
+                style_validation_table(event_display_df, "Validation"),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.dataframe(event_display_df, use_container_width=True, hide_index=True)
 
-
-def render_bulk_audit_result_detail(row: dict) -> None:
-    detail_payload = row.get("detail_payload") or {}
-    st.markdown(f"#### {row.get('template_name') or 'Template'}")
-    st.caption(str(row.get("sample_url") or ""))
-
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("GA Fired", "Yes" if row.get("ga_present") else "No")
-    metric_cols[1].metric("Captured Events", int(row.get("events_count") or 0))
-    metric_cols[2].metric("Comscore", "Yes" if row.get("comscore_present") else "No")
-    metric_cols[3].metric("Chartbeat", "Yes" if row.get("chartbeat_present") else "No")
-
-    event_summary_rows, event_value_rows = _bulk_event_summary_rows(row)
-    st.markdown("##### Captured Events")
-    if event_summary_rows:
-        st.dataframe(pd.DataFrame(event_summary_rows), use_container_width=True, hide_index=True)
-        if event_value_rows:
-            with st.expander("View captured event values", expanded=False):
-                st.dataframe(pd.DataFrame(event_value_rows), use_container_width=True, hide_index=True)
+    st.markdown("### Comscore")
+    if not row.get("comscore_present"):
+        st.info("No Comscore tag hit was captured during this audit run.")
+    elif not comscore_rows:
+        st.info("Comscore requests were seen, but no c1/c2/c7/c8 values could be extracted.")
     else:
-        st.info("No events were captured for this template.")
+        st.caption("Exact Comscore values captured from scorecardresearch requests and beacon.js during this run.")
+        comscore_display_df = pd.DataFrame(comscore_rows)
+        for column in ["hit_type", "times_fired", "status_chain", "c1", "c2", "c7", "c8", "request_url"]:
+            if column not in comscore_display_df.columns:
+                comscore_display_df[column] = ""
+        comscore_display_df = comscore_display_df[
+            ["hit_type", "times_fired", "status_chain", "c1", "c2", "c7", "c8", "request_url"]
+        ].rename(
+            columns={
+                "hit_type": "Hit Type",
+                "times_fired": "Times Fired",
+                "status_chain": "Status Chain",
+                "request_url": "Request URL",
+            }
+        )
+        st.dataframe(comscore_display_df, use_container_width=True, hide_index=True)
 
-    execution_values = detail_payload.get("execution_values") or {}
-    execution_rows = [
-        {"Field": key, "Value": _bulk_detail_text(value)}
-        for key, value in execution_values.items()
-    ] if isinstance(execution_values, dict) else []
-    if execution_rows:
-        st.markdown("##### Execution Values")
-        st.dataframe(pd.DataFrame(execution_rows), use_container_width=True, hide_index=True)
+    st.markdown("### Chartbeat")
+    total_chartbeat_fires = sum(
+        int(chartbeat_row.get("times_fired") or chartbeat_row.get("Times Fired") or 0)
+        for chartbeat_row in chartbeat_rows
+        if isinstance(chartbeat_row, dict)
+    )
+    if row.get("chartbeat_present") and total_chartbeat_fires <= 0:
+        total_chartbeat_fires = max(1, len(view_model["chartbeat_hits"]))
+    chartbeat_validation_df = pd.DataFrame(
+        [
+            {
+                "Check": "Chartbeat request",
+                "Validation": VALIDATION_PASS_LABEL if row.get("chartbeat_present") else VALIDATION_FAIL_LABEL,
+                "Times Fired": total_chartbeat_fires,
+            }
+        ]
+    )
+    st.dataframe(
+        style_validation_table(chartbeat_validation_df, "Validation"),
+        use_container_width=True,
+        hide_index=True,
+    )
+    if row.get("chartbeat_present"):
+        st.caption("Detailed Chartbeat request values remain available under Advanced debug.")
 
-    vendor_col1, vendor_col2 = st.columns(2)
-    with vendor_col1:
-        st.markdown("##### Comscore Requests")
-        comscore_rows = _bulk_vendor_hit_rows(detail_payload.get("comscore_hits"))
-        if comscore_rows:
-            st.dataframe(pd.DataFrame(comscore_rows), use_container_width=True, hide_index=True)
-        else:
-            st.info("No Comscore request was captured.")
-    with vendor_col2:
-        st.markdown("##### Chartbeat Requests")
-        chartbeat_rows = _bulk_vendor_hit_rows(detail_payload.get("chartbeat_hits"))
-        if chartbeat_rows:
-            st.dataframe(pd.DataFrame(chartbeat_rows), use_container_width=True, hide_index=True)
-        else:
-            st.info("No Chartbeat request was captured.")
-
-    failure_rows = [
-        {"Type": "Execution", "Issue": failure}
-        for failure in (row.get("execution_failures") or [])
-    ] + [
-        {"Type": "Event", "Issue": failure}
-        for failure in (row.get("event_failures") or [])
-    ]
-    if failure_rows:
-        st.markdown("##### Validation Issues")
-        st.dataframe(pd.DataFrame(failure_rows), use_container_width=True, hide_index=True)
-
-    with st.expander("Raw captured detail", expanded=False):
-        st.json(detail_payload)
-
+    with st.expander("Advanced debug", expanded=False):
+        left_col, right_col = st.columns(2)
+        with left_col:
+            render_json_block(
+                "dataLayer snapshot",
+                safe_json(detail_payload.get("dataLayer_state") or {})
+                if detail_payload.get("dataLayer_state")
+                else "",
+                "No dataLayer snapshot captured.",
+            )
+            render_json_block(
+                "page_view / pageview event",
+                safe_json(view_model["event_payloads"].get("pageview") or {})
+                if view_model["event_payloads"].get("pageview")
+                else "",
+                "No page_view event found in dataLayer.",
+            )
+            scroll_payload = (
+                view_model["event_payloads"].get("pagescroll")
+                or view_model["event_payloads"].get("scroll")
+                or {}
+            )
+            render_json_block(
+                "Scroll event",
+                safe_json(scroll_payload) if scroll_payload else "",
+                "No scroll event captured.",
+            )
+        with right_col:
+            execution_values = detail_payload.get("execution_values") or {}
+            render_event_list(
+                "Execution-stage GA4 values",
+                safe_json([{"event_name": "stored_execution_payload", "params": execution_values}])
+                if execution_values
+                else "",
+                "No execution-stage GA4 events captured.",
+            )
+            render_event_list(
+                "Execution transport hits (pre-network)",
+                "",
+                "No pre-network transport hits captured.",
+            )
+            st.caption("`Raw gtag calls` can stay empty when the site fires GA4 through GTM rather than direct `window.gtag(...)` calls.")
+            render_event_list("Raw gtag calls", "", "No gtag calls captured.")
+            render_event_list(
+                "Final GA4 events decoded from network",
+                safe_json(view_model["debug_events"]) if view_model["debug_events"] else "",
+                "No network GA4 events decoded.",
+            )
+            render_json_block(
+                "Comscore captures",
+                safe_json(view_model["comscore_hits"]) if view_model["comscore_hits"] else "",
+                "No Comscore values captured.",
+            )
+            render_json_block(
+                "Chartbeat captures",
+                safe_json(view_model["chartbeat_hits"]) if view_model["chartbeat_hits"] else "",
+                "No Chartbeat values captured.",
+            )
 
 def toggle_bulk_audit_result_detail(state_key: str, view_id: str) -> None:
     current_view_id = str(st.session_state.get(state_key) or "")
@@ -12723,6 +12980,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     st.markdown("#### View Template Results")
                     selected_detail_key = f"selected_bulk_result_detail_{selected_job_id}"
                     selected_view_id = str(st.session_state.get(selected_detail_key) or "")
+                    selected_detail_row = None
                     for row_index, row in enumerate(report_rows):
                         view_id = str(row.get("result_id") or f"row_{row_index}")
                         is_selected = selected_view_id == view_id
@@ -12737,9 +12995,33 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                                 on_click=toggle_bulk_audit_result_detail,
                                 args=(selected_detail_key, view_id),
                             )
-                            if is_selected:
-                                st.divider()
-                                render_bulk_audit_result_detail(row)
+                        if is_selected:
+                            selected_detail_row = row
+
+                    if selected_detail_row:
+                        st.divider()
+                        row_template_id = str(selected_detail_row.get("template_id") or "").strip()
+                        row_template = next(
+                            (
+                                template
+                                for template in active_templates
+                                if str(template.get("template_id") or "").strip() == row_template_id
+                            ),
+                            {
+                                "template_id": row_template_id,
+                                "template_name": selected_detail_row.get("template_name") or "Unnamed template",
+                            },
+                        )
+                        row_template_rules = get_single_audit_template_rules(
+                            row_template,
+                            active_templates,
+                            template_rules_by_template,
+                        )
+                        render_bulk_audit_result_detail(
+                            selected_detail_row,
+                            row_template,
+                            row_template_rules,
+                        )
 
                 download_col1, download_col2 = st.columns([1, 1])
                 download_col1.download_button(
