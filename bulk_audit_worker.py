@@ -714,6 +714,11 @@ def install_datalayer_probe(driver):
 (() => {
   if (window.__gaAuditProbeInstalled) return;
   window.__gaAuditProbeInstalled = true;
+  try {
+    if (performance && typeof performance.setResourceTimingBufferSize === "function") {
+      performance.setResourceTimingBufferSize(2000);
+    }
+  } catch (e) {}
   window.__gaAudit = window.__gaAudit || { pushes: [], state: {}, gtag: [], transportHits: [] };
   const trim = (list) => {
     if (list && list.length > 100) list.splice(0, list.length - 100);
@@ -738,7 +743,7 @@ def install_datalayer_probe(driver):
     }
   };
   const isGaUrl = (url) => {
-    return typeof url === "string" && /(google-analytics\.com\/(g|j|r)\/collect|analytics\.google\.com\/g\/collect|google\.com\/ccm\/collect|scorecardresearch\.com\/(?:b|p)|chartbeat\.(?:net|com)\/ping)/i.test(url);
+    return typeof url === "string" && /(google-analytics\.com\/(g|j|r)\/collect|analytics\.google\.com\/g\/collect|google\.com\/ccm\/collect|scorecardresearch\.com|chartbeat\.(?:net|com))/i.test(url);
   };
   const recordTransport = (api, url, method, body) => {
     try {
@@ -931,13 +936,17 @@ def is_ga_request(url: str) -> bool:
 
 def is_comscore_request(url: str) -> bool:
     host = urlparse(url).netloc.lower()
-    return "scorecardresearch.com" in host or "sb.scorecardresearch.com" in host
+    return host == "scorecardresearch.com" or host.endswith(".scorecardresearch.com")
 
 
 def is_chartbeat_request(url: str) -> bool:
-    parsed = urlparse(url)
-    host = parsed.netloc.lower()
-    return ("chartbeat.net" in host or "chartbeat.com" in host) and "ping" in parsed.path.lower()
+    host = urlparse(url).netloc.lower()
+    return (
+        host == "chartbeat.net"
+        or host.endswith(".chartbeat.net")
+        or host == "chartbeat.com"
+        or host.endswith(".chartbeat.com")
+    )
 
 
 def normalize_event_name(name: str) -> str:
@@ -1354,6 +1363,67 @@ def extract_performance_log_network(driver) -> dict:
     }
 
 
+def extract_resource_timing_network(driver) -> dict:
+    ga_events: List[dict] = []
+    comscore_hits: List[dict] = []
+    chartbeat_hits: List[dict] = []
+    measurement_ids = []
+    container_ids = []
+    try:
+        entries = driver.execute_script(
+            """
+            return (performance.getEntriesByType("resource") || [])
+              .filter(function(entry) {
+                const url = String((entry && entry.name) || "");
+                return (
+                  url.indexOf("google-analytics.com") !== -1 ||
+                  url.indexOf("analytics.google.com") !== -1 ||
+                  url.indexOf("/ccm/collect") !== -1 ||
+                  url.indexOf("scorecardresearch.com") !== -1 ||
+                  url.indexOf("chartbeat.net") !== -1 ||
+                  url.indexOf("chartbeat.com") !== -1
+                );
+              })
+              .slice(-500)
+              .map(function(entry) {
+                return {
+                  url: entry.name || "",
+                  initiator_type: entry.initiatorType || "",
+                  response_status: entry.responseStatus || ""
+                };
+              });
+            """
+        )
+    except Exception:
+        entries = []
+
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        url = str(entry.get("url") or "")
+        if not url:
+            continue
+        status = str(entry.get("response_status") or "Observed")
+        params = parse_query(url)
+        source = "resource_timing"
+        if is_ga_request(url):
+            for payload in parse_ga_payloads(url):
+                collect_ids_from_params(payload, measurement_ids, container_ids)
+                ga_events.append(build_ga_event_from_payload(payload, status, url, source))
+        elif is_comscore_request(url):
+            comscore_hits.append({"status": status, "params": params, "url": url, "source": source})
+        elif is_chartbeat_request(url):
+            chartbeat_hits.append({"status": status, "params": params, "url": url, "source": source})
+
+    return {
+        "ga_events": ga_events,
+        "comscore_hits": comscore_hits,
+        "chartbeat_hits": chartbeat_hits,
+        "measurement_id": ", ".join(measurement_ids),
+        "container_id": ", ".join(container_ids),
+    }
+
+
 def extract_probe_transport(probe: dict) -> dict:
     ga_events: List[dict] = []
     comscore_hits: List[dict] = []
@@ -1411,7 +1481,7 @@ def merge_ga_events(*groups: List[dict]) -> List[dict]:
             key = (
                 event.get("event_name"),
                 json.dumps(event.get("params") or {}, sort_keys=True, ensure_ascii=False),
-                event.get("source"),
+                event.get("url"),
             )
             if key in seen:
                 continue
@@ -1440,7 +1510,6 @@ def merge_hit_rows(*groups: List[dict]) -> List[dict]:
             key = (
                 hit.get("url"),
                 json.dumps(hit.get("params") or {}, sort_keys=True, ensure_ascii=False),
-                hit.get("source"),
             )
             if key in seen:
                 continue
@@ -1714,8 +1783,14 @@ def build_event_summary(ga_events: List[dict]) -> List[dict]:
     grouped: Dict[str, dict] = {}
     for event in ga_events:
         name = normalize_event_name(event.get("event_name") or "collect")
-        group = grouped.setdefault(name, {"event_name": name, "times_fired": 0, "values": {}})
+        group = grouped.setdefault(
+            name,
+            {"event_name": name, "times_fired": 0, "sources": [], "values": {}},
+        )
         group["times_fired"] += 1
+        source = str(event.get("source") or "").strip()
+        if source and source not in group["sources"]:
+            group["sources"].append(source)
         for key, value in (event.get("params") or {}).items():
             if key not in group["values"]:
                 group["values"][key] = []
@@ -2222,6 +2297,7 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         probe = get_probe_payload(driver)
         network = extract_network(driver)
         performance_network = extract_performance_log_network(driver)
+        resource_timing_network = extract_resource_timing_network(driver)
         transport_network = extract_probe_transport(probe)
         gtag_events = extract_probe_gtag_events(probe)
     finally:
@@ -2235,17 +2311,20 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
     ga_events = merge_ga_events(
         network["ga_events"],
         performance_network["ga_events"],
+        resource_timing_network["ga_events"],
         transport_network["ga_events"],
         gtag_events,
     )
     comscore_hits = merge_hit_rows(
         network["comscore_hits"],
         performance_network["comscore_hits"],
+        resource_timing_network["comscore_hits"],
         transport_network["comscore_hits"],
     )
     chartbeat_hits = merge_hit_rows(
         network["chartbeat_hits"],
         performance_network["chartbeat_hits"],
+        resource_timing_network["chartbeat_hits"],
         transport_network["chartbeat_hits"],
     )
     selected_event = {}
@@ -2289,8 +2368,18 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
     )
     primary_params = dict((primary_event or {}).get("params") or {})
     execution_values = {**computed_state, **primary_params}
-    measurement_id = join_nonempty_unique(network["measurement_id"], performance_network["measurement_id"], transport_network["measurement_id"])
-    container_id = join_nonempty_unique(network["container_id"], performance_network["container_id"], transport_network["container_id"])
+    measurement_id = join_nonempty_unique(
+        network["measurement_id"],
+        performance_network["measurement_id"],
+        resource_timing_network["measurement_id"],
+        transport_network["measurement_id"],
+    )
+    container_id = join_nonempty_unique(
+        network["container_id"],
+        performance_network["container_id"],
+        resource_timing_network["container_id"],
+        transport_network["container_id"],
+    )
 
     execution_failures = []
     event_failures = []
@@ -2369,8 +2458,13 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         "detail_payload": {
             "execution_values": execution_values,
             "events": build_event_summary(ga_events),
-            "comscore_hits": comscore_hits[:5],
-            "chartbeat_hits": chartbeat_hits[:5],
+            "comscore_hits": comscore_hits[:20],
+            "chartbeat_hits": chartbeat_hits[:20],
+            "capture_counts": {
+                "ga_events": len(ga_events),
+                "comscore_hits": len(comscore_hits),
+                "chartbeat_hits": len(chartbeat_hits),
+            },
             "dataLayer_state": state,
         },
     }

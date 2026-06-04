@@ -768,7 +768,6 @@ COMSCORE_JS_C2_RE = re.compile(
 )
 COMSCORE_GENERIC_PARAM_RE = re.compile(r"(?:[?&]|\b)(c1|c2|c7|c8)=([^&'\"\\s]+)", re.I)
 CHARTBEAT_HOST_PATTERN = re.compile(r"(?:^|[.])chartbeat\.(?:net|com)$", re.I)
-CHARTBEAT_PING_PATH_PATTERN = re.compile(r"/ping(?:$|[/?])", re.I)
 CHARTBEAT_PARAM_KEYS = ("h", "p", "d", "g", "u", "x", "m", "t", "title")
 CHARTBEAT_GENERIC_PARAM_RE = re.compile(
     r"(?:[?&]|\b)(h|p|d|g|u|x|m|t|title)=([^&'\"\\s]+)",
@@ -778,6 +777,11 @@ CHARTBEAT_GENERIC_PARAM_RE = re.compile(
 GA4_PRELOAD_SCRIPT = r"""
 (function () {
     try {
+        try {
+            if (performance && typeof performance.setResourceTimingBufferSize === "function") {
+                performance.setResourceTimingBufferSize(2000);
+            }
+        } catch (resourceTimingError) {}
         try {
             window.dataLayer = window.dataLayer || [];
             function gtag(){dataLayer.push(arguments);}
@@ -884,8 +888,8 @@ GA4_PRELOAD_SCRIPT = r"""
                 url.indexOf("google-analytics.com") !== -1 ||
                 url.indexOf("/ccm/collect") !== -1 ||
                 url.indexOf("scorecardresearch.com") !== -1 ||
-                url.indexOf("chartbeat.net/ping") !== -1 ||
-                url.indexOf("chartbeat.com/ping") !== -1
+                url.indexOf("chartbeat.net") !== -1 ||
+                url.indexOf("chartbeat.com") !== -1
             );
         }
 
@@ -1403,10 +1407,7 @@ def _is_comscore_hit(url: str) -> bool:
 def _is_chartbeat_hit(url: str) -> bool:
     parsed = urlparse(str(url or ""))
     host = parsed.netloc.lower().split(":", 1)[0]
-    path = parsed.path or ""
-    if not CHARTBEAT_HOST_PATTERN.search(host):
-        return False
-    return bool(CHARTBEAT_PING_PATH_PATTERN.search(path))
+    return bool(CHARTBEAT_HOST_PATTERN.search(host))
 
 
 def _merge_multivalue_dicts(base: Dict[str, List[str]], extra: Dict[str, List[str]]) -> Dict[str, List[str]]:
@@ -1910,8 +1911,8 @@ def extract_collect_hits_from_resource_timing(
                   url.indexOf("google-analytics.com") !== -1 ||
                   url.indexOf("/ccm/collect") !== -1 ||
                   url.indexOf("scorecardresearch.com") !== -1 ||
-                  url.indexOf("chartbeat.net/ping") !== -1 ||
-                  url.indexOf("chartbeat.com/ping") !== -1
+                  url.indexOf("chartbeat.net") !== -1 ||
+                  url.indexOf("chartbeat.com") !== -1
                 );
               })
               .slice(-200)
@@ -6766,6 +6767,9 @@ def bulk_result_records_to_report_rows(result_records: List[dict]) -> List[dict]
             except Exception:
                 result_json = {}
         row = {
+            "result_id": record.get("result_id") or result_json.get("result_id") or "",
+            "template_id": record.get("template_id") or result_json.get("template_id") or "",
+            "created_at": record.get("created_at") or result_json.get("created_at") or "",
             "domain": result_json.get("domain") or "",
             "template_name": record.get("template_name") or result_json.get("template_name") or "",
             "sample_url": record.get("sample_url") or result_json.get("sample_url") or "",
@@ -6788,6 +6792,142 @@ def bulk_result_records_to_report_rows(result_records: List[dict]) -> List[dict]
         }
         rows.append(row)
     return rows
+
+
+def _bulk_detail_text(value: Any, limit: int = 500) -> str:
+    if isinstance(value, (dict, list)):
+        try:
+            text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            text = str(value)
+    else:
+        text = str(value if value is not None else "")
+    return text if len(text) <= limit else f"{text[:limit - 3]}..."
+
+
+def _bulk_event_summary_rows(row: dict) -> Tuple[List[dict], List[dict]]:
+    detail_payload = row.get("detail_payload") or {}
+    events = detail_payload.get("events") or []
+    summary_rows = []
+    value_rows = []
+
+    for event in events if isinstance(events, list) else []:
+        if not isinstance(event, dict):
+            continue
+        event_name = str(event.get("event_name") or "collect")
+        values = event.get("values") if isinstance(event.get("values"), dict) else {}
+        sources = event.get("sources") if isinstance(event.get("sources"), list) else []
+        summary_rows.append(
+            {
+                "Event": event_name,
+                "Times Fired": int(event.get("times_fired") or 0),
+                "Seen In": ", ".join(str(source) for source in sources if source) or "Captured",
+                "Captured Fields": ", ".join(str(key) for key in values.keys()) or "None",
+            }
+        )
+        for field_name, field_values in values.items():
+            value_rows.append(
+                {
+                    "Event": event_name,
+                    "Field": field_name,
+                    "Value": _bulk_detail_text(field_values),
+                }
+            )
+
+    if not summary_rows:
+        event_names = [
+            name.strip()
+            for name in str(row.get("events_fired") or "").split(",")
+            if name.strip() and name.strip().lower() != "none"
+        ]
+        summary_rows = [
+            {
+                "Event": event_name,
+                "Times Fired": "",
+                "Seen In": "Captured",
+                "Captured Fields": "Stored summary only",
+            }
+            for event_name in event_names
+        ]
+
+    return summary_rows, value_rows
+
+
+def _bulk_vendor_hit_rows(hits: Any) -> List[dict]:
+    rows = []
+    for hit in hits if isinstance(hits, list) else []:
+        if not isinstance(hit, dict):
+            continue
+        rows.append(
+            {
+                "Source": hit.get("source") or "Captured",
+                "Status": hit.get("status") or hit.get("response_status") or "Observed",
+                "Request URL": hit.get("url") or hit.get("request_url") or "",
+                "Parameters": _bulk_detail_text(hit.get("params") or {}),
+            }
+        )
+    return rows
+
+
+def render_bulk_audit_result_detail(row: dict) -> None:
+    detail_payload = row.get("detail_payload") or {}
+    st.markdown(f"#### {row.get('template_name') or 'Template'}")
+    st.caption(str(row.get("sample_url") or ""))
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("GA Fired", "Yes" if row.get("ga_present") else "No")
+    metric_cols[1].metric("Captured Events", int(row.get("events_count") or 0))
+    metric_cols[2].metric("Comscore", "Yes" if row.get("comscore_present") else "No")
+    metric_cols[3].metric("Chartbeat", "Yes" if row.get("chartbeat_present") else "No")
+
+    event_summary_rows, event_value_rows = _bulk_event_summary_rows(row)
+    st.markdown("##### Captured Events")
+    if event_summary_rows:
+        st.dataframe(pd.DataFrame(event_summary_rows), use_container_width=True, hide_index=True)
+        if event_value_rows:
+            with st.expander("View captured event values", expanded=False):
+                st.dataframe(pd.DataFrame(event_value_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("No events were captured for this template.")
+
+    execution_values = detail_payload.get("execution_values") or {}
+    execution_rows = [
+        {"Field": key, "Value": _bulk_detail_text(value)}
+        for key, value in execution_values.items()
+    ] if isinstance(execution_values, dict) else []
+    if execution_rows:
+        st.markdown("##### Execution Values")
+        st.dataframe(pd.DataFrame(execution_rows), use_container_width=True, hide_index=True)
+
+    vendor_col1, vendor_col2 = st.columns(2)
+    with vendor_col1:
+        st.markdown("##### Comscore Requests")
+        comscore_rows = _bulk_vendor_hit_rows(detail_payload.get("comscore_hits"))
+        if comscore_rows:
+            st.dataframe(pd.DataFrame(comscore_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No Comscore request was captured.")
+    with vendor_col2:
+        st.markdown("##### Chartbeat Requests")
+        chartbeat_rows = _bulk_vendor_hit_rows(detail_payload.get("chartbeat_hits"))
+        if chartbeat_rows:
+            st.dataframe(pd.DataFrame(chartbeat_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No Chartbeat request was captured.")
+
+    failure_rows = [
+        {"Type": "Execution", "Issue": failure}
+        for failure in (row.get("execution_failures") or [])
+    ] + [
+        {"Type": "Event", "Issue": failure}
+        for failure in (row.get("event_failures") or [])
+    ]
+    if failure_rows:
+        st.markdown("##### Validation Issues")
+        st.dataframe(pd.DataFrame(failure_rows), use_container_width=True, hide_index=True)
+
+    with st.expander("Raw captured detail", expanded=False):
+        st.json(detail_payload)
 
 
 def _normalize_template_name_key(value: str) -> str:
@@ -10406,7 +10546,7 @@ def build_domain_audit_detail_payload(result: dict, selected_template_rules: Lis
     chartbeat_df = pd.DataFrame(
         [
             {
-                "Check": "Chartbeat ping",
+                "Check": "Chartbeat request",
                 "Fired": "Yes" if audit_summary["chartbeat_present"] else "No",
                 "Times Fired": total_chartbeat_fires,
             }
@@ -12068,7 +12208,7 @@ This capture is split into three layers:
                         chartbeat_validation_df = pd.DataFrame(
                             [
                                 {
-                                    "Check": "Chartbeat ping",
+                                    "Check": "Chartbeat request",
                                     "Validation": VALIDATION_FAIL_LABEL,
                                     "Times Fired": 0,
                                 }
@@ -12090,7 +12230,7 @@ This capture is split into three layers:
                         chartbeat_validation_df = pd.DataFrame(
                             [
                                 {
-                                    "Check": "Chartbeat ping",
+                                    "Check": "Chartbeat request",
                                     "Validation": VALIDATION_PASS_LABEL,
                                     "Times Fired": total_chartbeat_fires,
                                 }
@@ -12560,7 +12700,8 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                             "GA Fired": "Yes" if row.get("ga_present") else "No",
                             "Pageview Triggered": "Yes" if row.get("pageview_triggered") else "No",
                             "Pageview Source": row.get("pageview_source"),
-                            "Events Fired": row.get("events_count"),
+                            "Event Count": row.get("events_count"),
+                            "Captured Events": row.get("events_fired"),
                             "Measurement ID": row.get("measurement_id"),
                             "Container ID": row.get("container_id"),
                             "Comscore Fired": "Yes" if row.get("comscore_present") else "No",
@@ -12572,6 +12713,35 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                 )
                 st.markdown("#### Full Audit Results")
                 st.dataframe(full_report_df, use_container_width=True, hide_index=True)
+
+                if report_rows:
+                    st.markdown("#### View Template Results")
+                    selected_detail_key = f"selected_bulk_result_detail_{selected_job_id}"
+                    for row_index, row in enumerate(report_rows):
+                        view_id = str(row.get("result_id") or f"row_{row_index}")
+                        with st.container(border=True):
+                            view_cols = st.columns([2, 5, 1])
+                            view_cols[0].markdown(f"**{row.get('template_name') or 'Unnamed template'}**")
+                            view_cols[1].caption(str(row.get("sample_url") or ""))
+                            if view_cols[2].button(
+                                "View",
+                                key=f"view_bulk_result_{selected_job_id}_{view_id}",
+                                use_container_width=True,
+                            ):
+                                st.session_state[selected_detail_key] = view_id
+
+                    selected_view_id = str(st.session_state.get(selected_detail_key) or "")
+                    selected_detail_row = next(
+                        (
+                            row
+                            for row_index, row in enumerate(report_rows)
+                            if str(row.get("result_id") or f"row_{row_index}") == selected_view_id
+                        ),
+                        None,
+                    )
+                    if selected_detail_row:
+                        with st.container(border=True):
+                            render_bulk_audit_result_detail(selected_detail_row)
 
                 download_col1, download_col2 = st.columns([1, 1])
                 download_col1.download_button(
