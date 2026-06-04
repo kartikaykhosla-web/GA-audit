@@ -6930,6 +6930,11 @@ def render_bulk_audit_result_detail(row: dict) -> None:
         st.json(detail_payload)
 
 
+def toggle_bulk_audit_result_detail(state_key: str, view_id: str) -> None:
+    current_view_id = str(st.session_state.get(state_key) or "")
+    st.session_state[state_key] = "" if current_view_id == view_id else view_id
+
+
 def _normalize_template_name_key(value: str) -> str:
     return str(value or "").strip().lower()
 
@@ -12717,31 +12722,24 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                 if report_rows:
                     st.markdown("#### View Template Results")
                     selected_detail_key = f"selected_bulk_result_detail_{selected_job_id}"
+                    selected_view_id = str(st.session_state.get(selected_detail_key) or "")
                     for row_index, row in enumerate(report_rows):
                         view_id = str(row.get("result_id") or f"row_{row_index}")
+                        is_selected = selected_view_id == view_id
                         with st.container(border=True):
                             view_cols = st.columns([2, 5, 1])
                             view_cols[0].markdown(f"**{row.get('template_name') or 'Unnamed template'}**")
                             view_cols[1].caption(str(row.get("sample_url") or ""))
-                            if view_cols[2].button(
-                                "View",
+                            view_cols[2].button(
+                                "Hide" if is_selected else "View",
                                 key=f"view_bulk_result_{selected_job_id}_{view_id}",
                                 use_container_width=True,
-                            ):
-                                st.session_state[selected_detail_key] = view_id
-
-                    selected_view_id = str(st.session_state.get(selected_detail_key) or "")
-                    selected_detail_row = next(
-                        (
-                            row
-                            for row_index, row in enumerate(report_rows)
-                            if str(row.get("result_id") or f"row_{row_index}") == selected_view_id
-                        ),
-                        None,
-                    )
-                    if selected_detail_row:
-                        with st.container(border=True):
-                            render_bulk_audit_result_detail(selected_detail_row)
+                                on_click=toggle_bulk_audit_result_detail,
+                                args=(selected_detail_key, view_id),
+                            )
+                            if is_selected:
+                                st.divider()
+                                render_bulk_audit_result_detail(row)
 
                 download_col1, download_col2 = st.columns([1, 1])
                 download_col1.download_button(
