@@ -58,23 +58,23 @@
       {
         "rule_scope": "execution",
         "field_name": "tags",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: maa shailputri aarti,shailputri aarti lyrics,maa shailputri aarti in hindi,navratri day 1 aarti, goddess shailputri aarti"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: maa shailputri aarti,shailputri aarti lyrics,maa shailputri aarti in hindi,navratri day 1 aarti, goddess shailputri aarti"
       },
       {
         "rule_scope": "execution",
         "field_name": "story_id",
-        "rule_type": "regex",
-        "expected_values": "^\\d+$",
-        "notes": "Imported from GA mapping Excel. Numeric dynamic value. Sample: 44"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: 44"
       },
       {
         "rule_scope": "execution",
         "field_name": "word_count",
-        "rule_type": "regex",
-        "expected_values": "^\\d+$",
-        "notes": "Imported from GA mapping Excel. Numeric dynamic value. Sample: na"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: na"
       }
     ]
   },
@@ -211,37 +211,37 @@
       {
         "rule_scope": "execution",
         "field_name": "tags",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: soft towels,white vinegar for towels,baking soda for towels,towel softening tips,how to make towels soft again,remove detergent residue from towels,why do towels become hard,restore towel softness with vinegar"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: soft towels,white vinegar for towels,baking soda for towels,towel softening tips,how to make towels soft again,remove detergent residue from towels,why do towels become hard,restore towel softness with vinegar"
       },
       {
         "rule_scope": "execution",
         "field_name": "author",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: garima garg"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: garima garg"
       },
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: women issues"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: women issues"
       },
       {
         "rule_scope": "execution",
         "field_name": "dynamic_video_embed_type",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}, {{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: na, also watch this video"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: na, also watch this video"
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: society culture"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: society culture"
       },
       {
         "rule_scope": "execution",
@@ -253,9 +253,9 @@
       {
         "rule_scope": "execution",
         "field_name": "story_id",
-        "rule_type": "regex",
-        "expected_values": "^\\d+$",
-        "notes": "Imported from GA mapping Excel. Numeric dynamic value. Sample: 1061244"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: 1061244"
       },
       {
         "rule_scope": "event",
@@ -267,9 +267,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Video_duration",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: -"
       },
       {
         "rule_scope": "execution",
@@ -281,37 +281,37 @@
       {
         "rule_scope": "execution",
         "field_name": "Video_title",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: -"
       },
       {
         "rule_scope": "execution",
         "field_name": "section_name",
-        "rule_type": "exact",
-        "expected_values": "featured media / also watch this video",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "one_of",
+        "expected_values": "featured media|also watch this video",
+        "notes": "Imported from GA mapping Excel. Allowed by format: featured media / also watch this video"
       },
       {
         "rule_scope": "execution",
         "field_name": "player_type",
-        "rule_type": "exact",
-        "expected_values": "manual / automatic",
-        "notes": "Imported from GA mapping Excel. Sample: manual / automatic"
+        "rule_type": "one_of",
+        "expected_values": "manual|automatic",
+        "notes": "Imported from GA mapping Excel. Allowed by format: manual / automatic"
       },
       {
         "rule_scope": "execution",
         "field_name": "position_fold",
-        "rule_type": "exact",
-        "expected_values": "25 / 50 / 75 / 100",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "one_of",
+        "expected_values": "25|50|75|100",
+        "notes": "Imported from GA mapping Excel. Allowed by format: 25 / 50 / 75 / 100"
       },
       {
         "rule_scope": "execution",
         "field_name": "video_orientation",
-        "rule_type": "exact",
-        "expected_values": "vertical / horizontal",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "one_of",
+        "expected_values": "vertical|horizontal",
+        "notes": "Imported from GA mapping Excel. Allowed by format: vertical / horizontal"
       },
       {
         "rule_scope": "execution",
@@ -710,23 +710,23 @@
       {
         "rule_scope": "execution",
         "field_name": "tags",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: shailputri chalisa, maa shailputri chalisa, shailputri chalisa lyrics, navratri day 1 chalisa,maa shailputri chalisa in hindi"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: shailputri chalisa, maa shailputri chalisa, shailputri chalisa lyrics, navratri day 1 chalisa,maa shailputri chalisa in hindi"
       },
       {
         "rule_scope": "execution",
         "field_name": "story_id",
-        "rule_type": "regex",
-        "expected_values": "^\\d+$",
-        "notes": "Imported from GA mapping Excel. Numeric dynamic value. Sample: 47"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: 47"
       },
       {
         "rule_scope": "execution",
         "field_name": "word_count",
-        "rule_type": "regex",
-        "expected_values": "^\\d+$",
-        "notes": "Imported from GA mapping Excel. Numeric dynamic value. Sample: na"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: na"
       }
     ]
   },
@@ -900,9 +900,9 @@
       {
         "rule_scope": "execution",
         "field_name": "author",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: rupsha bhadra"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: rupsha bhadra"
       },
       {
         "rule_scope": "execution",
@@ -988,9 +988,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: entertainment"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: entertainment"
       }
     ]
   },
@@ -1157,9 +1157,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Video_duration",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: -"
       },
       {
         "rule_scope": "execution",
@@ -1171,9 +1171,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Video_title",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: -"
       },
       {
         "rule_scope": "execution",
@@ -1185,9 +1185,9 @@
       {
         "rule_scope": "execution",
         "field_name": "player_type",
-        "rule_type": "exact",
-        "expected_values": "manual / automatic",
-        "notes": "Imported from GA mapping Excel. Sample: manual / automatic"
+        "rule_type": "one_of",
+        "expected_values": "manual|automatic",
+        "notes": "Imported from GA mapping Excel. Allowed by format: manual / automatic"
       },
       {
         "rule_scope": "execution",
@@ -1199,9 +1199,9 @@
       {
         "rule_scope": "execution",
         "field_name": "video_orientation",
-        "rule_type": "exact",
-        "expected_values": "vertical / horizontal",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "one_of",
+        "expected_values": "vertical|horizontal",
+        "notes": "Imported from GA mapping Excel. Allowed by format: vertical / horizontal"
       },
       {
         "rule_scope": "execution",
@@ -1257,9 +1257,9 @@
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: horoscope prediction"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: horoscope prediction"
       }
     ]
   },
@@ -1301,9 +1301,9 @@
       {
         "rule_scope": "execution",
         "field_name": "author",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: rupsha bhadra"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: rupsha bhadra"
       },
       {
         "rule_scope": "execution",
@@ -1396,23 +1396,23 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: food"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: food"
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: recipe tips"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: recipe tips"
       },
       {
         "rule_scope": "execution",
         "field_name": "author",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: vrinda srivastava"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: vrinda srivastava"
       },
       {
         "rule_scope": "execution",
@@ -1651,9 +1651,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Video_duration",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: -"
       },
       {
         "rule_scope": "execution",
@@ -1665,9 +1665,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Video_title",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: -"
       },
       {
         "rule_scope": "execution",
@@ -1679,9 +1679,9 @@
       {
         "rule_scope": "execution",
         "field_name": "player_type",
-        "rule_type": "exact",
-        "expected_values": "manual / automatic",
-        "notes": "Imported from GA mapping Excel. Sample: manual / automatic"
+        "rule_type": "one_of",
+        "expected_values": "manual|automatic",
+        "notes": "Imported from GA mapping Excel. Allowed by format: manual / automatic"
       },
       {
         "rule_scope": "execution",
@@ -1693,9 +1693,9 @@
       {
         "rule_scope": "execution",
         "field_name": "video_orientation",
-        "rule_type": "exact",
-        "expected_values": "vertical / horizontal",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "one_of",
+        "expected_values": "vertical|horizontal",
+        "notes": "Imported from GA mapping Excel. Allowed by format: vertical / horizontal"
       },
       {
         "rule_scope": "execution",
@@ -1832,16 +1832,16 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: women-issues"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: women-issues"
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: society-culture"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: society-culture"
       }
     ]
   },
@@ -1934,9 +1934,9 @@
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: tv-ott"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: tv-ott"
       }
     ]
   },
@@ -1992,9 +1992,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Video_duration",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: -"
       },
       {
         "rule_scope": "execution",
@@ -2006,23 +2006,23 @@
       {
         "rule_scope": "execution",
         "field_name": "Video_title",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: -"
       },
       {
         "rule_scope": "execution",
         "field_name": "section_name",
-        "rule_type": "exact",
-        "expected_values": "p1 video / \"trending\"",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "one_of",
+        "expected_values": "p1 video|\"trending\"",
+        "notes": "Imported from GA mapping Excel. Allowed by format: p1 video / \"trending\""
       },
       {
         "rule_scope": "execution",
         "field_name": "player_type",
-        "rule_type": "exact",
-        "expected_values": "manual / automatic",
-        "notes": "Imported from GA mapping Excel. Sample: manual / automatic"
+        "rule_type": "one_of",
+        "expected_values": "manual|automatic",
+        "notes": "Imported from GA mapping Excel. Allowed by format: manual / automatic"
       },
       {
         "rule_scope": "execution",
@@ -2034,9 +2034,9 @@
       {
         "rule_scope": "execution",
         "field_name": "video_orientation",
-        "rule_type": "exact",
-        "expected_values": "vertical / horizontal",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "one_of",
+        "expected_values": "vertical|horizontal",
+        "notes": "Imported from GA mapping Excel. Allowed by format: vertical / horizontal"
       },
       {
         "rule_scope": "execution",
@@ -2159,9 +2159,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "{{dynamic}}",
-        "notes": "Imported from GA mapping Excel. Sample: entertainment"
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: entertainment"
       }
     ]
   },

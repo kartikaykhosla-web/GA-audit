@@ -7340,6 +7340,14 @@ def _normalize_template_name_key(value: str) -> str:
     return str(value or "").strip().lower()
 
 
+def _normalize_template_domain_key(value: str) -> str:
+    domain = str(value or "").strip().lower()
+    domain = re.sub(r"^https?://", "", domain)
+    domain = domain.split("/", 1)[0]
+    domain = domain.removeprefix("www.")
+    return domain
+
+
 def get_rules_for_template(template_id: str, rules_by_template: Optional[Dict[str, List[dict]]] = None) -> List[dict]:
     template_id_text = str(template_id or "").strip()
     if not template_id_text:
@@ -7370,14 +7378,22 @@ def get_starter_template_seed(template: Optional[dict]) -> Optional[dict]:
     if not template:
         return None
 
+    template_domain = _normalize_template_domain_key(template.get("domain_name") or "")
     template_name = _normalize_template_name_key(template.get("template_name") or "")
     template_name = template_name.removeprefix("jagran ").strip()
     for seed in JAGRAN_STARTER_TEMPLATES:
+        seed_domain = _normalize_template_domain_key(seed.get("domain_name") or "")
+        if seed_domain and template_domain != seed_domain:
+            continue
         seed_name = _normalize_template_name_key(seed.get("template_name") or "")
         seed_name = seed_name.removeprefix("jagran ").strip()
         if seed_name == template_name:
             return seed
     return None
+
+
+def template_uses_jagran_article_supplementals(template: Optional[dict]) -> bool:
+    return _normalize_template_domain_key((template or {}).get("domain_name") or "") == "jagran.com"
 
 
 ARTICLE_DETAIL_BASE_VIDEO_FIELD_NORMALIZED = {
@@ -7447,7 +7463,7 @@ def get_augmented_template_rules(
         merged_rules.append(merged_rule)
         existing_field_keys.add(field_key)
 
-    if is_article_detail_template(template, rules_by_template):
+    if template_uses_jagran_article_supplementals(template) and is_article_detail_template(template, rules_by_template):
         indexed_rules = {
             _rule_field_merge_key(rule): index
             for index, rule in enumerate(merged_rules)
@@ -7909,7 +7925,7 @@ def _slugify_identifier(value: str, fallback: str = "template") -> str:
 def _template_import_match_key(template: dict) -> Tuple[str, str]:
     return (
         _normalize_template_name_key((template or {}).get("template_name") or ""),
-        str((template or {}).get("domain_name") or "").strip().lower(),
+        _normalize_template_domain_key((template or {}).get("domain_name") or ""),
     )
 
 
@@ -7940,6 +7956,8 @@ def _normalize_mapping_expected_value(value: str) -> str:
     text = re.sub(r"^\(?\s*", "", text)
     text = re.sub(r"\s*\)?$", "", text)
     text = re.sub(r"^static\s*[-:]\s*", "", text, flags=re.IGNORECASE)
+    if _looks_like_mapping_dynamic_placeholder(text):
+        text = "dynamic"
     if text.lower() == "video_interation":
         text = "video_interaction"
     if text.lower() == "articl detail":
@@ -7947,10 +7965,25 @@ def _normalize_mapping_expected_value(value: str) -> str:
     return _mapping_clean_text(text)
 
 
+def _looks_like_mapping_dynamic_placeholder(value: str) -> bool:
+    text = _mapping_clean_text(value)
+    if not text:
+        return False
+    tokens = [
+        re.sub(r"[{}\s]+", "", token.lower())
+        for token in re.split(r"[,|/]+", text)
+        if re.sub(r"[{}\s]+", "", token.lower())
+    ]
+    return bool(tokens) and all(token in {"dynamic", "dynamci"} for token in tokens)
+
+
 def _extract_mapping_allowed_values(structure: str, sample_value: str) -> List[str]:
     structure_text = _mapping_clean_text(structure)
     lower_text = structure_text.lower()
     values: List[str] = []
+
+    if _looks_like_mapping_dynamic_placeholder(structure_text):
+        return []
 
     percent_values = re.findall(r"\b\d+(?:\.\d+)?%", structure_text)
     if percent_values:
@@ -7991,6 +8024,12 @@ def _extract_mapping_allowed_values(structure: str, sample_value: str) -> List[s
         if sample and sample.lower() not in {"dynamic", "static", "not available", "na"}:
             values.append(sample)
 
+    if not values and "/" in structure_text:
+        for token in re.split(r"/", structure_text):
+            token = _normalize_mapping_expected_value(token)
+            if token and token.lower() not in {"dynamic", "static", "not available", "na"}:
+                values.append(token)
+
     seen = set()
     unique_values = []
     for value in values:
@@ -8006,7 +8045,8 @@ def _infer_mapping_rule(field_name: str, sample_value: str, structure: str, page
     field = _mapping_clean_text(field_name)
     sample = _normalize_mapping_expected_value(sample_value)
     expected_structure = _mapping_clean_text(structure)
-    structure_lower = expected_structure.lower()
+    normalized_structure = _normalize_mapping_expected_value(expected_structure)
+    structure_lower = normalized_structure.lower()
 
     if field == "event name":
         event_name = sample or expected_structure or "page_view"
@@ -8035,6 +8075,15 @@ def _infer_mapping_rule(field_name: str, sample_value: str, structure: str, page
             "rule_type": "regex",
             "expected_values": MAPPING_DATE_TIME_REGEX,
             "notes": f"Imported from GA mapping Excel. Expected format: {expected_structure or 'ISO datetime'}",
+        }
+
+    if _looks_like_mapping_dynamic_placeholder(sample_value) or _looks_like_mapping_dynamic_placeholder(expected_structure):
+        return {
+            "rule_scope": "execution",
+            "field_name": field,
+            "rule_type": "required",
+            "expected_values": "",
+            "notes": f"Imported from GA mapping Excel. Dynamic value. Sample: {sample or '-'}",
         }
 
     if field in {"story_id", "word_count"}:
@@ -8079,7 +8128,7 @@ def _infer_mapping_rule(field_name: str, sample_value: str, structure: str, page
             "rule_scope": "execution",
             "field_name": field,
             "rule_type": "exact",
-            "expected_values": expected_structure,
+            "expected_values": normalized_structure or expected_structure,
             "notes": f"Imported from GA mapping Excel. Sample: {sample or '-'}",
         }
 
@@ -8523,6 +8572,100 @@ def add_templates_from_seed_templates(
     return True, (
         f"{source_label}: added {created_templates} template(s), "
         f"updated {updated_templates}, added {len(rules_to_add)} rule(s)."
+    )
+
+
+def replace_templates_from_seed_templates(
+    email_id: str,
+    template_seeds: List[dict],
+    template_records: List[dict],
+    template_rules: List[dict],
+    source_label: str,
+):
+    seeds = [seed for seed in (template_seeds or []) if isinstance(seed, dict)]
+    if not seeds:
+        return False, "No templates were found to sync."
+
+    existing_templates_by_key = {
+        _template_import_match_key(template): template
+        for template in (template_records or [])
+        if str(template.get("template_name") or "").strip()
+    }
+    rules_by_template: Dict[str, List[dict]] = {}
+    for rule in template_rules or []:
+        template_id = str(rule.get("template_id") or "").strip()
+        if template_id:
+            rules_by_template.setdefault(template_id, []).append(rule)
+
+    created_templates = 0
+    updated_templates = 0
+    deleted_rules = 0
+    replacement_rules = []
+
+    for seed in seeds:
+        template_payload = {
+            "template_name": str(seed.get("template_name") or "").strip(),
+            "domain_name": str(seed.get("domain_name") or "").strip(),
+            "measurement_id": str(seed.get("measurement_id") or "").strip(),
+            "container_id": str(seed.get("container_id") or "").strip(),
+            "url_pattern": str(seed.get("url_pattern") or "").strip(),
+            "active": True,
+        }
+        template_match_key = _template_import_match_key(template_payload)
+        existing_template = existing_templates_by_key.get(template_match_key)
+
+        if existing_template:
+            success, response = update_template_record(
+                email_id,
+                existing_template.get("template_id"),
+                template_payload,
+            )
+            if not success:
+                return False, response
+            template_id = str(existing_template.get("template_id") or "").strip()
+            updated_templates += 1
+        else:
+            success, response = append_template_record(email_id, template_payload)
+            if not success:
+                return False, response
+            template_id = str(response or "").strip()
+            existing_templates_by_key[template_match_key] = {
+                **template_payload,
+                "template_id": template_id,
+                "active": True,
+            }
+            created_templates += 1
+
+        for existing_rule in rules_by_template.get(template_id, []):
+            rule_id = str(existing_rule.get("rule_id") or "").strip()
+            if not rule_id:
+                continue
+            success, response = delete_template_rule(rule_id)
+            if not success:
+                return False, response
+            deleted_rules += 1
+
+        for rule in seed.get("rules") or []:
+            replacement_rules.append(
+                {
+                    "template_id": template_id,
+                    "rule_scope": str(rule.get("rule_scope") or "").strip(),
+                    "field_name": str(rule.get("field_name") or "").strip(),
+                    "rule_type": str(rule.get("rule_type") or "").strip(),
+                    "expected_values": str(rule.get("expected_values") or "").strip(),
+                    "notes": str(rule.get("notes") or "").strip(),
+                }
+            )
+
+    if replacement_rules:
+        success, response = append_template_rules(email_id, replacement_rules)
+        if not success:
+            return False, response
+
+    return True, (
+        f"{source_label}: added {created_templates} template(s), "
+        f"updated {updated_templates}, replaced {deleted_rules} old rule(s), "
+        f"added {len(replacement_rules)} rule(s)."
     )
 
 
@@ -13421,17 +13564,28 @@ if active_section == "Template Manager":
 
             herzindagi_seeds = get_herzindagi_bundled_template_seeds()
             has_herzindagi_templates = any(
-                str(template.get("domain_name") or "").strip().lower() == "www.herzindagi.com"
+                _normalize_template_domain_key(template.get("domain_name") or "") == "herzindagi.com"
                 for template in template_records
             )
-            if herzindagi_seeds and not has_herzindagi_templates:
+            if herzindagi_seeds:
                 herzindagi_rule_count = sum(len(seed.get("rules") or []) for seed in herzindagi_seeds)
-                st.info(
-                    f"HerZindagi templates are bundled but not installed yet: "
-                    f"{len(herzindagi_seeds)} template(s), {herzindagi_rule_count} rule(s)."
-                )
-                if st.button("Install HerZindagi templates", key="install_herzindagi_templates"):
-                    success, response = add_templates_from_seed_templates(
+                if not has_herzindagi_templates:
+                    st.info(
+                        f"HerZindagi templates are bundled but not installed yet: "
+                        f"{len(herzindagi_seeds)} template(s), {herzindagi_rule_count} rule(s)."
+                    )
+                    hz_button_label = "Install HerZindagi templates"
+                    hz_button_key = "install_herzindagi_templates"
+                else:
+                    st.caption(
+                        f"HerZindagi template sync is available: "
+                        f"{len(herzindagi_seeds)} template(s), {herzindagi_rule_count} rule(s)."
+                    )
+                    hz_button_label = "Repair/sync HerZindagi templates"
+                    hz_button_key = "repair_sync_herzindagi_templates"
+
+                if st.button(hz_button_label, key=hz_button_key):
+                    success, response = replace_templates_from_seed_templates(
                         logged_in_email,
                         herzindagi_seeds,
                         template_records,
