@@ -6824,8 +6824,18 @@ def is_video_only_failure_text(value: Any) -> bool:
 
 
 def applicable_bulk_failure_rows(row: dict) -> Tuple[List[str], List[str]]:
-    execution_failures = [str(value) for value in (row.get("execution_failures") or []) if str(value).strip()]
-    event_failures = [str(value) for value in (row.get("event_failures") or []) if str(value).strip()]
+    execution_failure_source = (
+        row.get("current_execution_failures")
+        if row.get("_current_validation_available")
+        else row.get("execution_failures")
+    )
+    event_failure_source = (
+        row.get("current_event_failures")
+        if row.get("_current_validation_available")
+        else row.get("event_failures")
+    )
+    execution_failures = [str(value) for value in (execution_failure_source or []) if str(value).strip()]
+    event_failures = [str(value) for value in (event_failure_source or []) if str(value).strip()]
     if not is_primary_article_detail_result(row):
         return execution_failures, event_failures
     return (
@@ -6854,12 +6864,30 @@ def is_vendor_only_issue_text(value: Any) -> bool:
     return not any(marker in issue_text for marker in ga_markers) and not re.search(r"\bga\b", issue_text)
 
 
+def is_stored_validation_issue_text(value: Any) -> bool:
+    issue_text = str(value or "").strip().lower()
+    if not issue_text:
+        return False
+    return (
+        (" expected " in issue_text and " got " in issue_text)
+        or issue_text.endswith(" missing")
+        or " not fired" in issue_text
+        or "validation mismatch" in issue_text
+    )
+
+
 def applicable_bulk_issue_parts(row: dict) -> List[str]:
     issue_parts = [
         part.strip()
         for part in re.split(r"[;|]+", str(row.get("issues") or ""))
         if part.strip() and part.strip().lower() not in {"none", "pass"}
     ]
+    if row.get("_current_validation_available"):
+        issue_parts = [
+            part
+            for part in issue_parts
+            if not is_stored_validation_issue_text(part)
+        ]
     if not is_primary_article_detail_result(row):
         return issue_parts
     raw_execution_failures = [
@@ -6928,6 +6956,10 @@ def bulk_result_issue_flags(row: dict) -> Dict[str, bool]:
 def bulk_result_display_issues(row: dict) -> str:
     issue_flags = bulk_result_issue_flags(row)
     issue_parts = applicable_bulk_issue_parts(row)
+    execution_failures, event_failures = applicable_bulk_failure_rows(row)
+    for failure in [*execution_failures[:5], *event_failures[:5]]:
+        if failure and failure not in issue_parts:
+            issue_parts.append(failure)
     ga_issue_parts = [part for part in issue_parts if not is_vendor_only_issue_text(part)]
     if issue_flags["ga_issue"] and not ga_issue_parts:
         issue_parts.append("GA/page_view or template validation issue")
@@ -7100,6 +7132,68 @@ def build_bulk_audit_url_view_model(row: dict) -> Dict[str, Any]:
         "chartbeat_rows": chartbeat_rows if isinstance(chartbeat_rows, list) else [],
         "detail_payload": detail_payload,
     }
+
+
+def current_bulk_validation_failures(row: dict, selected_template_rules: List[dict]) -> Tuple[List[str], List[str]]:
+    if not selected_template_rules:
+        return [], []
+    view_model = build_bulk_audit_url_view_model(row)
+    execution_failures = []
+    _, execution_validation_rows = build_execution_validation_rows(
+        view_model["snapshot"],
+        selected_template_rules,
+    )
+    for validation_row in execution_validation_rows:
+        if validation_row.get("validation") != VALIDATION_FAIL_LABEL:
+            continue
+        field_name = validation_row.get("field_name") or validation_row.get("actual_key") or "field"
+        expected = validation_row.get("expected") or "configured rule"
+        actual_value = validation_row.get("actual_value") or "Not observed"
+        execution_failures.append(f"{field_name}: expected {expected}, got {actual_value}")
+
+    event_failures = []
+    event_df = build_event_validation_rows(view_model["event_rows"], selected_template_rules)
+    if isinstance(event_df, pd.DataFrame) and not event_df.empty and "validation" in event_df.columns:
+        for _, event_row in event_df.iterrows():
+            if event_row.get("validation") != VALIDATION_FAIL_LABEL:
+                continue
+            expected = event_row.get("expected") or event_row.get("event_name") or "configured event"
+            status = event_row.get("status") or "not observed"
+            event_failures.append(f"{expected}: {status}")
+
+    return execution_failures, event_failures
+
+
+def enrich_bulk_report_rows_with_current_validation(
+    report_rows: List[dict],
+    all_templates: List[dict],
+    rules_by_template: Dict[str, List[dict]],
+) -> List[dict]:
+    templates_by_id = {
+        str(template.get("template_id") or "").strip(): template
+        for template in all_templates or []
+        if str(template.get("template_id") or "").strip()
+    }
+    enriched_rows = []
+    for row in report_rows or []:
+        enriched_row = dict(row)
+        template_id = str(enriched_row.get("template_id") or "").strip()
+        template = templates_by_id.get(template_id)
+        if template:
+            template_rules_for_row = get_single_audit_template_rules(
+                template,
+                all_templates,
+                rules_by_template,
+            )
+            execution_failures, event_failures = current_bulk_validation_failures(
+                enriched_row,
+                template_rules_for_row,
+            )
+            enriched_row["_current_validation_available"] = True
+            enriched_row["current_execution_failures"] = execution_failures
+            enriched_row["current_event_failures"] = event_failures
+        enriched_rows.append(enriched_row)
+    return enriched_rows
 
 
 def render_bulk_audit_result_detail(
@@ -13340,6 +13434,11 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                 if results_error:
                     st.warning(results_error)
                 report_rows = bulk_result_records_to_report_rows(result_records)
+                report_rows = enrich_bulk_report_rows_with_current_validation(
+                    report_rows,
+                    active_templates,
+                    template_rules_by_template,
+                )
                 report_domain = str(selected_job.get("domain_name") or selected_domain)
                 if report_rows:
                     st.markdown("### Latest Domain Audit Report")

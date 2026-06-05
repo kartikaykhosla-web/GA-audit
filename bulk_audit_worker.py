@@ -1602,6 +1602,28 @@ def resolve_field_value(field_name: str, execution_values: Dict[str, Any], ga_ev
     return ", ".join(event_values)
 
 
+def compact_datalayer_payload(event: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(event, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in event.items()
+        if not str(key).startswith("gtm.")
+    }
+
+
+def merge_nonempty_payloads(*payloads: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            if value in (None, ""):
+                continue
+            merged[key] = value
+    return merged
+
+
 def parse_percent_value(value: Any) -> Optional[float]:
     text = str(value or "").strip()
     if not text:
@@ -2367,7 +2389,12 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         else select_primary_execution_event(ga_events)
     )
     primary_params = dict((primary_event or {}).get("params") or {})
-    execution_values = {**computed_state, **primary_params}
+    selected_event_payload = compact_datalayer_payload(selected_event)
+    execution_values = merge_nonempty_payloads(
+        computed_state,
+        selected_event_payload,
+        primary_params,
+    )
     measurement_id = join_nonempty_unique(
         network["measurement_id"],
         performance_network["measurement_id"],
