@@ -7906,6 +7906,13 @@ def _slugify_identifier(value: str, fallback: str = "template") -> str:
     return slug or fallback
 
 
+def _template_import_match_key(template: dict) -> Tuple[str, str]:
+    return (
+        _normalize_template_name_key((template or {}).get("template_name") or ""),
+        str((template or {}).get("domain_name") or "").strip().lower(),
+    )
+
+
 def _mapping_clean_text(value) -> str:
     if value is None:
         return ""
@@ -7933,6 +7940,10 @@ def _normalize_mapping_expected_value(value: str) -> str:
     text = re.sub(r"^\(?\s*", "", text)
     text = re.sub(r"\s*\)?$", "", text)
     text = re.sub(r"^static\s*[-:]\s*", "", text, flags=re.IGNORECASE)
+    if text.lower() == "video_interation":
+        text = "video_interaction"
+    if text.lower() == "articl detail":
+        text = "article detail"
     return _mapping_clean_text(text)
 
 
@@ -8163,7 +8174,14 @@ def _merge_mapping_rule(existing_rule: Optional[dict], incoming_rule: dict, page
     return existing_rule
 
 
-def _infer_mapping_url_patterns(page_type: str, urls: List[str]) -> str:
+def _mapping_domain_from_url(url: str) -> str:
+    try:
+        return urlparse(url).netloc.lower()
+    except Exception:
+        return ""
+
+
+def _infer_mapping_url_patterns(page_type: str, urls: List[str], default_domain: str = "") -> str:
     page_type_lower = str(page_type or "").strip().lower()
     cleaned_urls = []
     for url in urls or []:
@@ -8172,25 +8190,68 @@ def _infer_mapping_url_patterns(page_type: str, urls: List[str]) -> str:
             cleaned_urls.append(url_text)
 
     inferred_patterns = []
-    if page_type_lower == "article detail":
-        inferred_patterns.extend([
-            "https://www.jagran.com/*/*-*.html",
-            "https://www.jagran.com/smart-choice/*/*",
-        ])
-    elif page_type_lower == "live blog detail":
-        inferred_patterns.append("https://www.jagran.com/*/*-lb-*.html")
-    elif page_type_lower == "short video detail":
-        inferred_patterns.append("https://www.jagran.com/short-videos/*")
-    elif page_type_lower == "photo detail":
-        inferred_patterns.append("https://www.jagran.com/photo-stories/*")
-    elif page_type_lower == "topic listing page":
-        inferred_patterns.append("https://www.jagran.com/topics/*")
+    domain_key = str(default_domain or "").strip().lower()
+    if not domain_key and cleaned_urls:
+        domain_key = _mapping_domain_from_url(cleaned_urls[0])
+    if "jagran.com" in domain_key and "herzindagi.com" not in domain_key:
+        if page_type_lower == "article detail":
+            inferred_patterns.extend([
+                "https://www.jagran.com/*/*-*.html",
+                "https://www.jagran.com/smart-choice/*/*",
+            ])
+        elif page_type_lower == "live blog detail":
+            inferred_patterns.append("https://www.jagran.com/*/*-lb-*.html")
+        elif page_type_lower == "short video detail":
+            inferred_patterns.append("https://www.jagran.com/short-videos/*")
+        elif page_type_lower == "photo detail":
+            inferred_patterns.append("https://www.jagran.com/photo-stories/*")
+        elif page_type_lower == "topic listing page":
+            inferred_patterns.append("https://www.jagran.com/topics/*")
 
     all_patterns = []
     for pattern in [*inferred_patterns, *cleaned_urls]:
         if pattern and pattern not in all_patterns:
             all_patterns.append(pattern)
     return "\n".join(all_patterns)
+
+
+def detect_ga_mapping_workbook_domain(excel_bytes: bytes) -> str:
+    if not excel_bytes:
+        return ""
+    try:
+        workbook = pd.ExcelFile(io.BytesIO(excel_bytes))
+    except Exception:
+        return ""
+
+    candidate_sheets = [
+        sheet_name
+        for sheet_name in ("Finalized", "HZ")
+        if sheet_name in workbook.sheet_names
+    ] or list(workbook.sheet_names)
+
+    domains: Dict[str, int] = {}
+    for sheet_name in candidate_sheets:
+        try:
+            sheet = pd.read_excel(
+                io.BytesIO(excel_bytes),
+                sheet_name=sheet_name,
+                dtype=str,
+                header=None,
+                keep_default_na=False,
+            )
+        except Exception:
+            continue
+        for row_index in range(2, min(len(sheet), 120)):
+            row = sheet.iloc[row_index].tolist()
+            if len(row) <= 2:
+                continue
+            for url_text in re.split(r"[\r\n]+", str(row[2] or "")):
+                domain = _mapping_domain_from_url(_mapping_clean_text(url_text))
+                if domain:
+                    domains[domain] = domains.get(domain, 0) + 1
+    if not domains:
+        return ""
+    return max(domains.items(), key=lambda item: item[1])[0]
 
 
 def parse_ga_mapping_excel_templates(
@@ -8200,19 +8261,43 @@ def parse_ga_mapping_excel_templates(
     default_container_id: str,
 ) -> Tuple[List[dict], List[str]]:
     workbook = pd.ExcelFile(io.BytesIO(excel_bytes))
-    if "Finalized" not in workbook.sheet_names:
-        return [], ["The workbook must contain a sheet named 'Finalized'."]
+    sheet_name = ""
+    notes: List[str] = []
+    for candidate_name in ("Finalized", "HZ"):
+        if candidate_name in workbook.sheet_names:
+            sheet_name = candidate_name
+            break
+    if not sheet_name:
+        for candidate_name in workbook.sheet_names:
+            preview = pd.read_excel(
+                io.BytesIO(excel_bytes),
+                sheet_name=candidate_name,
+                dtype=str,
+                header=None,
+                nrows=5,
+                keep_default_na=False,
+            )
+            preview_text = "\n".join(
+                " ".join(str(cell or "") for cell in row)
+                for row in preview.values.tolist()
+            ).lower()
+            if "page_type" in preview_text and "page location" in preview_text:
+                sheet_name = candidate_name
+                break
+    if not sheet_name:
+        return [], ["The workbook must contain a 'Finalized' sheet or a mapping sheet with page_type and Page location columns."]
 
     sheet = pd.read_excel(
         io.BytesIO(excel_bytes),
-        sheet_name="Finalized",
+        sheet_name=sheet_name,
         dtype=str,
         header=None,
         keep_default_na=False,
     )
+    if sheet_name != "Finalized":
+        notes.append(f"Imported mapping rows from sheet '{sheet_name}'.")
 
     templates_by_key: Dict[str, dict] = {}
-    notes: List[str] = []
     current_section = ""
 
     for row_index in range(2, len(sheet)):
@@ -8330,6 +8415,7 @@ def parse_ga_mapping_excel_templates(
                 "url_pattern": _infer_mapping_url_patterns(
                     template["template_name"],
                     template.get("url_examples") or [],
+                    template["domain_name"],
                 ),
                 "rules": list(template["rules_by_key"].values()),
             }
@@ -8350,8 +8436,8 @@ def add_templates_from_seed_templates(
     if not seeds:
         return False, "No templates were found to import."
 
-    existing_templates_by_name = {
-        _normalize_template_name_key(template.get("template_name")): template
+    existing_templates_by_key = {
+        _template_import_match_key(template): template
         for template in (template_records or [])
         if str(template.get("template_name") or "").strip()
     }
@@ -8374,8 +8460,6 @@ def add_templates_from_seed_templates(
     rules_to_add = []
 
     for seed in seeds:
-        template_name_key = _normalize_template_name_key(seed.get("template_name"))
-        existing_template = existing_templates_by_name.get(template_name_key)
         template_payload = {
             "template_name": str(seed.get("template_name") or "").strip(),
             "domain_name": str(seed.get("domain_name") or "").strip(),
@@ -8384,6 +8468,8 @@ def add_templates_from_seed_templates(
             "url_pattern": str(seed.get("url_pattern") or "").strip(),
             "active": True,
         }
+        template_match_key = _template_import_match_key(template_payload)
+        existing_template = existing_templates_by_key.get(template_match_key)
 
         if existing_template:
             success, response = update_template_record(
@@ -8400,7 +8486,7 @@ def add_templates_from_seed_templates(
             if not success:
                 return False, response
             template_id = str(response or "").strip()
-            existing_templates_by_name[template_name_key] = {
+            existing_templates_by_key[template_match_key] = {
                 **template_payload,
                 "template_id": template_id,
                 "active": True,
@@ -13997,19 +14083,22 @@ if active_section == "Template Manager":
 
             with st.expander("Import Templates", expanded=False):
                 st.caption(
-                    "Upload the GA mapping workbook. The importer uses the Finalized sheet, groups templates by page_type, "
-                    "and converts static/dynamic formats into validation rules."
+                    "Upload the GA mapping workbook. The importer uses the Finalized sheet, HZ sheet, or any mapping sheet "
+                    "with page_type and Page location columns, then groups templates by page_type and converts static/dynamic formats into validation rules."
                 )
                 mapping_file = st.file_uploader(
                     "GA mapping Excel",
                     type=["xlsx"],
                     key="ga_mapping_excel_import_file",
                 )
+                detected_mapping_domain = ""
+                if mapping_file is not None:
+                    detected_mapping_domain = detect_ga_mapping_workbook_domain(mapping_file.getvalue())
                 import_meta_col1, import_meta_col2, import_meta_col3 = st.columns(3)
                 with import_meta_col1:
                     mapping_domain = st.text_input(
                         "Default domain",
-                        value="www.jagran.com",
+                        value=detected_mapping_domain or "www.jagran.com",
                         key="ga_mapping_import_domain",
                     )
                 with import_meta_col2:
