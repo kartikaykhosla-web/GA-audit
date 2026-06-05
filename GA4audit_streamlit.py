@@ -8533,6 +8533,26 @@ def get_homepage_starter_template() -> dict:
     return JAGRAN_STARTER_TEMPLATES[0]
 
 
+@functools.lru_cache(maxsize=4)
+def load_bundled_template_seed_file(file_name: str) -> List[dict]:
+    cleaned_file_name = str(file_name or "").strip()
+    if not cleaned_file_name:
+        return []
+    seed_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), cleaned_file_name)
+    if not os.path.exists(seed_path):
+        return []
+    try:
+        with open(seed_path, encoding="utf-8") as seed_file:
+            seeds = json.load(seed_file)
+    except Exception:
+        return []
+    return [seed for seed in seeds if isinstance(seed, dict)]
+
+
+def get_herzindagi_bundled_template_seeds() -> List[dict]:
+    return load_bundled_template_seed_file("herzindagi_templates.json")
+
+
 def import_jagran_starter_templates(email_id: str, template_records: List[dict], template_rules: List[dict]):
     existing_templates_by_name = {
         _normalize_template_name_key(template.get("template_name")): template
@@ -13398,6 +13418,31 @@ if active_section == "Template Manager":
             for rule in template_rules:
                 template_rules_by_template.setdefault(str(rule.get("template_id") or "").strip(), []).append(rule)
             rule_scope_labels = {value: label for label, value in RULE_SCOPE_OPTIONS.items()}
+
+            herzindagi_seeds = get_herzindagi_bundled_template_seeds()
+            has_herzindagi_templates = any(
+                str(template.get("domain_name") or "").strip().lower() == "www.herzindagi.com"
+                for template in template_records
+            )
+            if herzindagi_seeds and not has_herzindagi_templates:
+                herzindagi_rule_count = sum(len(seed.get("rules") or []) for seed in herzindagi_seeds)
+                st.info(
+                    f"HerZindagi templates are bundled but not installed yet: "
+                    f"{len(herzindagi_seeds)} template(s), {herzindagi_rule_count} rule(s)."
+                )
+                if st.button("Install HerZindagi templates", key="install_herzindagi_templates"):
+                    success, response = add_templates_from_seed_templates(
+                        logged_in_email,
+                        herzindagi_seeds,
+                        template_records,
+                        template_rules,
+                        "HerZindagi bundled templates",
+                    )
+                    if success:
+                        st.success(response)
+                        st.rerun()
+                    else:
+                        st.error(response)
 
             domain_options = sorted(
                 {get_template_domain_label(template) for template in template_records},

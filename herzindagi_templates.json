@@ -1,0 +1,2242 @@
+[
+  {
+    "template_name": "aarti info listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/astrology/aarti/maa-shaiputri-aarti-lyrics",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "aarti info listing page",
+        "notes": "Imported from GA mapping Excel. Sample: aarti info listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "astrology",
+        "notes": "Imported from GA mapping Excel. Sample: astrology"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "sub_category",
+        "rule_type": "exact",
+        "expected_values": "aarti",
+        "notes": "Imported from GA mapping Excel. Sample: aarti"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "publish_date",
+        "rule_type": "regex",
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2}|Z)$",
+        "notes": "Imported from GA mapping Excel. Expected format: YYYY-MM-DDTHH:mm:ss±HH:mm"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tags",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: maa shailputri aarti,shailputri aarti lyrics,maa shailputri aarti in hindi,navratri day 1 aarti, goddess shailputri aarti"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "story_id",
+        "rule_type": "regex",
+        "expected_values": "^\\d+$",
+        "notes": "Imported from GA mapping Excel. Numeric dynamic value. Sample: 44"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "word_count",
+        "rule_type": "regex",
+        "expected_values": "^\\d+$",
+        "notes": "Imported from GA mapping Excel. Numeric dynamic value. Sample: na"
+      }
+    ]
+  },
+  {
+    "template_name": "aarti listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/astrology/aarti",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "aarti listing page",
+        "notes": "Imported from GA mapping Excel. Sample: aarti listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "astrology",
+        "notes": "Imported from GA mapping Excel. Sample: astrology"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "sub_category",
+        "rule_type": "exact",
+        "expected_values": "aarti",
+        "notes": "Imported from GA mapping Excel. Sample: aarti"
+      }
+    ]
+  },
+  {
+    "template_name": "about us landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/about-us",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "about us landing page",
+        "notes": "Imported from GA mapping Excel. Sample: about us landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "about us",
+        "notes": "Imported from GA mapping Excel. Sample: about us"
+      }
+    ]
+  },
+  {
+    "template_name": "article detail",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/society-culture/stiff-rough-towel-problem-what-to-mix-in-water-for-softness-article-1061244\nhttps://www.herzindagi.com/hindi/society-culture/smart-tips-to-clean-balcony-quickly-article-1061517",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "article detail",
+        "notes": "Imported from GA mapping Excel. Sample: article detail"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tags",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: soft towels,white vinegar for towels,baking soda for towels,towel softening tips,how to make towels soft again,remove detergent residue from towels,why do towels become hard,restore towel softness with vinegar"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "author",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: garima garg"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: women issues"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "dynamic_video_embed_type",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}, {{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: na, also watch this video"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "sub_category",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: society culture"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "publish_date",
+        "rule_type": "regex",
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2}|Z)$",
+        "notes": "Imported from GA mapping Excel. Expected format: YYYY-MM-DDTHH:mm:ss±HH:mm"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "story_id",
+        "rule_type": "regex",
+        "expected_values": "^\\d+$",
+        "notes": "Imported from GA mapping Excel. Numeric dynamic value. Sample: 1061244"
+      },
+      {
+        "rule_scope": "event",
+        "field_name": "video_interaction",
+        "rule_type": "exact",
+        "expected_values": "video_interaction",
+        "notes": "Imported from GA mapping Excel."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Video_duration",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "video_percent",
+        "rule_type": "one_of",
+        "expected_values": "0%|25%|50%|75%|100%",
+        "notes": "Imported from GA mapping Excel. Allowed by format: 0% / 25% / 50% / 75% / 100%"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Video_title",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "section_name",
+        "rule_type": "exact",
+        "expected_values": "featured media / also watch this video",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "player_type",
+        "rule_type": "exact",
+        "expected_values": "manual / automatic",
+        "notes": "Imported from GA mapping Excel. Sample: manual / automatic"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "position_fold",
+        "rule_type": "exact",
+        "expected_values": "25 / 50 / 75 / 100",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "video_orientation",
+        "rule_type": "exact",
+        "expected_values": "vertical / horizontal",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "usertype",
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      }
+    ]
+  },
+  {
+    "template_name": "astro-articles landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/astro-articles",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "astro-articles landing page",
+        "notes": "Imported from GA mapping Excel. Sample: astro-articles landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "astro articles",
+        "notes": "Imported from GA mapping Excel. Sample: astro articles"
+      }
+    ]
+  },
+  {
+    "template_name": "astrology info listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/astrology/horoscope-prediction/taurus-daily",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "astrology info listing page",
+        "notes": "Imported from GA mapping Excel. Sample: astrology info listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "astrology",
+        "notes": "Imported from GA mapping Excel. Sample: astrology"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "sub_category",
+        "rule_type": "exact",
+        "expected_values": "horoscope-prediction",
+        "notes": "Imported from GA mapping Excel. Sample: horoscope-prediction"
+      }
+    ]
+  },
+  {
+    "template_name": "astrology landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/astrology",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "astrology landing page",
+        "notes": "Imported from GA mapping Excel. Sample: astrology landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "astrology",
+        "notes": "Imported from GA mapping Excel. Sample: astrology"
+      }
+    ]
+  },
+  {
+    "template_name": "astrology numerology-prediction listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/astrology/numerology-prediction",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "astrology numerology-prediction listing page",
+        "notes": "Imported from GA mapping Excel. Sample: astrology numerology-prediction listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "astrology",
+        "notes": "Imported from GA mapping Excel. Sample: astrology"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "sub_category",
+        "rule_type": "exact",
+        "expected_values": "numerology prediction",
+        "notes": "Imported from GA mapping Excel. Sample: numerology prediction"
+      }
+    ]
+  },
+  {
+    "template_name": "astrology vastu-upay listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/astrology/vastu-upay",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "astrology vastu-upay listing page",
+        "notes": "Imported from GA mapping Excel. Sample: astrology vastu-upay listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "astrology",
+        "notes": "Imported from GA mapping Excel. Sample: astrology"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "sub_category",
+        "rule_type": "exact",
+        "expected_values": "vastu-upay",
+        "notes": "Imported from GA mapping Excel. Sample: vastu-upay"
+      }
+    ]
+  },
+  {
+    "template_name": "author detail",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/your-picks/authors/shivangi-prajapati",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "author detail",
+        "notes": "Imported from GA mapping Excel. Sample: author detail"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      }
+    ]
+  },
+  {
+    "template_name": "author listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/author",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "author listing page",
+        "notes": "Imported from GA mapping Excel. Sample: author listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "author",
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      }
+    ]
+  },
+  {
+    "template_name": "chalisa info listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/astrology/chalisa\nhttps://www.herzindagi.com/hindi/astrology/chalisa/maa-shailputri-chalisa-lyrics",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "chalisa info listing page",
+        "notes": "Imported from GA mapping Excel. Sample: chalisa listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "astrology",
+        "notes": "Imported from GA mapping Excel. Sample: astrology"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "sub_category",
+        "rule_type": "exact",
+        "expected_values": "chalisa",
+        "notes": "Imported from GA mapping Excel. Sample: chalisa"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "publish_date",
+        "rule_type": "regex",
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2}|Z)$",
+        "notes": "Imported from GA mapping Excel. Expected format: YYYY-MM-DDTHH:mm:ss±HH:mm"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tags",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: shailputri chalisa, maa shailputri chalisa, shailputri chalisa lyrics, navratri day 1 chalisa,maa shailputri chalisa in hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "story_id",
+        "rule_type": "regex",
+        "expected_values": "^\\d+$",
+        "notes": "Imported from GA mapping Excel. Numeric dynamic value. Sample: 47"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "word_count",
+        "rule_type": "regex",
+        "expected_values": "^\\d+$",
+        "notes": "Imported from GA mapping Excel. Numeric dynamic value. Sample: na"
+      }
+    ]
+  },
+  {
+    "template_name": "code of ethics for digital news websites landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/code-of-ethics-for-digital-news-websites",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "code of ethics for digital news websites landing page",
+        "notes": "Imported from GA mapping Excel. Sample: code of ethics for digital news websites landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "code of ethics for digital news websites",
+        "notes": "Imported from GA mapping Excel. Sample: code of ethics for digital news websites"
+      }
+    ]
+  },
+  {
+    "template_name": "contact us landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/contact-us",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "contact us landing page",
+        "notes": "Imported from GA mapping Excel. Sample: contact us landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "contact us",
+        "notes": "Imported from GA mapping Excel. Sample: contact us"
+      }
+    ]
+  },
+  {
+    "template_name": "cookie policy landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/cookie-policy",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "cookie policy landing page",
+        "notes": "Imported from GA mapping Excel. Sample: cookie policy landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "cookie policy",
+        "notes": "Imported from GA mapping Excel. Sample: cookie policy"
+      }
+    ]
+  },
+  {
+    "template_name": "cover lady detail",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/cover-lady/dev-verma-to-ella-d-verma-trans-journey-content-creator-personal-life-family-dating-everything-you-need-to-know-133",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "cover lady detail",
+        "notes": "Imported from GA mapping Excel. Sample: cover lady detail"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "author",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: rupsha bhadra"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "publish_date",
+        "rule_type": "regex",
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2}|Z)$",
+        "notes": "Imported from GA mapping Excel. Expected format: {{dynamic}}"
+      }
+    ]
+  },
+  {
+    "template_name": "cover lady listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/cover-lady",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "cover lady listing page",
+        "notes": "Imported from GA mapping Excel. Sample: cover lady listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      }
+    ]
+  },
+  {
+    "template_name": "entertainment landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/entertainment",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "entertainment landing page",
+        "notes": "Imported from GA mapping Excel. Sample: entertainment landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: entertainment"
+      }
+    ]
+  },
+  {
+    "template_name": "festive-special event landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "http://herzindagi.com/hindi/events/festive-special",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "festive-special event landing page",
+        "notes": "Imported from GA mapping Excel. Sample: festive-special event landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      }
+    ]
+  },
+  {
+    "template_name": "fight back event page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/quiz",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "fight back event page",
+        "notes": "Imported from GA mapping Excel. Sample: fight back event page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      }
+    ]
+  },
+  {
+    "template_name": "her voice landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/her-voice",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "her voice landing page",
+        "notes": "Imported from GA mapping Excel. Sample: her voice landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "her voice",
+        "notes": "Imported from GA mapping Excel. Sample: her voice"
+      }
+    ]
+  },
+  {
+    "template_name": "homepage",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "homepage",
+        "notes": "Imported from GA mapping Excel. Sample: homepage"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "event",
+        "field_name": "video_interaction",
+        "rule_type": "exact",
+        "expected_values": "video_interaction",
+        "notes": "Imported from GA mapping Excel."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Video_duration",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "video_percent",
+        "rule_type": "one_of",
+        "expected_values": "0%|25%|50%|75%|100%",
+        "notes": "Imported from GA mapping Excel. Allowed by format: 0% / 25% / 50% / 75% / 100%"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Video_title",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "section_name",
+        "rule_type": "exact",
+        "expected_values": "videos",
+        "notes": "Imported from GA mapping Excel. Sample: videos"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "player_type",
+        "rule_type": "exact",
+        "expected_values": "manual / automatic",
+        "notes": "Imported from GA mapping Excel. Sample: manual / automatic"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "position_fold",
+        "rule_type": "exact",
+        "expected_values": "100",
+        "notes": "Imported from GA mapping Excel. Sample: 100"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "video_orientation",
+        "rule_type": "exact",
+        "expected_values": "vertical / horizontal",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "usertype",
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      }
+    ]
+  },
+  {
+    "template_name": "horoscope-prediction landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/astrology/horoscope-prediction",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "horoscope-prediction landing page",
+        "notes": "Imported from GA mapping Excel. Sample: astrology horoscope-prediction listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "astrology",
+        "notes": "Imported from GA mapping Excel. Sample: astrology"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "sub_category",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: horoscope prediction"
+      }
+    ]
+  },
+  {
+    "template_name": "immersive detail",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/immersive/interfaith-marriage-india-personal-stories-family-backlash-societal-challenges-101",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "immersive detail",
+        "notes": "Imported from GA mapping Excel. Sample: immersive detail"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "author",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: rupsha bhadra"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "publish_date",
+        "rule_type": "regex",
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2}|Z)$",
+        "notes": "Imported from GA mapping Excel. Expected format: {{dynamic}}"
+      }
+    ]
+  },
+  {
+    "template_name": "maa strong event landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/events/motherhood-postpartum-strength",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "maa strong event landing page",
+        "notes": "Imported from GA mapping Excel. Sample: maa strong event landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      }
+    ]
+  },
+  {
+    "template_name": "page_scroll",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/recipe-tips/master-chef-share-tips-to-make-market-style-kala-chaat-masala-article-1061519",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "event",
+        "field_name": "page_scroll",
+        "rule_type": "exact",
+        "expected_values": "page_scroll",
+        "notes": "Imported from GA mapping Excel."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "page_scroll",
+        "notes": "Imported from GA mapping Excel. Sample: astrology vastu-upay listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: food"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "sub_category",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: recipe tips"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "author",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: vrinda srivastava"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "publish_date",
+        "rule_type": "regex",
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2}|Z)$",
+        "notes": "Imported from GA mapping Excel. Expected format: YYYY-MM-DDTHH:mm:ss±HH:mm"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "scroll_percent",
+        "rule_type": "one_of",
+        "expected_values": "0%|25%|50%|75%|100%|1%",
+        "notes": "Imported from GA mapping Excel. Allowed by format: 0% / 25% / 50% / 75% / 100%"
+      }
+    ]
+  },
+  {
+    "template_name": "privacy policy landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/privacy-policy",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "privacy policy landing page",
+        "notes": "Imported from GA mapping Excel. Sample: privacy policy landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "privacy policy",
+        "notes": "Imported from GA mapping Excel. Sample: privacy policy"
+      }
+    ]
+  },
+  {
+    "template_name": "quiz listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/quiz",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "quiz listing page",
+        "notes": "Imported from GA mapping Excel. Sample: quiz listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      }
+    ]
+  },
+  {
+    "template_name": "rochak-kahaniyan listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/women-issues/rochak-kahaniyan",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "rochak-kahaniyan listing page",
+        "notes": "Imported from GA mapping Excel. Sample: rochak-kahaniyan listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "women issues",
+        "notes": "Imported from GA mapping Excel. Sample: women-issues"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "sub_category",
+        "rule_type": "exact",
+        "expected_values": "rochak kahaniyan",
+        "notes": "Imported from GA mapping Excel. Sample: rochak-kahaniyan"
+      }
+    ]
+  },
+  {
+    "template_name": "search listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/search/aishwarya-rajesh-all",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "search listing page",
+        "notes": "Imported from GA mapping Excel. Sample: search listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      }
+    ]
+  },
+  {
+    "template_name": "short videos",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/short-videos/shortest-interview-ever-i-herzindagi-105942.html\nhttps://www.herzindagi.com/hindi/short-videos",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "short videos",
+        "notes": "Imported from GA mapping Excel. Sample: short videos detail page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "short videos",
+        "notes": "Imported from GA mapping Excel. Sample: short videos"
+      },
+      {
+        "rule_scope": "event",
+        "field_name": "video_interaction",
+        "rule_type": "exact",
+        "expected_values": "video_interaction",
+        "notes": "Imported from GA mapping Excel."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Video_duration",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "video_percent",
+        "rule_type": "one_of",
+        "expected_values": "0%|25%|50%|75%|100%",
+        "notes": "Imported from GA mapping Excel. Allowed by format: 0% / 25% / 50% / 75% / 100%"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Video_title",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "section_name",
+        "rule_type": "exact",
+        "expected_values": "short videos",
+        "notes": "Imported from GA mapping Excel. Sample: short videos"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "player_type",
+        "rule_type": "exact",
+        "expected_values": "manual / automatic",
+        "notes": "Imported from GA mapping Excel. Sample: manual / automatic"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "position_fold",
+        "rule_type": "exact",
+        "expected_values": "na",
+        "notes": "Imported from GA mapping Excel. Sample: na"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "video_orientation",
+        "rule_type": "exact",
+        "expected_values": "vertical / horizontal",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "usertype",
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      }
+    ]
+  },
+  {
+    "template_name": "short videos listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/short-videos",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "short videos listing page",
+        "notes": "Imported from GA mapping Excel. Sample: short videos listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "short videos",
+        "notes": "Imported from GA mapping Excel. Sample: short videos"
+      }
+    ]
+  },
+  {
+    "template_name": "slideshows landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/slideshows",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "slideshows landing page",
+        "notes": "Imported from GA mapping Excel. Sample: slideshows landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "slideshows",
+        "notes": "Imported from GA mapping Excel. Sample: slideshows"
+      }
+    ]
+  },
+  {
+    "template_name": "society-culture listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/women-issues/society-culture",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "society-culture listing page",
+        "notes": "Imported from GA mapping Excel. Sample: society-culture listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: women-issues"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "sub_category",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: society-culture"
+      }
+    ]
+  },
+  {
+    "template_name": "terms of use landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/term-of-use",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "hindi",
+        "notes": "Imported from GA mapping Excel. Sample: hindi"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "terms of use landing page",
+        "notes": "Imported from GA mapping Excel. Sample: terms of use landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "terms of use",
+        "notes": "Imported from GA mapping Excel. Sample: terms of use"
+      }
+    ]
+  },
+  {
+    "template_name": "tv-ott listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/entertainment/tv-ott",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "tv-ott listing page",
+        "notes": "Imported from GA mapping Excel. Sample: tv-ott listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "entertainment",
+        "notes": "Imported from GA mapping Excel. Sample: entertainment"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "sub_category",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: tv-ott"
+      }
+    ]
+  },
+  {
+    "template_name": "video landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/videos",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "video landing page",
+        "notes": "Imported from GA mapping Excel. Sample: video landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "video",
+        "notes": "Imported from GA mapping Excel. Sample: video"
+      },
+      {
+        "rule_scope": "event",
+        "field_name": "video_interaction",
+        "rule_type": "exact",
+        "expected_values": "video_interaction",
+        "notes": "Imported from GA mapping Excel."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Video_duration",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "video_percent",
+        "rule_type": "one_of",
+        "expected_values": "0%|25%|50%|75%|100%",
+        "notes": "Imported from GA mapping Excel. Allowed by format: 0% / 25% / 50% / 75% / 100%"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Video_title",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "section_name",
+        "rule_type": "exact",
+        "expected_values": "p1 video / \"trending\"",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "player_type",
+        "rule_type": "exact",
+        "expected_values": "manual / automatic",
+        "notes": "Imported from GA mapping Excel. Sample: manual / automatic"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "position_fold",
+        "rule_type": "exact",
+        "expected_values": "25",
+        "notes": "Imported from GA mapping Excel. Sample: 25"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "video_orientation",
+        "rule_type": "exact",
+        "expected_values": "vertical / horizontal",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "usertype",
+        "rule_type": "required",
+        "expected_values": "",
+        "notes": "Imported from GA mapping Excel. Sample: -"
+      }
+    ]
+  },
+  {
+    "template_name": "web story landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/web-stories/en",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "web story landing page",
+        "notes": "Imported from GA mapping Excel. Sample: web story landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      }
+    ]
+  },
+  {
+    "template_name": "wedding-special event landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/events/wedding-special",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "wedding-special event landing page",
+        "notes": "Imported from GA mapping Excel. Sample: wedding-special event landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      }
+    ]
+  },
+  {
+    "template_name": "wellness landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/hindi/entertainment",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "wellness landing page",
+        "notes": "Imported from GA mapping Excel. Sample: entertainment landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "category",
+        "rule_type": "exact",
+        "expected_values": "{{dynamic}}",
+        "notes": "Imported from GA mapping Excel. Sample: entertainment"
+      }
+    ]
+  },
+  {
+    "template_name": "your picks landing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/your-picks/hindi",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "your picks landing page",
+        "notes": "Imported from GA mapping Excel. Sample: your picks landing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      }
+    ]
+  },
+  {
+    "template_name": "your picks search listing page",
+    "domain_name": "www.herzindagi.com",
+    "measurement_id": "G-3RLQSM7QQQ",
+    "container_id": "GTM-5CTQK3",
+    "url_pattern": "https://www.herzindagi.com/your-picks/search/Soundbar",
+    "rules": [
+      {
+        "rule_scope": "event",
+        "field_name": "page_view",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Added by importer because every GA4 audit template should validate page_view."
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "Language",
+        "rule_type": "exact",
+        "expected_values": "english",
+        "notes": "Imported from GA mapping Excel. Sample: english"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "page_type",
+        "rule_type": "exact",
+        "expected_values": "your picks search listing page",
+        "notes": "Imported from GA mapping Excel. Sample: your picks search listing page"
+      },
+      {
+        "rule_scope": "execution",
+        "field_name": "tvc_event_name",
+        "rule_type": "exact",
+        "expected_values": "page_view",
+        "notes": "Imported from GA mapping Excel. Sample: page_view"
+      }
+    ]
+  }
+]
