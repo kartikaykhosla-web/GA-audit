@@ -16,9 +16,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -37,30 +37,30 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "astrology",
-        "notes": "Imported from GA mapping Excel. Sample: astrology"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "exact",
-        "expected_values": "aarti",
-        "notes": "Imported from GA mapping Excel. Sample: aarti"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "publish_date",
         "rule_type": "regex",
-        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2}|Z)$",
-        "notes": "Imported from GA mapping Excel. Expected format: YYYY-MM-DDTHH:mm:ss±HH:mm"
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+        "notes": "HerZindagi override: aarti info publish_date uses millisecond UTC format."
       },
       {
         "rule_scope": "execution",
         "field_name": "tags",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: maa shailputri aarti,shailputri aarti lyrics,maa shailputri aarti in hindi,navratri day 1 aarti, goddess shailputri aarti"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
@@ -72,9 +72,9 @@
       {
         "rule_scope": "execution",
         "field_name": "word_count",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: na"
+        "rule_type": "regex",
+        "expected_values": "^\\d{1,4}$",
+        "notes": "HerZindagi override: numeric word count up to 4 digits."
       }
     ]
   },
@@ -95,9 +95,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -116,16 +116,16 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "astrology",
-        "notes": "Imported from GA mapping Excel. Sample: astrology"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "exact",
-        "expected_values": "aarti",
-        "notes": "Imported from GA mapping Excel. Sample: aarti"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -146,9 +146,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -167,9 +167,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "about us",
-        "notes": "Imported from GA mapping Excel. Sample: about us"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -190,9 +190,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -211,23 +211,23 @@
       {
         "rule_scope": "execution",
         "field_name": "tags",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: soft towels,white vinegar for towels,baking soda for towels,towel softening tips,how to make towels soft again,remove detergent residue from towels,why do towels become hard,restore towel softness with vinegar"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "author",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: garima garg"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: women issues"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
@@ -239,9 +239,9 @@
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: society culture"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
@@ -339,9 +339,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -360,9 +360,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "astro articles",
-        "notes": "Imported from GA mapping Excel. Sample: astro articles"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -383,9 +383,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -404,16 +404,16 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "astrology",
-        "notes": "Imported from GA mapping Excel. Sample: astrology"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "exact",
-        "expected_values": "horoscope-prediction",
-        "notes": "Imported from GA mapping Excel. Sample: horoscope-prediction"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -434,9 +434,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -455,9 +455,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "astrology",
-        "notes": "Imported from GA mapping Excel. Sample: astrology"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -478,9 +478,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -499,16 +499,16 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "astrology",
-        "notes": "Imported from GA mapping Excel. Sample: astrology"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "exact",
-        "expected_values": "numerology prediction",
-        "notes": "Imported from GA mapping Excel. Sample: numerology prediction"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -529,9 +529,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -550,16 +550,16 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "astrology",
-        "notes": "Imported from GA mapping Excel. Sample: astrology"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "exact",
-        "expected_values": "vastu-upay",
-        "notes": "Imported from GA mapping Excel. Sample: vastu-upay"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -580,9 +580,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -617,9 +617,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -638,16 +638,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Sample: -"
-      },
-      {
-        "rule_scope": "execution",
-        "field_name": "author",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Sample: -"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -668,9 +661,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -689,44 +682,16 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "astrology",
-        "notes": "Imported from GA mapping Excel. Sample: astrology"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "exact",
-        "expected_values": "chalisa",
-        "notes": "Imported from GA mapping Excel. Sample: chalisa"
-      },
-      {
-        "rule_scope": "execution",
-        "field_name": "publish_date",
         "rule_type": "regex",
-        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2}|Z)$",
-        "notes": "Imported from GA mapping Excel. Expected format: YYYY-MM-DDTHH:mm:ss±HH:mm"
-      },
-      {
-        "rule_scope": "execution",
-        "field_name": "tags",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: shailputri chalisa, maa shailputri chalisa, shailputri chalisa lyrics, navratri day 1 chalisa,maa shailputri chalisa in hindi"
-      },
-      {
-        "rule_scope": "execution",
-        "field_name": "story_id",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: 47"
-      },
-      {
-        "rule_scope": "execution",
-        "field_name": "word_count",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: na"
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -747,9 +712,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -768,9 +733,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "code of ethics for digital news websites",
-        "notes": "Imported from GA mapping Excel. Sample: code of ethics for digital news websites"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -791,9 +756,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -812,9 +777,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "contact us",
-        "notes": "Imported from GA mapping Excel. Sample: contact us"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -835,9 +800,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -856,9 +821,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "cookie policy",
-        "notes": "Imported from GA mapping Excel. Sample: cookie policy"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -879,9 +844,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -900,9 +865,9 @@
       {
         "rule_scope": "execution",
         "field_name": "author",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: rupsha bhadra"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
@@ -930,9 +895,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -967,9 +932,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -988,9 +953,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: entertainment"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -1011,9 +976,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1048,9 +1013,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1085,9 +1050,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1106,9 +1071,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "her voice",
-        "notes": "Imported from GA mapping Excel. Sample: her voice"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -1129,9 +1094,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1229,9 +1194,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1250,16 +1215,16 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "astrology",
-        "notes": "Imported from GA mapping Excel. Sample: astrology"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: horoscope prediction"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -1280,9 +1245,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1301,9 +1266,9 @@
       {
         "rule_scope": "execution",
         "field_name": "author",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: rupsha bhadra"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
@@ -1331,9 +1296,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1375,9 +1340,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1396,23 +1361,23 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: food"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: recipe tips"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "author",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: vrinda srivastava"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
@@ -1447,9 +1412,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1468,9 +1433,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "privacy policy",
-        "notes": "Imported from GA mapping Excel. Sample: privacy policy"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -1491,9 +1456,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1528,9 +1493,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1549,16 +1514,16 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "women issues",
-        "notes": "Imported from GA mapping Excel. Sample: women-issues"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "exact",
-        "expected_values": "rochak kahaniyan",
-        "notes": "Imported from GA mapping Excel. Sample: rochak-kahaniyan"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -1579,9 +1544,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1616,9 +1581,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1637,9 +1602,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "short videos",
-        "notes": "Imported from GA mapping Excel. Sample: short videos"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "event",
@@ -1723,9 +1688,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1744,9 +1709,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "short videos",
-        "notes": "Imported from GA mapping Excel. Sample: short videos"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -1767,9 +1732,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1788,9 +1753,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "slideshows",
-        "notes": "Imported from GA mapping Excel. Sample: slideshows"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -1811,9 +1776,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1832,16 +1797,16 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: women-issues"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: society-culture"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -1862,9 +1827,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "hindi",
-        "notes": "Imported from GA mapping Excel. Sample: hindi"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1883,9 +1848,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "terms of use",
-        "notes": "Imported from GA mapping Excel. Sample: terms of use"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -1906,9 +1871,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1927,16 +1892,16 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "entertainment",
-        "notes": "Imported from GA mapping Excel. Sample: entertainment"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: tv-ott"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -1957,9 +1922,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -1978,9 +1943,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "exact",
-        "expected_values": "video",
-        "notes": "Imported from GA mapping Excel. Sample: video"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "event",
@@ -2064,9 +2029,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -2101,9 +2066,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -2138,9 +2103,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -2159,9 +2124,9 @@
       {
         "rule_scope": "execution",
         "field_name": "category",
-        "rule_type": "required",
-        "expected_values": "",
-        "notes": "Imported from GA mapping Excel. Dynamic value. Sample: entertainment"
+        "rule_type": "regex",
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       }
     ]
   },
@@ -2182,9 +2147,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",
@@ -2219,9 +2184,9 @@
       {
         "rule_scope": "execution",
         "field_name": "Language",
-        "rule_type": "exact",
-        "expected_values": "english",
-        "notes": "Imported from GA mapping Excel. Sample: english"
+        "rule_type": "one_of",
+        "expected_values": "english|hindi",
+        "notes": "HerZindagi override: language can be English or Hindi."
       },
       {
         "rule_scope": "execution",

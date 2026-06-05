@@ -4387,7 +4387,10 @@ VALIDATION_PASS_LABEL = "Matched"
 VALIDATION_FAIL_LABEL = "Mismatch"
 VALIDATION_OPTIONAL_LABEL = "Optional"
 MAPPING_DATE_TIME_REGEX = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2}|Z)$"
+MAPPING_MILLISECOND_UTC_DATE_TIME_REGEX = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$"
 MAPPING_INTEGER_REGEX = r"^\d+$"
+MAPPING_WORD_COUNT_REGEX = r"^\d{1,4}$"
+MAPPING_ALPHABET_TEXT_REGEX = r"^[A-Za-z][A-Za-z\s,.'’&/\-]*$"
 MAPPING_FIELD_ALIASES = {
     "article_type": "article_type",
     "author": "author",
@@ -8358,6 +8361,86 @@ def _infer_mapping_url_patterns(page_type: str, urls: List[str], default_domain:
     return "\n".join(all_patterns)
 
 
+def _mapping_template_reference_lines(template: dict) -> List[str]:
+    return [
+        _mapping_clean_text(line)
+        for line in str((template or {}).get("url_pattern") or "").splitlines()
+        if _mapping_clean_text(line)
+    ]
+
+
+def _mapping_template_has_reference(template: dict, target_url: str) -> bool:
+    target = _mapping_clean_text(target_url).rstrip("/")
+    return any(line.rstrip("/") == target for line in _mapping_template_reference_lines(template))
+
+
+def _is_herzindagi_mapping_template(template: dict) -> bool:
+    return _normalize_template_domain_key((template or {}).get("domain_name") or "") == "herzindagi.com"
+
+
+def _apply_herzindagi_mapping_rule_overrides(imported_templates: List[dict]) -> List[dict]:
+    adjusted_templates = []
+    alphabet_fields = {"author", "category", "sub_category", "tags"}
+    for template in imported_templates or []:
+        if not _is_herzindagi_mapping_template(template):
+            adjusted_templates.append(template)
+            continue
+
+        template_copy = dict(template)
+        is_author_listing = _mapping_template_has_reference(
+            template_copy,
+            "https://www.herzindagi.com/author",
+        )
+        is_chalisa_listing = _mapping_template_has_reference(
+            template_copy,
+            "https://www.herzindagi.com/hindi/astrology/chalisa",
+        )
+        is_aarti_info_listing = (
+            str(template_copy.get("template_name") or "").strip().lower() == "aarti info listing page"
+            or _mapping_template_has_reference(
+                template_copy,
+                "https://www.herzindagi.com/hindi/astrology/aarti/maa-shaiputri-aarti-lyrics",
+            )
+        )
+
+        adjusted_rules = []
+        for rule in template_copy.get("rules") or []:
+            rule_scope = str(rule.get("rule_scope") or "").strip().lower()
+            field_name = str(rule.get("field_name") or "").strip()
+            field_key = field_name.lower()
+            if rule_scope != "execution":
+                adjusted_rules.append(rule)
+                continue
+            if is_author_listing and field_key == "author":
+                continue
+            if is_chalisa_listing and field_key in {"publish_date", "story_id", "word_count", "tags"}:
+                continue
+
+            rule_copy = dict(rule)
+            if field_key == "language":
+                rule_copy["rule_type"] = "one_of"
+                rule_copy["expected_values"] = "english|hindi"
+                rule_copy["notes"] = "HerZindagi override: language can be English or Hindi."
+            elif field_key in alphabet_fields:
+                rule_copy["rule_type"] = "regex"
+                rule_copy["expected_values"] = MAPPING_ALPHABET_TEXT_REGEX
+                rule_copy["notes"] = "HerZindagi override: dynamic alphabet text value."
+            elif field_key == "word_count":
+                rule_copy["rule_type"] = "regex"
+                rule_copy["expected_values"] = MAPPING_WORD_COUNT_REGEX
+                rule_copy["notes"] = "HerZindagi override: numeric word count up to 4 digits."
+            elif field_key == "publish_date" and is_aarti_info_listing:
+                rule_copy["rule_type"] = "regex"
+                rule_copy["expected_values"] = MAPPING_MILLISECOND_UTC_DATE_TIME_REGEX
+                rule_copy["notes"] = "HerZindagi override: aarti info publish_date uses millisecond UTC format."
+            adjusted_rules.append(rule_copy)
+
+        template_copy["rules"] = adjusted_rules
+        adjusted_templates.append(template_copy)
+
+    return adjusted_templates
+
+
 def detect_ga_mapping_workbook_domain(excel_bytes: bytes) -> str:
     if not excel_bytes:
         return ""
@@ -8565,6 +8648,7 @@ def parse_ga_mapping_excel_templates(
         )
 
     imported_templates.sort(key=lambda item: str(item.get("template_name") or "").lower())
+    imported_templates = _apply_herzindagi_mapping_rule_overrides(imported_templates)
     return imported_templates, notes
 
 
