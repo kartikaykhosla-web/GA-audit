@@ -3,6 +3,7 @@ import re
 import json
 import io
 import time
+import html
 import base64
 import shutil
 import subprocess
@@ -13618,10 +13619,28 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     for row_index, row in enumerate(report_rows):
                         view_id = str(row.get("result_id") or f"row_{row_index}")
                         is_selected = selected_view_id == view_id
+                        issue_flags = bulk_result_issue_flags(row)
+                        sample_url = str(row.get("sample_url") or "").strip()
                         with st.container(border=True):
                             view_cols = st.columns([2, 5, 1])
                             view_cols[0].markdown(f"**{row.get('template_name') or 'Unnamed template'}**")
-                            view_cols[1].caption(str(row.get("sample_url") or ""))
+                            if sample_url:
+                                if issue_flags["any_issue"]:
+                                    view_cols[1].markdown(
+                                        (
+                                            f'<a href="{html.escape(sample_url, quote=True)}" '
+                                            'target="_blank" rel="noopener noreferrer" '
+                                            'style="color:#ff4b4b;font-weight:600;text-decoration:underline;">'
+                                            f"{html.escape(sample_url)}</a>"
+                                        ),
+                                        unsafe_allow_html=True,
+                                    )
+                                else:
+                                    view_cols[1].markdown(
+                                        f"[{sample_url}]({sample_url})"
+                                    )
+                            else:
+                                view_cols[1].caption("")
                             view_cols[2].button(
                                 "Hide" if is_selected else "View",
                                 key=f"view_bulk_result_{selected_job_id}_{view_id}",
