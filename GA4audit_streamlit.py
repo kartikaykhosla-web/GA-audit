@@ -8402,6 +8402,14 @@ def _apply_herzindagi_mapping_rule_overrides(imported_templates: List[dict]) -> 
             template_copy,
             "https://www.herzindagi.com/hindi/astrology/chalisa",
         )
+        is_quiz_listing = _mapping_template_has_reference(
+            template_copy,
+            "https://www.herzindagi.com/quiz",
+        )
+        is_horoscope_prediction_listing = _mapping_template_has_reference(
+            template_copy,
+            "https://www.herzindagi.com/hindi/astrology/horoscope-prediction",
+        )
         is_aarti_info_listing = (
             str(template_copy.get("template_name") or "").strip().lower() == "aarti info listing page"
             or _mapping_template_has_reference(
@@ -8432,6 +8440,14 @@ def _apply_herzindagi_mapping_rule_overrides(imported_templates: List[dict]) -> 
                 rule_copy["rule_type"] = "exact"
                 rule_copy["expected_values"] = "chalisa listing page"
                 rule_copy["notes"] = "HerZindagi override: chalisa page_type should be chalisa listing page."
+            elif field_key == "page_type" and is_quiz_listing:
+                rule_copy["rule_type"] = "exact"
+                rule_copy["expected_values"] = "quiz listing page"
+                rule_copy["notes"] = "HerZindagi override: quiz page_type should be quiz listing page."
+            elif field_key == "page_type" and is_horoscope_prediction_listing:
+                rule_copy["rule_type"] = "exact"
+                rule_copy["expected_values"] = "astrology horoscope-prediction listing page"
+                rule_copy["notes"] = "HerZindagi override: horoscope prediction page_type should be astrology horoscope-prediction listing page."
             elif field_key == "author":
                 rule_copy["rule_type"] = "regex"
                 rule_copy["expected_values"] = MAPPING_ALPHANUMERIC_TEXT_REGEX

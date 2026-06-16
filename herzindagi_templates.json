@@ -1202,8 +1202,8 @@
         "rule_scope": "execution",
         "field_name": "page_type",
         "rule_type": "exact",
-        "expected_values": "horoscope-prediction landing page",
-        "notes": "Imported from GA mapping Excel. Sample: astrology horoscope-prediction listing page"
+        "expected_values": "astrology horoscope-prediction listing page",
+        "notes": "HerZindagi override: horoscope prediction page_type should be astrology horoscope-prediction listing page."
       },
       {
         "rule_scope": "execution",
