@@ -5565,6 +5565,7 @@ def neon_load_templates_and_rules():
         for rule in rules
         if str(rule.get("template_id") or "").strip() in active_template_ids
     ]
+    templates, rules = _apply_runtime_template_rule_overrides(templates, rules)
     return templates, rules, ""
 
 
@@ -6107,7 +6108,9 @@ def load_templates_and_rules(cache_version: str = "requests-import-v2"):
             if not sheet_storage_is_configured():
                 return [], [], str(exc)
     if sheet_storage_is_configured() or not supabase_is_configured():
-        return SHEET_LOAD_TEMPLATES_AND_RULES()
+        templates, rules, error_message = SHEET_LOAD_TEMPLATES_AND_RULES()
+        templates, rules = _apply_runtime_template_rule_overrides(templates, rules)
+        return templates, rules, error_message
 
     try:
         template_rows = supabase_request(
@@ -6123,6 +6126,7 @@ def load_templates_and_rules(cache_version: str = "requests-import-v2"):
     except Exception as exc:
         templates, rules, sheet_error = SHEET_LOAD_TEMPLATES_AND_RULES()
         if templates:
+            templates, rules = _apply_runtime_template_rule_overrides(templates, rules)
             return templates, rules, sheet_error
         return [], [], sheet_error or str(exc)
 
@@ -6139,6 +6143,7 @@ def load_templates_and_rules(cache_version: str = "requests-import-v2"):
         for rule in rules
         if str(rule.get("template_id") or "").strip() in active_template_ids
     ]
+    templates, rules = _apply_runtime_template_rule_overrides(templates, rules)
     return templates, rules, ""
 
 
@@ -8449,6 +8454,33 @@ def _apply_herzindagi_mapping_rule_overrides(imported_templates: List[dict]) -> 
         adjusted_templates.append(template_copy)
 
     return adjusted_templates
+
+
+def _apply_runtime_template_rule_overrides(
+    templates: List[dict],
+    rules: List[dict],
+) -> Tuple[List[dict], List[dict]]:
+    rules_by_template_id: Dict[str, List[dict]] = {}
+    for rule in rules or []:
+        template_id = str(rule.get("template_id") or "").strip()
+        rules_by_template_id.setdefault(template_id, []).append(dict(rule))
+
+    combined_templates = []
+    for template in templates or []:
+        template_id = str(template.get("template_id") or "").strip()
+        template_copy = dict(template)
+        template_copy["rules"] = rules_by_template_id.get(template_id, [])
+        combined_templates.append(template_copy)
+
+    adjusted_templates = _apply_herzindagi_mapping_rule_overrides(combined_templates)
+    flattened_templates: List[dict] = []
+    flattened_rules: List[dict] = []
+    for template in adjusted_templates:
+        template_copy = dict(template)
+        template_rules = template_copy.pop("rules", []) or []
+        flattened_templates.append(template_copy)
+        flattened_rules.extend(template_rules)
+    return flattened_templates, flattened_rules
 
 
 def detect_ga_mapping_workbook_domain(excel_bytes: bytes) -> str:
