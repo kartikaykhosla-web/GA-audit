@@ -3,7 +3,6 @@ import re
 import json
 import io
 import time
-import html
 import base64
 import shutil
 import subprocess
@@ -13621,24 +13620,17 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                         is_selected = selected_view_id == view_id
                         issue_flags = bulk_result_issue_flags(row)
                         sample_url = str(row.get("sample_url") or "").strip()
+                        display_issues = bulk_result_display_issues(row)
                         with st.container(border=True):
                             view_cols = st.columns([2, 5, 1])
                             view_cols[0].markdown(f"**{row.get('template_name') or 'Unnamed template'}**")
                             if sample_url:
                                 if issue_flags["any_issue"]:
-                                    view_cols[1].markdown(
-                                        (
-                                            f'<a href="{html.escape(sample_url, quote=True)}" '
-                                            'target="_blank" rel="noopener noreferrer" '
-                                            'style="color:#ff4b4b;font-weight:600;text-decoration:underline;">'
-                                            f"{html.escape(sample_url)}</a>"
-                                        ),
-                                        unsafe_allow_html=True,
-                                    )
+                                    view_cols[1].markdown(f":red[{sample_url}]")
+                                    if display_issues != "None":
+                                        view_cols[1].caption(f"Issue: {display_issues}")
                                 else:
-                                    view_cols[1].markdown(
-                                        f"[{sample_url}]({sample_url})"
-                                    )
+                                    view_cols[1].markdown(f"[{sample_url}]({sample_url})")
                             else:
                                 view_cols[1].caption("")
                             view_cols[2].button(
