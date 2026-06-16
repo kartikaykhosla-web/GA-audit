@@ -4387,10 +4387,11 @@ VALIDATION_PASS_LABEL = "Matched"
 VALIDATION_FAIL_LABEL = "Mismatch"
 VALIDATION_OPTIONAL_LABEL = "Optional"
 MAPPING_DATE_TIME_REGEX = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2}|Z)$"
-MAPPING_MILLISECOND_UTC_DATE_TIME_REGEX = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$"
+MAPPING_MILLISECOND_UTC_DATE_TIME_REGEX = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$"
 MAPPING_INTEGER_REGEX = r"^\d+$"
 MAPPING_WORD_COUNT_REGEX = r"^\d{1,4}$"
 MAPPING_ALPHABET_TEXT_REGEX = r"^[A-Za-z][A-Za-z\s,.'’&/\-]*$"
+MAPPING_TAG_LIST_REGEX = r"^[A-Za-z][A-Za-z\s.'’&/\-]*(?:\s*,\s*[A-Za-z][A-Za-z\s.'’&/\-]*)*$"
 MAPPING_FIELD_ALIASES = {
     "article_type": "article_type",
     "author": "author",
@@ -8380,7 +8381,7 @@ def _is_herzindagi_mapping_template(template: dict) -> bool:
 
 def _apply_herzindagi_mapping_rule_overrides(imported_templates: List[dict]) -> List[dict]:
     adjusted_templates = []
-    alphabet_fields = {"author", "category", "sub_category", "tags"}
+    alphabet_fields = {"author", "category", "sub_category"}
     for template in imported_templates or []:
         if not _is_herzindagi_mapping_template(template):
             adjusted_templates.append(template)
@@ -8421,6 +8422,10 @@ def _apply_herzindagi_mapping_rule_overrides(imported_templates: List[dict]) -> 
                 rule_copy["rule_type"] = "one_of"
                 rule_copy["expected_values"] = "english|hindi"
                 rule_copy["notes"] = "HerZindagi override: language can be English or Hindi."
+            elif field_key == "tags":
+                rule_copy["rule_type"] = "regex"
+                rule_copy["expected_values"] = MAPPING_TAG_LIST_REGEX
+                rule_copy["notes"] = "HerZindagi override: tags can contain comma-separated alphabet text values."
             elif field_key in alphabet_fields:
                 rule_copy["rule_type"] = "regex"
                 rule_copy["expected_values"] = MAPPING_ALPHABET_TEXT_REGEX

@@ -52,15 +52,15 @@
         "rule_scope": "execution",
         "field_name": "publish_date",
         "rule_type": "regex",
-        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?(?:Z|[+-]\\d{2}:\\d{2})$",
         "notes": "HerZindagi override: aarti info publish_date uses millisecond UTC format."
       },
       {
         "rule_scope": "execution",
         "field_name": "tags",
         "rule_type": "regex",
-        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
-        "notes": "HerZindagi override: dynamic alphabet text value."
+        "expected_values": "^[A-Za-z][A-Za-z\\s.'’&/\\-]*(?:\\s*,\\s*[A-Za-z][A-Za-z\\s.'’&/\\-]*)*$",
+        "notes": "HerZindagi override: tags can contain comma-separated alphabet text values."
       },
       {
         "rule_scope": "execution",
@@ -212,8 +212,8 @@
         "rule_scope": "execution",
         "field_name": "tags",
         "rule_type": "regex",
-        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
-        "notes": "HerZindagi override: dynamic alphabet text value."
+        "expected_values": "^[A-Za-z][A-Za-z\\s.'’&/\\-]*(?:\\s*,\\s*[A-Za-z][A-Za-z\\s.'’&/\\-]*)*$",
+        "notes": "HerZindagi override: tags can contain comma-separated alphabet text values."
       },
       {
         "rule_scope": "execution",
