@@ -4387,7 +4387,7 @@ VALIDATION_PASS_LABEL = "Matched"
 VALIDATION_FAIL_LABEL = "Mismatch"
 VALIDATION_OPTIONAL_LABEL = "Optional"
 MAPPING_DATE_TIME_REGEX = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2}|Z)$"
-MAPPING_MILLISECOND_UTC_DATE_TIME_REGEX = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$"
+MAPPING_MILLISECOND_UTC_DATE_TIME_REGEX = r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$"
 MAPPING_INTEGER_REGEX = r"^\d+$"
 MAPPING_WORD_COUNT_REGEX = r"^\d{1,4}$"
 MAPPING_ALPHABET_TEXT_REGEX = r"^[A-Za-z][A-Za-z\s,.'’&/\-]*$"
@@ -8428,6 +8428,10 @@ def _apply_herzindagi_mapping_rule_overrides(imported_templates: List[dict]) -> 
                 rule_copy["rule_type"] = "one_of"
                 rule_copy["expected_values"] = "english|hindi"
                 rule_copy["notes"] = "HerZindagi override: language can be English or Hindi."
+            elif field_key == "page_type" and is_chalisa_listing:
+                rule_copy["rule_type"] = "exact"
+                rule_copy["expected_values"] = "chalisa listing page"
+                rule_copy["notes"] = "HerZindagi override: chalisa page_type should be chalisa listing page."
             elif field_key == "author":
                 rule_copy["rule_type"] = "regex"
                 rule_copy["expected_values"] = MAPPING_ALPHANUMERIC_TEXT_REGEX
@@ -8444,10 +8448,10 @@ def _apply_herzindagi_mapping_rule_overrides(imported_templates: List[dict]) -> 
                 rule_copy["rule_type"] = "regex"
                 rule_copy["expected_values"] = MAPPING_WORD_COUNT_REGEX
                 rule_copy["notes"] = "HerZindagi override: numeric word count up to 4 digits."
-            elif field_key == "publish_date" and is_aarti_info_listing:
+            elif field_key == "publish_date":
                 rule_copy["rule_type"] = "regex"
                 rule_copy["expected_values"] = MAPPING_MILLISECOND_UTC_DATE_TIME_REGEX
-                rule_copy["notes"] = "HerZindagi override: aarti info publish_date uses millisecond UTC format."
+                rule_copy["notes"] = "HerZindagi override: publish_date accepts ISO timestamps with upper/lowercase T, optional milliseconds, and timezone offsets."
             adjusted_rules.append(rule_copy)
 
         template_copy["rules"] = adjusted_rules

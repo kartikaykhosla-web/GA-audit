@@ -38,22 +38,22 @@
         "rule_scope": "execution",
         "field_name": "category",
         "rule_type": "regex",
-        "expected_values": "^[A-Za-z0-9][A-Za-z0-9\\s,.'’&/\\-]*$",
-        "notes": "HerZindagi override: author can contain alphanumeric text values."
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
         "rule_type": "regex",
-        "expected_values": "^[A-Za-z0-9][A-Za-z0-9\\s,.'’&/\\-]*$",
-        "notes": "HerZindagi override: author can contain alphanumeric text values."
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
         "field_name": "publish_date",
         "rule_type": "regex",
-        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?(?:Z|[+-]\\d{2}:\\d{2})$",
-        "notes": "HerZindagi override: aarti info publish_date uses millisecond UTC format."
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}[Tt]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?(?:Z|[+-]\\d{2}:\\d{2})$",
+        "notes": "HerZindagi override: publish_date accepts ISO timestamps with upper/lowercase T, optional milliseconds, and timezone offsets."
       },
       {
         "rule_scope": "execution",
@@ -117,8 +117,8 @@
         "rule_scope": "execution",
         "field_name": "category",
         "rule_type": "regex",
-        "expected_values": "^[A-Za-z0-9][A-Za-z0-9\\s,.'’&/\\-]*$",
-        "notes": "HerZindagi override: author can contain alphanumeric text values."
+        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: dynamic alphabet text value."
       },
       {
         "rule_scope": "execution",
@@ -247,8 +247,8 @@
         "rule_scope": "execution",
         "field_name": "publish_date",
         "rule_type": "regex",
-        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2}|Z)$",
-        "notes": "Imported from GA mapping Excel. Expected format: YYYY-MM-DDTHH:mm:ss±HH:mm"
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}[Tt]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?(?:Z|[+-]\\d{2}:\\d{2})$",
+        "notes": "HerZindagi override: publish_date accepts ISO timestamps with upper/lowercase T, optional milliseconds, and timezone offsets."
       },
       {
         "rule_scope": "execution",
@@ -669,8 +669,8 @@
         "rule_scope": "execution",
         "field_name": "page_type",
         "rule_type": "exact",
-        "expected_values": "chalisa info listing page",
-        "notes": "Imported from GA mapping Excel. Sample: chalisa listing page"
+        "expected_values": "chalisa listing page",
+        "notes": "HerZindagi override: chalisa page_type should be chalisa listing page."
       },
       {
         "rule_scope": "execution",
@@ -866,15 +866,15 @@
         "rule_scope": "execution",
         "field_name": "author",
         "rule_type": "regex",
-        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
-        "notes": "HerZindagi override: dynamic alphabet text value."
+        "expected_values": "^[A-Za-z0-9][A-Za-z0-9\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: author can contain alphanumeric text values."
       },
       {
         "rule_scope": "execution",
         "field_name": "publish_date",
         "rule_type": "regex",
-        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2}|Z)$",
-        "notes": "Imported from GA mapping Excel. Expected format: {{dynamic}}"
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}[Tt]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?(?:Z|[+-]\\d{2}:\\d{2})$",
+        "notes": "HerZindagi override: publish_date accepts ISO timestamps with upper/lowercase T, optional milliseconds, and timezone offsets."
       }
     ]
   },
@@ -1267,15 +1267,15 @@
         "rule_scope": "execution",
         "field_name": "author",
         "rule_type": "regex",
-        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
-        "notes": "HerZindagi override: dynamic alphabet text value."
+        "expected_values": "^[A-Za-z0-9][A-Za-z0-9\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: author can contain alphanumeric text values."
       },
       {
         "rule_scope": "execution",
         "field_name": "publish_date",
         "rule_type": "regex",
-        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2}|Z)$",
-        "notes": "Imported from GA mapping Excel. Expected format: {{dynamic}}"
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}[Tt]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?(?:Z|[+-]\\d{2}:\\d{2})$",
+        "notes": "HerZindagi override: publish_date accepts ISO timestamps with upper/lowercase T, optional milliseconds, and timezone offsets."
       }
     ]
   },
@@ -1376,15 +1376,15 @@
         "rule_scope": "execution",
         "field_name": "author",
         "rule_type": "regex",
-        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
-        "notes": "HerZindagi override: dynamic alphabet text value."
+        "expected_values": "^[A-Za-z0-9][A-Za-z0-9\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: author can contain alphanumeric text values."
       },
       {
         "rule_scope": "execution",
         "field_name": "publish_date",
         "rule_type": "regex",
-        "expected_values": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:[+-]\\d{2}:\\d{2}|Z)$",
-        "notes": "Imported from GA mapping Excel. Expected format: YYYY-MM-DDTHH:mm:ss±HH:mm"
+        "expected_values": "^\\d{4}-\\d{2}-\\d{2}[Tt]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?(?:Z|[+-]\\d{2}:\\d{2})$",
+        "notes": "HerZindagi override: publish_date accepts ISO timestamps with upper/lowercase T, optional milliseconds, and timezone offsets."
       },
       {
         "rule_scope": "execution",
