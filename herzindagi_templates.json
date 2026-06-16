@@ -38,15 +38,15 @@
         "rule_scope": "execution",
         "field_name": "category",
         "rule_type": "regex",
-        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
-        "notes": "HerZindagi override: dynamic alphabet text value."
+        "expected_values": "^[A-Za-z0-9][A-Za-z0-9\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: author can contain alphanumeric text values."
       },
       {
         "rule_scope": "execution",
         "field_name": "sub_category",
         "rule_type": "regex",
-        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
-        "notes": "HerZindagi override: dynamic alphabet text value."
+        "expected_values": "^[A-Za-z0-9][A-Za-z0-9\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: author can contain alphanumeric text values."
       },
       {
         "rule_scope": "execution",
@@ -117,8 +117,8 @@
         "rule_scope": "execution",
         "field_name": "category",
         "rule_type": "regex",
-        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
-        "notes": "HerZindagi override: dynamic alphabet text value."
+        "expected_values": "^[A-Za-z0-9][A-Za-z0-9\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: author can contain alphanumeric text values."
       },
       {
         "rule_scope": "execution",
@@ -219,8 +219,8 @@
         "rule_scope": "execution",
         "field_name": "author",
         "rule_type": "regex",
-        "expected_values": "^[A-Za-z][A-Za-z\\s,.'’&/\\-]*$",
-        "notes": "HerZindagi override: dynamic alphabet text value."
+        "expected_values": "^[A-Za-z0-9][A-Za-z0-9\\s,.'’&/\\-]*$",
+        "notes": "HerZindagi override: author can contain alphanumeric text values."
       },
       {
         "rule_scope": "execution",
