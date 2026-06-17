@@ -5192,7 +5192,7 @@ def append_template_rule(email_id: str, rule_payload: dict):
         "rule_type": str(rule_payload.get("rule_type") or "").strip(),
         "expected_values": str(rule_payload.get("expected_values") or "").strip(),
         "notes": str(rule_payload.get("notes") or "").strip(),
-        "created_by": email_id,
+        "created_by": str(rule_payload.get("created_by") or email_id or "").strip(),
         "created_at": datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -5229,7 +5229,7 @@ def append_template_rules(email_id: str, rule_payloads: List[dict]):
             "rule_type": str(payload.get("rule_type") or "").strip(),
             "expected_values": str(payload.get("expected_values") or "").strip(),
             "notes": str(payload.get("notes") or "").strip(),
-            "created_by": email_id,
+            "created_by": str(payload.get("created_by") or email_id or "").strip(),
             "created_at": timestamp,
         }
         rows.append([row_map.get(header, "") for header in TEMPLATE_RULE_HEADERS])
@@ -5279,7 +5279,7 @@ def update_template_rule(email_id: str, rule_id: str, rule_payload: dict):
         "rule_type": str(rule_payload.get("rule_type") or "").strip(),
         "expected_values": str(rule_payload.get("expected_values") or "").strip(),
         "notes": str(rule_payload.get("notes") or "").strip(),
-        "created_by": existing_map.get("created_by") or email_id,
+        "created_by": str(rule_payload.get("created_by") or email_id or existing_map.get("created_by") or "").strip(),
         "created_at": existing_map.get("created_at") or datetime.now(LOG_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -6060,7 +6060,7 @@ def _rule_payload_for_supabase(email_id: str, rule_payload: dict, rule_id: str =
         "rule_type": str(rule_payload.get("rule_type") or "").strip(),
         "expected_values": str(rule_payload.get("expected_values") or "").strip(),
         "notes": str(rule_payload.get("notes") or "").strip(),
-        "created_by": str(existing.get("created_by") or email_id or "").strip(),
+        "created_by": str(rule_payload.get("created_by") or email_id or existing.get("created_by") or "").strip(),
         "created_at": str(existing.get("created_at") or now_text),
     }
 
@@ -8424,6 +8424,9 @@ def _apply_herzindagi_mapping_rule_overrides(imported_templates: List[dict]) -> 
             field_name = str(rule.get("field_name") or "").strip()
             field_key = field_name.lower()
             if rule_scope != "execution":
+                adjusted_rules.append(rule)
+                continue
+            if is_manual_template_rule(rule):
                 adjusted_rules.append(rule)
                 continue
             if is_author_listing and field_key == "author":
@@ -11070,10 +11073,25 @@ def companion_template_has_matched_event(companion_event_df: pd.DataFrame, compa
 
 DOMAIN_AUDIT_TEMPLATE_LIMIT = 3
 DOMAIN_AUDIT_BATCH_DEFAULT = 1
+TEMPLATE_RULE_MANUAL_EDITOR_PREFIX = "manual:"
 
 
 def get_template_domain_label(template: dict) -> str:
     return str(template.get("domain_name") or "").strip() or "Unspecified domain"
+
+
+def build_manual_template_rule_actor(email_id: str) -> str:
+    email_text = str(email_id or "").strip()
+    if not email_text:
+        return TEMPLATE_RULE_MANUAL_EDITOR_PREFIX.rstrip(":")
+    if email_text.lower().startswith(TEMPLATE_RULE_MANUAL_EDITOR_PREFIX):
+        return email_text
+    return f"{TEMPLATE_RULE_MANUAL_EDITOR_PREFIX}{email_text}"
+
+
+def is_manual_template_rule(rule: Optional[dict]) -> bool:
+    created_by = str((rule or {}).get("created_by") or "").strip().lower()
+    return created_by.startswith(TEMPLATE_RULE_MANUAL_EDITOR_PREFIX)
 
 
 def infer_template_domain_filter_from_url(raw_url: str, domain_options: List[str]) -> str:
@@ -14178,6 +14196,7 @@ if active_section == "Template Manager":
                                             "rule_type": edit_rule_type,
                                             "expected_values": normalized_expected_values,
                                             "notes": edit_rule_notes,
+                                            "created_by": build_manual_template_rule_actor(logged_in_email),
                                         },
                                     )
                                     if success:
@@ -14422,6 +14441,7 @@ if active_section == "Template Manager":
                                             "rule_type": entry["rule_type"],
                                             "expected_values": entry["expected_values"],
                                             "notes": entry["notes"],
+                                            "created_by": build_manual_template_rule_actor(logged_in_email),
                                         }
                                         for entry in pending_rules
                                     ],
@@ -14516,6 +14536,7 @@ if active_section == "Template Manager":
                                         "rule_type": event_rule_type,
                                         "expected_values": normalized_expected_values,
                                         "notes": event_notes,
+                                        "created_by": build_manual_template_rule_actor(logged_in_email),
                                     },
                                 )
                                 if success:
