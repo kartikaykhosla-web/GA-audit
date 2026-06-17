@@ -8500,6 +8500,23 @@ def _mapping_template_has_reference(template: dict, target_url: str) -> bool:
     return any(line.rstrip("/") == target for line in _mapping_template_reference_lines(template))
 
 
+TEMPLATE_RULE_MANUAL_EDITOR_PREFIX = "manual:"
+
+
+def build_manual_template_rule_actor(email_id: str) -> str:
+    email_text = str(email_id or "").strip()
+    if not email_text:
+        return TEMPLATE_RULE_MANUAL_EDITOR_PREFIX.rstrip(":")
+    if email_text.lower().startswith(TEMPLATE_RULE_MANUAL_EDITOR_PREFIX):
+        return email_text
+    return f"{TEMPLATE_RULE_MANUAL_EDITOR_PREFIX}{email_text}"
+
+
+def is_manual_template_rule(rule: Optional[dict]) -> bool:
+    created_by = str((rule or {}).get("created_by") or "").strip().lower()
+    return created_by.startswith(TEMPLATE_RULE_MANUAL_EDITOR_PREFIX)
+
+
 def _is_herzindagi_mapping_template(template: dict) -> bool:
     return _normalize_template_domain_key((template or {}).get("domain_name") or "") == "herzindagi.com"
 
@@ -11205,25 +11222,10 @@ def companion_template_has_matched_event(companion_event_df: pd.DataFrame, compa
 
 DOMAIN_AUDIT_TEMPLATE_LIMIT = 3
 DOMAIN_AUDIT_BATCH_DEFAULT = 1
-TEMPLATE_RULE_MANUAL_EDITOR_PREFIX = "manual:"
 
 
 def get_template_domain_label(template: dict) -> str:
     return str(template.get("domain_name") or "").strip() or "Unspecified domain"
-
-
-def build_manual_template_rule_actor(email_id: str) -> str:
-    email_text = str(email_id or "").strip()
-    if not email_text:
-        return TEMPLATE_RULE_MANUAL_EDITOR_PREFIX.rstrip(":")
-    if email_text.lower().startswith(TEMPLATE_RULE_MANUAL_EDITOR_PREFIX):
-        return email_text
-    return f"{TEMPLATE_RULE_MANUAL_EDITOR_PREFIX}{email_text}"
-
-
-def is_manual_template_rule(rule: Optional[dict]) -> bool:
-    created_by = str((rule or {}).get("created_by") or "").strip().lower()
-    return created_by.startswith(TEMPLATE_RULE_MANUAL_EDITOR_PREFIX)
 
 
 def infer_template_domain_filter_from_url(raw_url: str, domain_options: List[str]) -> str:
