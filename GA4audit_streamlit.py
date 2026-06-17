@@ -9052,11 +9052,11 @@ def replace_templates_from_seed_templates(
     if not seeds:
         return False, "No templates were found to sync."
 
-    existing_templates_by_key = {
-        _template_import_match_key(template): template
-        for template in (template_records or [])
-        if str(template.get("template_name") or "").strip()
-    }
+    existing_templates_by_key: Dict[Tuple[str, str], List[dict]] = {}
+    for template in template_records or []:
+        if not str(template.get("template_name") or "").strip():
+            continue
+        existing_templates_by_key.setdefault(_template_import_match_key(template), []).append(template)
     rules_by_template: Dict[str, List[dict]] = {}
     for rule in template_rules or []:
         template_id = str(rule.get("template_id") or "").strip()
