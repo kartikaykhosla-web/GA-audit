@@ -6098,19 +6098,50 @@ def append_audit_log(email_id: str, result: dict, audit_summary: dict):
         return False, sheet_response or str(exc)
 
 
+ACTIVE_TEMPLATE_STORE_STATE_KEY = "active_template_store"
+_ACTIVE_TEMPLATE_STORE = ""
+
+
+def _set_active_template_store(store_name: str):
+    global _ACTIVE_TEMPLATE_STORE
+    _ACTIVE_TEMPLATE_STORE = str(store_name or "").strip()
+    try:
+        st.session_state[ACTIVE_TEMPLATE_STORE_STATE_KEY] = _ACTIVE_TEMPLATE_STORE
+    except Exception:
+        pass
+
+
+def get_active_template_store() -> str:
+    try:
+        store_name = st.session_state.get(ACTIVE_TEMPLATE_STORE_STATE_KEY, "")
+    except Exception:
+        store_name = ""
+    return str(store_name or _ACTIVE_TEMPLATE_STORE or "").strip()
+
+
+def get_active_template_store_label() -> str:
+    labels = {
+        "neon": "Neon/Postgres",
+        "sheet": "Google Sheets",
+        "supabase": "Supabase",
+    }
+    return labels.get(get_active_template_store(), "Not resolved yet")
+
+
 @st.cache_data(ttl=300, show_spinner=False)
-def load_templates_and_rules(cache_version: str = "requests-import-v2"):
+def _load_templates_and_rules_with_store(cache_version: str = "requests-import-v2"):
     _ = cache_version
     if neon_is_configured():
         try:
-            return neon_load_templates_and_rules()
+            templates, rules, error_message = neon_load_templates_and_rules()
+            return templates, rules, error_message, "neon"
         except Exception as exc:
             if not sheet_storage_is_configured():
-                return [], [], str(exc)
+                return [], [], str(exc), "neon"
     if sheet_storage_is_configured() or not supabase_is_configured():
         templates, rules, error_message = SHEET_LOAD_TEMPLATES_AND_RULES()
         templates, rules = _apply_runtime_template_rule_overrides(templates, rules)
-        return templates, rules, error_message
+        return templates, rules, error_message, "sheet"
 
     try:
         template_rows = supabase_request(
@@ -6127,8 +6158,8 @@ def load_templates_and_rules(cache_version: str = "requests-import-v2"):
         templates, rules, sheet_error = SHEET_LOAD_TEMPLATES_AND_RULES()
         if templates:
             templates, rules = _apply_runtime_template_rule_overrides(templates, rules)
-            return templates, rules, sheet_error
-        return [], [], sheet_error or str(exc)
+            return templates, rules, sheet_error, "sheet"
+        return [], [], sheet_error or str(exc), "supabase"
 
     templates = [_supabase_clean_record(record, TEMPLATE_HEADERS) for record in template_rows]
     rules = [_supabase_clean_record(record, TEMPLATE_RULE_HEADERS) for record in rule_rows]
@@ -6144,25 +6175,51 @@ def load_templates_and_rules(cache_version: str = "requests-import-v2"):
         if str(rule.get("template_id") or "").strip() in active_template_ids
     ]
     templates, rules = _apply_runtime_template_rule_overrides(templates, rules)
-    return templates, rules, ""
+    return templates, rules, "", "supabase"
+
+
+def load_templates_and_rules(cache_version: str = "requests-import-v2"):
+    templates, rules, error_message, store_name = _load_templates_and_rules_with_store(cache_version)
+    _set_active_template_store(store_name)
+    return templates, rules, error_message
 
 
 def clear_template_data_cache():
     try:
-        load_templates_and_rules.clear()
+        _load_templates_and_rules_with_store.clear()
     except Exception:
         pass
 
 
+def _clear_template_cache_on_success(result):
+    try:
+        success = bool(result[0])
+    except Exception:
+        success = False
+    if success:
+        clear_template_data_cache()
+    return result
+
+
 def append_template_record(email_id: str, template_payload: dict):
-    if neon_is_configured():
+    active_store = get_active_template_store()
+    if active_store == "neon":
+        try:
+            return neon_append_template_record(email_id, template_payload)
+        except Exception as exc:
+            return False, str(exc)
+    if active_store == "sheet":
+        return _clear_template_cache_on_success(SHEET_APPEND_TEMPLATE_RECORD(email_id, template_payload))
+    use_supabase = active_store == "supabase"
+
+    if not use_supabase and neon_is_configured():
         try:
             return neon_append_template_record(email_id, template_payload)
         except Exception as exc:
             if not sheet_storage_is_configured():
                 return False, str(exc)
-    if sheet_storage_is_configured() or not supabase_is_configured():
-        return SHEET_APPEND_TEMPLATE_RECORD(email_id, template_payload)
+    if not use_supabase and (sheet_storage_is_configured() or not supabase_is_configured()):
+        return _clear_template_cache_on_success(SHEET_APPEND_TEMPLATE_RECORD(email_id, template_payload))
     row_map = _template_payload_for_supabase(email_id, template_payload)
     try:
         response = supabase_request(
@@ -6177,18 +6234,30 @@ def append_template_record(email_id: str, template_payload: dict):
         clear_template_data_cache()
         return True, row_map["template_id"]
     except Exception as exc:
-        return SHEET_APPEND_TEMPLATE_RECORD(email_id, template_payload)
+        if use_supabase:
+            return False, str(exc)
+        return _clear_template_cache_on_success(SHEET_APPEND_TEMPLATE_RECORD(email_id, template_payload))
 
 
 def update_template_record(email_id: str, template_id: str, template_payload: dict):
-    if neon_is_configured():
+    active_store = get_active_template_store()
+    if active_store == "neon":
+        try:
+            return neon_update_template_record(email_id, template_id, template_payload)
+        except Exception as exc:
+            return False, str(exc)
+    if active_store == "sheet":
+        return _clear_template_cache_on_success(SHEET_UPDATE_TEMPLATE_RECORD(email_id, template_id, template_payload))
+    use_supabase = active_store == "supabase"
+
+    if not use_supabase and neon_is_configured():
         try:
             return neon_update_template_record(email_id, template_id, template_payload)
         except Exception as exc:
             if not sheet_storage_is_configured():
                 return False, str(exc)
-    if sheet_storage_is_configured() or not supabase_is_configured():
-        return SHEET_UPDATE_TEMPLATE_RECORD(email_id, template_id, template_payload)
+    if not use_supabase and (sheet_storage_is_configured() or not supabase_is_configured()):
+        return _clear_template_cache_on_success(SHEET_UPDATE_TEMPLATE_RECORD(email_id, template_id, template_payload))
     template_id_text = str(template_id or "").strip()
     if not template_id_text:
         return False, "Template ID is missing."
@@ -6210,18 +6279,30 @@ def update_template_record(email_id: str, template_id: str, template_payload: di
         clear_template_data_cache()
         return True, template_id_text
     except Exception as exc:
-        return SHEET_UPDATE_TEMPLATE_RECORD(email_id, template_id, template_payload)
+        if use_supabase:
+            return False, str(exc)
+        return _clear_template_cache_on_success(SHEET_UPDATE_TEMPLATE_RECORD(email_id, template_id, template_payload))
 
 
 def append_template_rule(email_id: str, rule_payload: dict):
-    if neon_is_configured():
+    active_store = get_active_template_store()
+    if active_store == "neon":
+        try:
+            return neon_append_template_rule(email_id, rule_payload)
+        except Exception as exc:
+            return False, str(exc)
+    if active_store == "sheet":
+        return _clear_template_cache_on_success(SHEET_APPEND_TEMPLATE_RULE(email_id, rule_payload))
+    use_supabase = active_store == "supabase"
+
+    if not use_supabase and neon_is_configured():
         try:
             return neon_append_template_rule(email_id, rule_payload)
         except Exception as exc:
             if not sheet_storage_is_configured():
                 return False, str(exc)
-    if sheet_storage_is_configured() or not supabase_is_configured():
-        return SHEET_APPEND_TEMPLATE_RULE(email_id, rule_payload)
+    if not use_supabase and (sheet_storage_is_configured() or not supabase_is_configured()):
+        return _clear_template_cache_on_success(SHEET_APPEND_TEMPLATE_RULE(email_id, rule_payload))
     row_map = _rule_payload_for_supabase(email_id, rule_payload)
     try:
         response = supabase_request(
@@ -6236,18 +6317,30 @@ def append_template_rule(email_id: str, rule_payload: dict):
         clear_template_data_cache()
         return True, row_map["rule_id"]
     except Exception as exc:
-        return SHEET_APPEND_TEMPLATE_RULE(email_id, rule_payload)
+        if use_supabase:
+            return False, str(exc)
+        return _clear_template_cache_on_success(SHEET_APPEND_TEMPLATE_RULE(email_id, rule_payload))
 
 
 def append_template_rules(email_id: str, rule_payloads: List[dict]):
-    if neon_is_configured():
+    active_store = get_active_template_store()
+    if active_store == "neon":
+        try:
+            return neon_append_template_rules(email_id, rule_payloads)
+        except Exception as exc:
+            return False, str(exc)
+    if active_store == "sheet":
+        return _clear_template_cache_on_success(SHEET_APPEND_TEMPLATE_RULES(email_id, rule_payloads))
+    use_supabase = active_store == "supabase"
+
+    if not use_supabase and neon_is_configured():
         try:
             return neon_append_template_rules(email_id, rule_payloads)
         except Exception as exc:
             if not sheet_storage_is_configured():
                 return False, str(exc)
-    if sheet_storage_is_configured() or not supabase_is_configured():
-        return SHEET_APPEND_TEMPLATE_RULES(email_id, rule_payloads)
+    if not use_supabase and (sheet_storage_is_configured() or not supabase_is_configured()):
+        return _clear_template_cache_on_success(SHEET_APPEND_TEMPLATE_RULES(email_id, rule_payloads))
     payloads = [payload for payload in (rule_payloads or []) if isinstance(payload, dict)]
     if not payloads:
         return False, "No rules to save."
@@ -6262,18 +6355,30 @@ def append_template_rules(email_id: str, rule_payloads: List[dict]):
         clear_template_data_cache()
         return True, str(len(rows))
     except Exception as exc:
-        return SHEET_APPEND_TEMPLATE_RULES(email_id, rule_payloads)
+        if use_supabase:
+            return False, str(exc)
+        return _clear_template_cache_on_success(SHEET_APPEND_TEMPLATE_RULES(email_id, rule_payloads))
 
 
 def update_template_rule(email_id: str, rule_id: str, rule_payload: dict):
-    if neon_is_configured():
+    active_store = get_active_template_store()
+    if active_store == "neon":
+        try:
+            return neon_update_template_rule(email_id, rule_id, rule_payload)
+        except Exception as exc:
+            return False, str(exc)
+    if active_store == "sheet":
+        return _clear_template_cache_on_success(SHEET_UPDATE_TEMPLATE_RULE(email_id, rule_id, rule_payload))
+    use_supabase = active_store == "supabase"
+
+    if not use_supabase and neon_is_configured():
         try:
             return neon_update_template_rule(email_id, rule_id, rule_payload)
         except Exception as exc:
             if not sheet_storage_is_configured():
                 return False, str(exc)
-    if sheet_storage_is_configured() or not supabase_is_configured():
-        return SHEET_UPDATE_TEMPLATE_RULE(email_id, rule_id, rule_payload)
+    if not use_supabase and (sheet_storage_is_configured() or not supabase_is_configured()):
+        return _clear_template_cache_on_success(SHEET_UPDATE_TEMPLATE_RULE(email_id, rule_id, rule_payload))
     rule_id_text = str(rule_id or "").strip()
     if not rule_id_text:
         return False, "Rule ID is missing."
@@ -6295,18 +6400,30 @@ def update_template_rule(email_id: str, rule_id: str, rule_payload: dict):
         clear_template_data_cache()
         return True, rule_id_text
     except Exception as exc:
-        return SHEET_UPDATE_TEMPLATE_RULE(email_id, rule_id, rule_payload)
+        if use_supabase:
+            return False, str(exc)
+        return _clear_template_cache_on_success(SHEET_UPDATE_TEMPLATE_RULE(email_id, rule_id, rule_payload))
 
 
 def delete_template_rule(rule_id: str):
-    if neon_is_configured():
+    active_store = get_active_template_store()
+    if active_store == "neon":
+        try:
+            return neon_delete_template_rule(rule_id)
+        except Exception as exc:
+            return False, str(exc)
+    if active_store == "sheet":
+        return _clear_template_cache_on_success(SHEET_DELETE_TEMPLATE_RULE(rule_id))
+    use_supabase = active_store == "supabase"
+
+    if not use_supabase and neon_is_configured():
         try:
             return neon_delete_template_rule(rule_id)
         except Exception as exc:
             if not sheet_storage_is_configured():
                 return False, str(exc)
-    if sheet_storage_is_configured() or not supabase_is_configured():
-        return SHEET_DELETE_TEMPLATE_RULE(rule_id)
+    if not use_supabase and (sheet_storage_is_configured() or not supabase_is_configured()):
+        return _clear_template_cache_on_success(SHEET_DELETE_TEMPLATE_RULE(rule_id))
     rule_id_text = str(rule_id or "").strip()
     if not rule_id_text:
         return False, "Rule ID is missing."
@@ -6320,7 +6437,9 @@ def delete_template_rule(rule_id: str):
         clear_template_data_cache()
         return True, rule_id_text
     except Exception as exc:
-        return SHEET_DELETE_TEMPLATE_RULE(rule_id)
+        if use_supabase:
+            return False, str(exc)
+        return _clear_template_cache_on_success(SHEET_DELETE_TEMPLATE_RULE(rule_id))
 
 
 def reset_templates_to_homepage_only(email_id: str):
@@ -9112,14 +9231,24 @@ def should_auto_cleanup_homepage_templates(template_records: List[dict]) -> bool
 
 
 def reset_templates_to_homepage_only(email_id: str):
-    if neon_is_configured():
+    active_store = get_active_template_store()
+    if active_store == "neon":
+        try:
+            return neon_reset_templates_to_homepage_only(email_id)
+        except Exception as exc:
+            return False, str(exc)
+    if active_store == "sheet":
+        return _clear_template_cache_on_success(SHEET_RESET_TEMPLATES_TO_HOMEPAGE_ONLY(email_id))
+    use_supabase = active_store == "supabase"
+
+    if not use_supabase and neon_is_configured():
         try:
             return neon_reset_templates_to_homepage_only(email_id)
         except Exception as exc:
             if not sheet_storage_is_configured():
                 return False, str(exc)
-    if sheet_storage_is_configured() or not supabase_is_configured():
-        return SHEET_RESET_TEMPLATES_TO_HOMEPAGE_ONLY(email_id)
+    if not use_supabase and (sheet_storage_is_configured() or not supabase_is_configured()):
+        return _clear_template_cache_on_success(SHEET_RESET_TEMPLATES_TO_HOMEPAGE_ONLY(email_id))
 
     homepage_seed = get_homepage_starter_template()
     homepage_template_id = "tpl_home_page"
@@ -9159,9 +9288,12 @@ def reset_templates_to_homepage_only(email_id: str):
             )
         if rule_rows:
             supabase_request("POST", SUPABASE_TEMPLATE_RULE_TABLE, payload=rule_rows, prefer="return=minimal")
+        clear_template_data_cache()
         return True, "Template Manager reset. Only the Home Page template remains."
     except Exception as exc:
-        return SHEET_RESET_TEMPLATES_TO_HOMEPAGE_ONLY(email_id)
+        if use_supabase:
+            return False, str(exc)
+        return _clear_template_cache_on_success(SHEET_RESET_TEMPLATES_TO_HOMEPAGE_ONLY(email_id))
 
 
 def render_sidebar_session(email_id: str):
@@ -13887,6 +14019,7 @@ if active_section == "Template Manager":
             st.caption(
                 "Choose a domain first, then a template. Editing, reviewing rules, and adding new rules all happen in one workspace."
             )
+            st.caption(f"Active template store: {get_active_template_store_label()}")
 
             template_rules_by_template = {}
             for rule in template_rules:
