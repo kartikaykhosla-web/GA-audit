@@ -11076,6 +11076,18 @@ def get_template_domain_label(template: dict) -> str:
     return str(template.get("domain_name") or "").strip() or "Unspecified domain"
 
 
+def infer_template_domain_filter_from_url(raw_url: str, domain_options: List[str]) -> str:
+    _, normalized_url, input_error = normalize_single_url(raw_url)
+    if input_error or not normalized_url:
+        return ""
+
+    url_domain_key = _normalize_template_domain_key(urlparse(normalized_url).netloc)
+    for option in domain_options or []:
+        if _normalize_template_domain_key(option) == url_domain_key:
+            return option
+    return ""
+
+
 def split_template_reference_patterns(raw_value: str) -> List[str]:
     pieces: List[str] = []
     for line in str(raw_value or "").splitlines():
@@ -12618,10 +12630,36 @@ This capture is split into three layers:
             for template in active_templates
             if "video interaction" not in _normalize_template_name_key(template.get("template_name") or "")
         ]
+        domain_options = sorted(
+            {get_template_domain_label(template) for template in single_audit_templates},
+            key=str.lower,
+        )
+        detected_domain_filter = infer_template_domain_filter_from_url(url_text, domain_options)
+        domain_filter_options = ["All domains", *domain_options]
+        selected_domain_filter = str(st.session_state.get("audit_url_domain_filter") or "").strip()
+        if selected_domain_filter not in domain_filter_options:
+            selected_domain_filter = ""
+        if detected_domain_filter and selected_domain_filter in {"", "All domains"}:
+            st.session_state["audit_url_domain_filter"] = detected_domain_filter
+        elif not selected_domain_filter:
+            st.session_state["audit_url_domain_filter"] = "All domains"
+
+        selected_domain_filter = st.radio(
+            "Domain",
+            options=domain_filter_options,
+            key="audit_url_domain_filter",
+            horizontal=True,
+        )
+        filtered_single_audit_templates = [
+            template
+            for template in single_audit_templates
+            if selected_domain_filter == "All domains"
+            or get_template_domain_label(template) == selected_domain_filter
+        ]
         template_options = [
             None,
             *sorted(
-                single_audit_templates,
+                filtered_single_audit_templates,
                 key=lambda template: build_template_option_label(template).lower(),
             ),
         ]
@@ -12635,6 +12673,8 @@ This capture is split into three layers:
             "Video-interaction companion templates are hidden here; select the base template "
             "(for example `article detail`) and the app will handle companion validations itself."
         )
+        if not filtered_single_audit_templates:
+            st.warning("No templates are available for the selected domain.")
         if selected_template is not None:
             available_video_companion_templates = [
                 template
