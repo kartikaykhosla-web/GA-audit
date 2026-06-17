@@ -5171,6 +5171,37 @@ def update_template_record(email_id: str, template_id: str, template_payload: di
     return True, template_id_text
 
 
+def delete_template_record(template_id: str):
+    service_account_info = get_service_account_info()
+    if not service_account_info:
+        return False, "Google Sheets logging is not configured yet."
+
+    settings = get_template_sheet_settings()
+    template_ws, _ = get_template_worksheets(
+        json.dumps(service_account_info),
+        settings["spreadsheet_id"],
+        settings["template_worksheet_name"],
+        settings["template_rules_worksheet_name"],
+    )
+
+    template_id_text = str(template_id or "").strip()
+    if not template_id_text:
+        return False, "Template ID is missing."
+
+    template_ids = template_ws.col_values(1)
+    row_index = None
+    for index, value in enumerate(template_ids[1:], start=2):
+        if str(value or "").strip() == template_id_text:
+            row_index = index
+            break
+
+    if row_index is None:
+        return False, "Template not found."
+
+    template_ws.delete_rows(row_index)
+    return True, template_id_text
+
+
 def append_template_rule(email_id: str, rule_payload: dict):
     service_account_info = get_service_account_info()
     if not service_account_info:
@@ -5328,6 +5359,7 @@ SHEET_APPEND_AUDIT_LOG = append_audit_log
 SHEET_LOAD_TEMPLATES_AND_RULES = load_templates_and_rules
 SHEET_APPEND_TEMPLATE_RECORD = append_template_record
 SHEET_UPDATE_TEMPLATE_RECORD = update_template_record
+SHEET_DELETE_TEMPLATE_RECORD = delete_template_record
 SHEET_APPEND_TEMPLATE_RULE = append_template_rule
 SHEET_APPEND_TEMPLATE_RULES = append_template_rules
 SHEET_UPDATE_TEMPLATE_RULE = update_template_rule
@@ -5627,6 +5659,21 @@ def neon_update_template_record(email_id: str, template_id: str, template_payloa
                     row_map["created_at"],
                     template_id_text,
                 ),
+            )
+    clear_template_data_cache()
+    return True, template_id_text
+
+
+def neon_delete_template_record(template_id: str):
+    ensure_neon_ready()
+    template_id_text = str(template_id or "").strip()
+    if not template_id_text:
+        return False, "Template ID is missing."
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM ga_audit_templates WHERE template_id = %s",
+                (template_id_text,),
             )
     clear_template_data_cache()
     return True, template_id_text
@@ -6403,6 +6450,43 @@ def update_template_rule(email_id: str, rule_id: str, rule_payload: dict):
         if use_supabase:
             return False, str(exc)
         return _clear_template_cache_on_success(SHEET_UPDATE_TEMPLATE_RULE(email_id, rule_id, rule_payload))
+
+
+def delete_template_record(template_id: str):
+    active_store = get_active_template_store()
+    if active_store == "neon":
+        try:
+            return neon_delete_template_record(template_id)
+        except Exception as exc:
+            return False, str(exc)
+    if active_store == "sheet":
+        return _clear_template_cache_on_success(SHEET_DELETE_TEMPLATE_RECORD(template_id))
+    use_supabase = active_store == "supabase"
+
+    if not use_supabase and neon_is_configured():
+        try:
+            return neon_delete_template_record(template_id)
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
+    if not use_supabase and (sheet_storage_is_configured() or not supabase_is_configured()):
+        return _clear_template_cache_on_success(SHEET_DELETE_TEMPLATE_RECORD(template_id))
+    template_id_text = str(template_id or "").strip()
+    if not template_id_text:
+        return False, "Template ID is missing."
+    try:
+        supabase_request(
+            "DELETE",
+            SUPABASE_TEMPLATE_TABLE,
+            params={"template_id": f"eq.{template_id_text}"},
+            prefer="return=minimal",
+        )
+        clear_template_data_cache()
+        return True, template_id_text
+    except Exception as exc:
+        if use_supabase:
+            return False, str(exc)
+        return _clear_template_cache_on_success(SHEET_DELETE_TEMPLATE_RECORD(template_id))
 
 
 def delete_template_rule(rule_id: str):
@@ -8864,11 +8948,11 @@ def add_templates_from_seed_templates(
     if not seeds:
         return False, "No templates were found to import."
 
-    existing_templates_by_key = {
-        _template_import_match_key(template): template
-        for template in (template_records or [])
-        if str(template.get("template_name") or "").strip()
-    }
+    existing_templates_by_key: Dict[Tuple[str, str], List[dict]] = {}
+    for template in template_records or []:
+        if not str(template.get("template_name") or "").strip():
+            continue
+        existing_templates_by_key.setdefault(_template_import_match_key(template), []).append(template)
     rules_by_template: Dict[str, Set[Tuple[str, str, str, str]]] = {}
     for rule in template_rules or []:
         template_id = str(rule.get("template_id") or "").strip()
@@ -8897,7 +8981,8 @@ def add_templates_from_seed_templates(
             "active": True,
         }
         template_match_key = _template_import_match_key(template_payload)
-        existing_template = existing_templates_by_key.get(template_match_key)
+        existing_templates = existing_templates_by_key.get(template_match_key, [])
+        existing_template = existing_templates[0] if existing_templates else None
 
         if existing_template:
             success, response = update_template_record(
@@ -8914,11 +8999,13 @@ def add_templates_from_seed_templates(
             if not success:
                 return False, response
             template_id = str(response or "").strip()
-            existing_templates_by_key[template_match_key] = {
-                **template_payload,
-                "template_id": template_id,
-                "active": True,
-            }
+            existing_templates_by_key[template_match_key] = [
+                {
+                    **template_payload,
+                    "template_id": template_id,
+                    "active": True,
+                }
+            ]
             created_templates += 1
 
         existing_signatures = rules_by_template.setdefault(template_id, set())
@@ -8978,6 +9065,7 @@ def replace_templates_from_seed_templates(
 
     created_templates = 0
     updated_templates = 0
+    deleted_templates = 0
     deleted_rules = 0
     replacement_rules = []
 
@@ -8991,7 +9079,8 @@ def replace_templates_from_seed_templates(
             "active": True,
         }
         template_match_key = _template_import_match_key(template_payload)
-        existing_template = existing_templates_by_key.get(template_match_key)
+        existing_templates = existing_templates_by_key.get(template_match_key, [])
+        existing_template = existing_templates[0] if existing_templates else None
 
         if existing_template:
             success, response = update_template_record(
@@ -9008,12 +9097,31 @@ def replace_templates_from_seed_templates(
             if not success:
                 return False, response
             template_id = str(response or "").strip()
-            existing_templates_by_key[template_match_key] = {
-                **template_payload,
-                "template_id": template_id,
-                "active": True,
-            }
+            existing_templates_by_key[template_match_key] = [
+                {
+                    **template_payload,
+                    "template_id": template_id,
+                    "active": True,
+                }
+            ]
             created_templates += 1
+
+        for duplicate_template in existing_templates[1:]:
+            duplicate_template_id = str(duplicate_template.get("template_id") or "").strip()
+            if not duplicate_template_id:
+                continue
+            for existing_rule in rules_by_template.get(duplicate_template_id, []):
+                rule_id = str(existing_rule.get("rule_id") or "").strip()
+                if not rule_id:
+                    continue
+                success, response = delete_template_rule(rule_id)
+                if not success:
+                    return False, response
+                deleted_rules += 1
+            success, response = delete_template_record(duplicate_template_id)
+            if not success:
+                return False, response
+            deleted_templates += 1
 
         for existing_rule in rules_by_template.get(template_id, []):
             rule_id = str(existing_rule.get("rule_id") or "").strip()
@@ -9043,7 +9151,8 @@ def replace_templates_from_seed_templates(
 
     return True, (
         f"{source_label}: added {created_templates} template(s), "
-        f"updated {updated_templates}, replaced {deleted_rules} old rule(s), "
+        f"updated {updated_templates}, removed {deleted_templates} duplicate template(s), "
+        f"replaced {deleted_rules} old rule(s), "
         f"added {len(replacement_rules)} rule(s)."
     )
 
