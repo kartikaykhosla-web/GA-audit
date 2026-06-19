@@ -10631,6 +10631,7 @@ def build_datalayer_snapshot_export(result: dict, target_event_name: Optional[st
         export_df = export_df[["Section", "Field", "Value"]]
 
     return {
+        "page_url": result.get("page_url") or "",
         "selected_index": selected_index,
         "selected_event": selected_event,
         "computed_state": computed_state,
@@ -10937,7 +10938,7 @@ def split_actual_tokens(raw_value: str) -> List[str]:
     return pieces
 
 
-def find_payload_value(payload: dict, field_name: str):
+def find_payload_value(payload: dict, field_name: str, excluded_aliases: Optional[Set[str]] = None):
     if not isinstance(payload, dict):
         return "", ""
 
@@ -10947,6 +10948,12 @@ def find_payload_value(payload: dict, field_name: str):
 
     target_norm = normalize_dimension_name(target)
     target_aliases = {target_norm, *FIELD_ALIAS_NORMALIZED.get(target_norm, set())}
+    excluded_aliases = excluded_aliases or set()
+    target_aliases = {
+        alias
+        for alias in target_aliases
+        if normalize_dimension_name(alias) not in excluded_aliases
+    }
     preferred_prefixes = ("tvc_", "user.", "ep.", "epn.", "epf.", "up.", "upn.")
 
     for key, value in payload.items():
@@ -11074,6 +11081,7 @@ def build_execution_validation_rows(
     if not field_rules:
         return execution_df.copy(), []
 
+    snapshot_domain = normalized_domain_from_raw_url(snapshot.get("page_url") or "")
     value_rows = []
     used_fields = set()
     validation_rows = []
@@ -11096,7 +11104,10 @@ def build_execution_validation_rows(
         normalized_field_name = normalize_dimension_name(field_name)
 
         payload_for_rule = select_payload_for_execution_rule(snapshot, rule)
-        actual_key, actual_value = find_payload_value(payload_for_rule, field_name)
+        excluded_aliases: Set[str] = set()
+        if snapshot_domain == "herzindagi.com" and normalized_field_name == "category":
+            excluded_aliases.add("genre")
+        actual_key, actual_value = find_payload_value(payload_for_rule, field_name, excluded_aliases)
         used_fields.add(actual_key or field_name)
         expected_values_for_validation = rule.get("expected_values")
         actual_value_for_validation = actual_value
@@ -11550,10 +11561,7 @@ def build_domain_audit_plan_from_templates(
         seen_template_ids.add(template_id)
         is_video_capture = (
             not is_article_detail_template(plan_template, rules_by_template)
-            and is_video_interaction_template(
-                plan_template,
-                rules_by_template,
-            )
+            and is_explicit_video_interaction_template(plan_template)
         )
         plan_rows.append(
             {
