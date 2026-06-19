@@ -8607,6 +8607,16 @@ def _is_herzindagi_mapping_template(template: dict) -> bool:
     return _normalize_template_domain_key((template or {}).get("domain_name") or "") == "herzindagi.com"
 
 
+HERZINDAGI_CONTAINER_ID = "GTM-WWVXM33"
+
+
+def _apply_herzindagi_template_overrides(template: dict) -> dict:
+    template_copy = dict(template or {})
+    if _is_herzindagi_mapping_template(template_copy):
+        template_copy["container_id"] = HERZINDAGI_CONTAINER_ID
+    return template_copy
+
+
 def _apply_herzindagi_mapping_rule_overrides(imported_templates: List[dict]) -> List[dict]:
     adjusted_templates = []
     alphabet_fields = {"category", "sub_category"}
@@ -8721,7 +8731,7 @@ def _apply_runtime_template_rule_overrides(
     flattened_templates: List[dict] = []
     flattened_rules: List[dict] = []
     for template in adjusted_templates:
-        template_copy = dict(template)
+        template_copy = _apply_herzindagi_template_overrides(template)
         template_rules = template_copy.pop("rules", []) or []
         flattened_templates.append(template_copy)
         flattened_rules.extend(template_rules)
