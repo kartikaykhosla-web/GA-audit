@@ -2,8 +2,8 @@
   {
     "template_name": "aarti info listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/astrology/aarti/maa-shaiputri-aarti-lyrics",
     "rules": [
       {
@@ -81,8 +81,8 @@
   {
     "template_name": "aarti listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/astrology/aarti",
     "rules": [
       {
@@ -132,8 +132,8 @@
   {
     "template_name": "about us landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/about-us",
     "rules": [
       {
@@ -176,8 +176,8 @@
   {
     "template_name": "article detail",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/society-culture/stiff-rough-towel-problem-what-to-mix-in-water-for-softness-article-1061244\nhttps://www.herzindagi.com/hindi/society-culture/smart-tips-to-clean-balcony-quickly-article-1061517",
     "rules": [
       {
@@ -325,8 +325,8 @@
   {
     "template_name": "astro-articles landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/astro-articles",
     "rules": [
       {
@@ -369,8 +369,8 @@
   {
     "template_name": "astrology info listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/astrology/horoscope-prediction/taurus-daily",
     "rules": [
       {
@@ -420,8 +420,8 @@
   {
     "template_name": "astrology landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/astrology",
     "rules": [
       {
@@ -464,8 +464,8 @@
   {
     "template_name": "astrology numerology-prediction listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/astrology/numerology-prediction",
     "rules": [
       {
@@ -515,8 +515,8 @@
   {
     "template_name": "astrology vastu-upay listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/astrology/vastu-upay",
     "rules": [
       {
@@ -566,8 +566,8 @@
   {
     "template_name": "author detail",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/your-picks/authors/shivangi-prajapati",
     "rules": [
       {
@@ -603,8 +603,8 @@
   {
     "template_name": "author listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/author",
     "rules": [
       {
@@ -647,8 +647,8 @@
   {
     "template_name": "chalisa info listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/astrology/chalisa\nhttps://www.herzindagi.com/hindi/astrology/chalisa/maa-shailputri-chalisa-lyrics",
     "rules": [
       {
@@ -698,8 +698,8 @@
   {
     "template_name": "code of ethics for digital news websites landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/code-of-ethics-for-digital-news-websites",
     "rules": [
       {
@@ -742,8 +742,8 @@
   {
     "template_name": "contact us landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/contact-us",
     "rules": [
       {
@@ -786,8 +786,8 @@
   {
     "template_name": "cookie policy landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/cookie-policy",
     "rules": [
       {
@@ -830,8 +830,8 @@
   {
     "template_name": "cover lady detail",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/cover-lady/dev-verma-to-ella-d-verma-trans-journey-content-creator-personal-life-family-dating-everything-you-need-to-know-133",
     "rules": [
       {
@@ -881,8 +881,8 @@
   {
     "template_name": "cover lady listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/cover-lady",
     "rules": [
       {
@@ -918,8 +918,8 @@
   {
     "template_name": "entertainment landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/entertainment",
     "rules": [
       {
@@ -962,8 +962,8 @@
   {
     "template_name": "festive-special event landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "http://herzindagi.com/hindi/events/festive-special",
     "rules": [
       {
@@ -999,8 +999,8 @@
   {
     "template_name": "fight back event page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/quiz",
     "rules": [
       {
@@ -1036,8 +1036,8 @@
   {
     "template_name": "her voice landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/her-voice",
     "rules": [
       {
@@ -1080,8 +1080,8 @@
   {
     "template_name": "homepage",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/",
     "rules": [
       {
@@ -1180,8 +1180,8 @@
   {
     "template_name": "horoscope-prediction landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/astrology/horoscope-prediction",
     "rules": [
       {
@@ -1231,8 +1231,8 @@
   {
     "template_name": "immersive detail",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/immersive/interfaith-marriage-india-personal-stories-family-backlash-societal-challenges-101",
     "rules": [
       {
@@ -1282,8 +1282,8 @@
   {
     "template_name": "maa strong event landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/events/motherhood-postpartum-strength",
     "rules": [
       {
@@ -1319,8 +1319,8 @@
   {
     "template_name": "page_scroll",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/recipe-tips/master-chef-share-tips-to-make-market-style-kala-chaat-masala-article-1061519",
     "rules": [
       {
@@ -1398,8 +1398,8 @@
   {
     "template_name": "privacy policy landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/privacy-policy",
     "rules": [
       {
@@ -1442,8 +1442,8 @@
   {
     "template_name": "quiz listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/quiz",
     "rules": [
       {
@@ -1479,8 +1479,8 @@
   {
     "template_name": "rochak-kahaniyan listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/women-issues/rochak-kahaniyan",
     "rules": [
       {
@@ -1530,8 +1530,8 @@
   {
     "template_name": "search listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/search/aishwarya-rajesh-all",
     "rules": [
       {
@@ -1567,8 +1567,8 @@
   {
     "template_name": "short videos",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/short-videos/shortest-interview-ever-i-herzindagi-105942.html\nhttps://www.herzindagi.com/hindi/short-videos",
     "rules": [
       {
@@ -1674,8 +1674,8 @@
   {
     "template_name": "short videos listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/short-videos",
     "rules": [
       {
@@ -1718,8 +1718,8 @@
   {
     "template_name": "slideshows landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/slideshows",
     "rules": [
       {
@@ -1762,8 +1762,8 @@
   {
     "template_name": "society-culture listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/women-issues/society-culture",
     "rules": [
       {
@@ -1813,8 +1813,8 @@
   {
     "template_name": "terms of use landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/term-of-use",
     "rules": [
       {
@@ -1857,8 +1857,8 @@
   {
     "template_name": "tv-ott listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/entertainment/tv-ott",
     "rules": [
       {
@@ -1908,8 +1908,8 @@
   {
     "template_name": "video landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/videos",
     "rules": [
       {
@@ -2015,8 +2015,8 @@
   {
     "template_name": "web story landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/web-stories/en",
     "rules": [
       {
@@ -2052,8 +2052,8 @@
   {
     "template_name": "wedding-special event landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/events/wedding-special",
     "rules": [
       {
@@ -2089,8 +2089,8 @@
   {
     "template_name": "wellness landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/hindi/entertainment",
     "rules": [
       {
@@ -2133,8 +2133,8 @@
   {
     "template_name": "your picks landing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/your-picks/hindi",
     "rules": [
       {
@@ -2170,8 +2170,8 @@
   {
     "template_name": "your picks search listing page",
     "domain_name": "www.herzindagi.com",
-    "measurement_id": "G-3RLQSM7QQQ",
-    "container_id": "GTM-5CTQK3",
+    "measurement_id": "G-WHCRWZ50HH",
+    "container_id": "GTM-WWVXM33",
     "url_pattern": "https://www.herzindagi.com/your-picks/search/Soundbar",
     "rules": [
       {

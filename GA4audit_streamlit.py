@@ -8067,6 +8067,8 @@ def build_runtime_video_companion_template(
 ) -> Optional[dict]:
     if not is_article_detail_template(base_template, rules_by_template):
         return None
+    if _normalize_template_domain_key(base_template.get("domain_name") or "") == "herzindagi.com":
+        return None
 
     template_rules_list = get_augmented_template_rules(base_template, rules_by_template)
     video_rules = [rule for rule in template_rules_list if is_video_related_rule(rule)]
