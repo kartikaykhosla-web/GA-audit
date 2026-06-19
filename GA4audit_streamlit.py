@@ -7295,10 +7295,33 @@ def build_bulk_audit_url_view_model(row: dict) -> Dict[str, Any]:
         execution_values = _bulk_field_rows_to_payload(detail_payload.get("execution_rows"))
 
     pageview_payload = event_payloads.get("pageview") or {}
+    inferred_event_payload = execution_values or data_layer_state
+    inferred_event_name = str((inferred_event_payload or {}).get("event") or "").strip()
+    if not event_rows and inferred_event_name:
+        event_key = canonical_event_name(inferred_event_name)
+        values = {
+            key: [format_exact_value(value)]
+            for key, value in inferred_event_payload.items()
+            if format_exact_value(value)
+        }
+        event_payloads[event_key] = dict(inferred_event_payload)
+        event_rows.append(
+            {
+                "event_name": inferred_event_name,
+                "status": "Captured in dataLayer",
+                "times_fired": 1,
+                "capture_layer": "DataLayer",
+                "key_values_seen": concise_event_highlights(values),
+                "details": build_event_detail_rows(values),
+                "technical_details": build_event_detail_rows(values, internal_only=True),
+            }
+        )
+        if event_key == "pageview":
+            pageview_payload = event_payloads.get("pageview") or {}
     stored_trigger_event = _bulk_field_rows_to_payload(detail_payload.get("trigger_rows"))
     selected_event = (
         stored_trigger_event
-        or ({"event": "page_view", **pageview_payload} if pageview_payload else {})
+        or ({"event": inferred_event_name, **pageview_payload} if pageview_payload else {})
     )
     computed_state = dict(data_layer_state)
     execution_payload = dict(execution_values or pageview_payload or computed_state)
@@ -7421,16 +7444,39 @@ def render_bulk_audit_result_detail(
     comscore_rows = view_model["comscore_rows"]
     chartbeat_rows = view_model["chartbeat_rows"]
     detail_payload = row.get("detail_payload") or {}
+    pageview_event_row = next(
+        (
+            event_row
+            for event_row in event_rows or []
+            if canonical_event_name(event_row.get("event_name")) == "pageview"
+            and str(event_row.get("status") or "").strip().lower() != "expected but not fired"
+        ),
+        None,
+    )
+    detail_pageview_triggered = bool(row.get("pageview_triggered") or pageview_event_row)
+    detail_pageview_source = row.get("pageview_source") or "Not fired"
+    if pageview_event_row and str(detail_pageview_source).strip().lower() in {"", "not fired"}:
+        detail_pageview_source = pageview_event_row.get("capture_layer") or pageview_event_row.get("status") or "DataLayer"
+    detail_events_fired = row.get("events_fired") or "None"
+    if detail_events_fired == "None" and event_rows:
+        detail_events_fired = ", ".join(
+            str(event_row.get("event_name") or "").strip()
+            for event_row in event_rows
+            if str(event_row.get("event_name") or "").strip()
+        ) or "None"
+    detail_events_count = int(row.get("events_count") or 0)
+    if not detail_events_count and event_rows:
+        detail_events_count = len(event_rows)
 
     summary_df = pd.DataFrame(
         [
             {
                 "page_url": row.get("sample_url"),
-                "pageview_triggered": bool(row.get("pageview_triggered")),
-                "pageview_source": row.get("pageview_source") or "Not fired",
+                "pageview_triggered": detail_pageview_triggered,
+                "pageview_source": detail_pageview_source,
                 "comscore_present": bool(row.get("comscore_present")),
                 "chartbeat_present": bool(row.get("chartbeat_present")),
-                "events_fired": row.get("events_fired") or "None",
+                "events_fired": detail_events_fired,
                 "issues": bulk_result_display_issues(row),
             }
         ]
@@ -7446,9 +7492,9 @@ def render_bulk_audit_result_detail(
     )
 
     stat_col1, stat_col2, stat_col3, stat_col4, stat_col5, stat_col6, stat_col7 = st.columns(7)
-    stat_col1.metric("Pageview Triggered", "Yes" if row.get("pageview_triggered") else "No")
-    stat_col2.metric("Pageview Source", row.get("pageview_source") or "Not fired")
-    stat_col3.metric("Events Fired", str(int(row.get("events_count") or 0)))
+    stat_col1.metric("Pageview Triggered", "Yes" if detail_pageview_triggered else "No")
+    stat_col2.metric("Pageview Source", detail_pageview_source)
+    stat_col3.metric("Events Fired", str(detail_events_count))
     stat_col4.metric("Container ID", row.get("container_id") or "Not found")
     stat_col5.metric("Measurement ID", row.get("measurement_id") or "Not found")
     stat_col6.metric("Comscore", "Yes" if row.get("comscore_present") else "No")
