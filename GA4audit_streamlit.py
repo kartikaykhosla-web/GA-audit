@@ -15113,10 +15113,33 @@ if active_section == "Template Manager":
                             f"Detected {len(imported_mapping_templates)} page_type template(s) "
                             f"and {total_imported_rules} rule(s)."
                         )
+                        domain_counts: Dict[str, int] = {}
+                        for template in imported_mapping_templates:
+                            domain_label = str(template.get("domain_name") or "Unspecified domain")
+                            domain_counts[domain_label] = domain_counts.get(domain_label, 0) + 1
+                        if domain_counts:
+                            st.caption(
+                                "Templates by domain: "
+                                + ", ".join(
+                                    f"{domain}: {count}"
+                                    for domain, count in sorted(domain_counts.items(), key=lambda item: item[0].lower())
+                                )
+                            )
                         if mapping_parse_notes:
                             with st.expander("Import parser notes"):
                                 for note in mapping_parse_notes[:20]:
                                     st.write(note)
+                        preview_templates = []
+                        if use_multi_domain_mapping:
+                            preview_counts: Dict[str, int] = {}
+                            for template in imported_mapping_templates:
+                                domain_label = str(template.get("domain_name") or "Unspecified domain")
+                                if preview_counts.get(domain_label, 0) >= 4:
+                                    continue
+                                preview_templates.append(template)
+                                preview_counts[domain_label] = preview_counts.get(domain_label, 0) + 1
+                        else:
+                            preview_templates = imported_mapping_templates[:12]
                         preview_rows = [
                             {
                                 "Domain": template.get("domain_name"),
@@ -15125,7 +15148,7 @@ if active_section == "Template Manager":
                                 "Rules": len(template.get("rules") or []),
                                 "Reference URLs / Patterns": format_multiline_entries_display(template.get("url_pattern") or ""),
                             }
-                            for template in imported_mapping_templates[:12]
+                            for template in preview_templates
                         ]
                         if preview_rows:
                             st.dataframe(
