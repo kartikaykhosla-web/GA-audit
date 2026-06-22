@@ -8585,6 +8585,43 @@ def _mapping_domain_from_url(url: str) -> str:
         return ""
 
 
+MULTI_DOMAIN_GA_MAPPING_CONTAINER_IDS = {
+    "thedailyjagran.com": "GTM-5CTQK3",
+    "onlymyhealth.com": "GTM-5LTRVCK",
+    "jagranjosh.com": "GTM-N62LNQ",
+    "punjabijagran.com": "GTM-5CTQK3",
+}
+
+
+def _mapping_domain_key(domain: str) -> str:
+    return re.sub(r"^www\.", "", str(domain or "").strip().lower())
+
+
+def _mapping_sheet_has_template_columns(sheet: pd.DataFrame) -> bool:
+    preview_rows = sheet.head(8).values.tolist() if isinstance(sheet, pd.DataFrame) else []
+    preview_text = "\n".join(
+        " ".join(str(cell or "") for cell in row)
+        for row in preview_rows
+    ).lower()
+    return "page_type" in preview_text and "page location" in preview_text
+
+
+def _detect_mapping_sheet_domain(sheet: pd.DataFrame) -> str:
+    domains: Dict[str, int] = {}
+    if not isinstance(sheet, pd.DataFrame):
+        return ""
+    for row_index in range(0, min(len(sheet), 250)):
+        row = sheet.iloc[row_index].tolist()
+        for cell in row:
+            for url_text in re.split(r"[\r\n]+", str(cell or "")):
+                domain = _mapping_domain_from_url(_mapping_clean_text(url_text))
+                if domain:
+                    domains[domain] = domains.get(domain, 0) + 1
+    if not domains:
+        return ""
+    return max(domains.items(), key=lambda item: item[1])[0]
+
+
 def _infer_mapping_url_patterns(page_type: str, urls: List[str], default_domain: str = "") -> str:
     page_type_lower = str(page_type or "").strip().lower()
     cleaned_urls = []
@@ -8876,6 +8913,74 @@ def parse_ga_mapping_excel_templates(
     if sheet_name != "Finalized":
         notes.append(f"Imported mapping rows from sheet '{sheet_name}'.")
 
+    imported_templates, sheet_notes = parse_ga_mapping_sheet_templates(
+        sheet,
+        default_domain,
+        default_measurement_id,
+        default_container_id,
+    )
+    notes.extend(sheet_notes)
+    return imported_templates, notes
+
+
+def parse_multi_domain_ga_mapping_excel_templates(
+    excel_bytes: bytes,
+    default_measurement_id: str,
+) -> Tuple[List[dict], List[str]]:
+    workbook = pd.ExcelFile(io.BytesIO(excel_bytes))
+    imported_templates: List[dict] = []
+    notes: List[str] = []
+
+    for sheet_name in workbook.sheet_names:
+        try:
+            sheet = pd.read_excel(
+                io.BytesIO(excel_bytes),
+                sheet_name=sheet_name,
+                dtype=str,
+                header=None,
+                keep_default_na=False,
+            )
+        except Exception as exc:
+            notes.append(f"Skipped sheet '{sheet_name}': {exc}")
+            continue
+
+        if not _mapping_sheet_has_template_columns(sheet):
+            continue
+
+        detected_domain = _detect_mapping_sheet_domain(sheet)
+        domain_key = _mapping_domain_key(detected_domain)
+        container_id = MULTI_DOMAIN_GA_MAPPING_CONTAINER_IDS.get(domain_key)
+        if not container_id:
+            continue
+
+        sheet_templates, sheet_notes = parse_ga_mapping_sheet_templates(
+            sheet,
+            detected_domain or domain_key,
+            default_measurement_id,
+            container_id,
+        )
+        imported_templates.extend(sheet_templates)
+        notes.append(
+            f"Imported {len(sheet_templates)} template(s) from sheet '{sheet_name}' for {detected_domain or domain_key}."
+        )
+        notes.extend(f"{sheet_name}: {note}" for note in sheet_notes)
+
+    if not imported_templates:
+        notes.append(
+            "No supported multi-domain sheets were found. Expected sheets/URLs for "
+            "thedailyjagran.com, onlymyhealth.com, jagranjosh.com, or punjabijagran.com."
+        )
+
+    return imported_templates, notes
+
+
+def parse_ga_mapping_sheet_templates(
+    sheet: pd.DataFrame,
+    default_domain: str,
+    default_measurement_id: str,
+    default_container_id: str,
+) -> Tuple[List[dict], List[str]]:
+    notes: List[str] = []
     templates_by_key: Dict[str, dict] = {}
     current_section = ""
 
@@ -14968,17 +15073,38 @@ if active_section == "Template Manager":
                         value="GTM-5CTQK3",
                         key="ga_mapping_import_container_id",
                     )
+                use_multi_domain_mapping = st.checkbox(
+                    "Import supported multi-domain workbook sheets",
+                    value=False,
+                    key="ga_mapping_import_multi_domain",
+                    help=(
+                        "Imports sheets for thedailyjagran.com, onlymyhealth.com, "
+                        "jagranjosh.com, and punjabijagran.com using the configured container IDs."
+                    ),
+                )
+                if use_multi_domain_mapping:
+                    st.caption(
+                        "Container IDs: thedailyjagran.com -> GTM-5CTQK3, "
+                        "onlymyhealth.com -> GTM-5LTRVCK, jagranjosh.com -> GTM-N62LNQ, "
+                        "punjabijagran.com -> GTM-5CTQK3."
+                    )
 
                 imported_mapping_templates = []
                 mapping_parse_notes = []
                 if mapping_file is not None:
                     try:
-                        imported_mapping_templates, mapping_parse_notes = parse_ga_mapping_excel_templates(
-                            mapping_file.getvalue(),
-                            mapping_domain,
-                            mapping_measurement_id,
-                            mapping_container_id,
-                        )
+                        if use_multi_domain_mapping:
+                            imported_mapping_templates, mapping_parse_notes = parse_multi_domain_ga_mapping_excel_templates(
+                                mapping_file.getvalue(),
+                                mapping_measurement_id,
+                            )
+                        else:
+                            imported_mapping_templates, mapping_parse_notes = parse_ga_mapping_excel_templates(
+                                mapping_file.getvalue(),
+                                mapping_domain,
+                                mapping_measurement_id,
+                                mapping_container_id,
+                            )
                         total_imported_rules = sum(
                             len(template.get("rules") or [])
                             for template in imported_mapping_templates
@@ -14993,11 +15119,13 @@ if active_section == "Template Manager":
                                     st.write(note)
                         preview_rows = [
                             {
+                                "Domain": template.get("domain_name"),
                                 "Template": template.get("template_name"),
+                                "Container ID": template.get("container_id"),
                                 "Rules": len(template.get("rules") or []),
                                 "Reference URLs / Patterns": format_multiline_entries_display(template.get("url_pattern") or ""),
                             }
-                            for template in imported_mapping_templates[:8]
+                            for template in imported_mapping_templates[:12]
                         ]
                         if preview_rows:
                             st.dataframe(
@@ -15010,8 +15138,9 @@ if active_section == "Template Manager":
 
                 keep_homepage_template = st.checkbox(
                     "Also add/update the Home Page starter template",
-                    value=True,
+                    value=not use_multi_domain_mapping,
                     key="ga_mapping_import_keep_homepage",
+                    disabled=use_multi_domain_mapping,
                 )
                 add_mapping_confirmed = st.checkbox(
                     "I understand this will add templates from the workbook and update matching template names.",
