@@ -8654,6 +8654,7 @@ def _is_herzindagi_mapping_template(template: dict) -> bool:
 
 
 HERZINDAGI_CONTAINER_ID = "GTM-WWVXM33"
+HERZINDAGI_HIDDEN_TEMPLATE_NAMES = {"page_scroll"}
 
 
 def _apply_herzindagi_template_overrides(template: dict) -> dict:
@@ -8661,6 +8662,13 @@ def _apply_herzindagi_template_overrides(template: dict) -> dict:
     if _is_herzindagi_mapping_template(template_copy):
         template_copy["container_id"] = HERZINDAGI_CONTAINER_ID
     return template_copy
+
+
+def _should_hide_herzindagi_template(template: dict) -> bool:
+    if not _is_herzindagi_mapping_template(template):
+        return False
+    template_name = _normalize_template_name_key((template or {}).get("template_name") or "")
+    return template_name in HERZINDAGI_HIDDEN_TEMPLATE_NAMES
 
 
 def _apply_herzindagi_mapping_rule_overrides(imported_templates: List[dict]) -> List[dict]:
@@ -8778,6 +8786,8 @@ def _apply_runtime_template_rule_overrides(
     flattened_rules: List[dict] = []
     for template in adjusted_templates:
         template_copy = _apply_herzindagi_template_overrides(template)
+        if _should_hide_herzindagi_template(template_copy):
+            continue
         template_rules = template_copy.pop("rules", []) or []
         flattened_templates.append(template_copy)
         flattened_rules.extend(template_rules)
