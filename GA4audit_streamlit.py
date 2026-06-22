@@ -13128,6 +13128,8 @@ def build_prod_stage_payload_map(result: dict) -> Dict[str, Dict[str, str]]:
         if not isinstance(payload, dict):
             continue
         for field_name, value in payload.items():
+            if str(field_name or "").strip().isdigit():
+                continue
             if not include_snapshot_field(field_name):
                 continue
             if is_missing_snapshot_value(value):
@@ -13141,6 +13143,36 @@ def build_prod_stage_payload_map(result: dict) -> Dict[str, Dict[str, str]]:
             }
 
     return field_map
+
+
+def apply_prod_stage_mobile_capture_profile(driver):
+    try:
+        driver.execute_cdp_cmd(
+            "Network.setUserAgentOverride",
+            {
+                "userAgent": (
+                    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
+                    "Mobile/15E148 Safari/604.1"
+                ),
+                "platform": "iPhone",
+            },
+        )
+        driver.execute_cdp_cmd(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": 390,
+                "height": 844,
+                "deviceScaleFactor": 3,
+                "mobile": True,
+            },
+        )
+        driver.execute_cdp_cmd(
+            "Emulation.setTouchEmulationEnabled",
+            {"enabled": True},
+        )
+    except Exception:
+        pass
 
 
 def build_prod_stage_field_rows(prod_result: dict, stage_result: dict) -> List[Dict[str, str]]:
@@ -14408,11 +14440,18 @@ if active_section == "Compare Prod vs Stage":
     stage_url = stage_col.text_input("Stage URL")
 
     wait_cmp = st.slider("Wait seconds", 4, 20, 8, key="wait_compare")
+    use_mobile_capture = st.checkbox(
+        "Use mobile capture profile",
+        value=True,
+        help="Uses an iPhone-sized viewport and mobile user agent for both URLs in this comparison.",
+    )
     if st.button("Run comparison"):
         if not prod_url or not stage_url:
             st.error("Enter both URLs.")
         else:
             driver = create_driver(headless=True, capture_network=True)
+            if use_mobile_capture:
+                apply_prod_stage_mobile_capture_profile(driver)
             try:
                 prod = audit_single_url(driver, prod_url, wait_cmp)
                 stage = audit_single_url(driver, stage_url, wait_cmp)
