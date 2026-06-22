@@ -13056,6 +13056,151 @@ def build_audit_focus_summary(result: dict, template: Optional[dict] = None):
     }
 
 
+def compare_prod_stage_check_label(prod_present: bool, stage_present: bool) -> str:
+    if prod_present and stage_present:
+        return VALIDATION_PASS_LABEL
+    if prod_present and not stage_present:
+        return "Missing on Stage"
+    if stage_present and not prod_present:
+        return "Missing on Prod"
+    return "Missing both"
+
+
+def build_prod_stage_firing_rows(prod_summary: dict, stage_summary: dict) -> List[Dict[str, str]]:
+    checks = [
+        (
+            "Pageview",
+            bool(prod_summary.get("pageview_triggered")),
+            bool(stage_summary.get("pageview_triggered")),
+            prod_summary.get("pageview_source") or "",
+            stage_summary.get("pageview_source") or "",
+        ),
+        (
+            "Comscore",
+            bool(prod_summary.get("comscore_present")),
+            bool(stage_summary.get("comscore_present")),
+            prod_summary.get("comscore_preview") or "",
+            stage_summary.get("comscore_preview") or "",
+        ),
+        (
+            "Chartbeat",
+            bool(prod_summary.get("chartbeat_present")),
+            bool(stage_summary.get("chartbeat_present")),
+            prod_summary.get("chartbeat_preview") or "",
+            stage_summary.get("chartbeat_preview") or "",
+        ),
+    ]
+
+    return [
+        {
+            "Check": name,
+            "Prod": "Yes" if prod_present else "No",
+            "Stage": "Yes" if stage_present else "No",
+            "Prod detail": prod_detail,
+            "Stage detail": stage_detail,
+            "Status": compare_prod_stage_check_label(prod_present, stage_present),
+        }
+        for name, prod_present, stage_present, prod_detail, stage_detail in checks
+    ]
+
+
+def normalize_prod_stage_field_key(field_name: str) -> str:
+    normalized = normalize_dimension_name(field_name)
+    if normalized in {"event", "eventname"}:
+        return "event"
+    for canonical_name, aliases in FIELD_ALIAS_NORMALIZED.items():
+        if normalized in aliases:
+            return canonical_name
+    return normalized
+
+
+def build_prod_stage_payload_map(result: dict) -> Dict[str, Dict[str, str]]:
+    snapshot = build_datalayer_snapshot_export(result)
+    payloads = [
+        snapshot.get("execution_payload") or {},
+        snapshot.get("network_payload") or {},
+        snapshot.get("computed_state") or {},
+        snapshot.get("selected_event") or {},
+    ]
+
+    field_map: Dict[str, Dict[str, str]] = {}
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        for field_name, value in payload.items():
+            if not include_snapshot_field(field_name):
+                continue
+            if is_missing_snapshot_value(value):
+                continue
+            field_key = normalize_prod_stage_field_key(field_name)
+            if not field_key or field_key in field_map:
+                continue
+            field_map[field_key] = {
+                "field": str(field_name or "").strip(),
+                "value": format_exact_value(value),
+            }
+
+    return field_map
+
+
+def build_prod_stage_field_rows(prod_result: dict, stage_result: dict) -> List[Dict[str, str]]:
+    prod_fields = build_prod_stage_payload_map(prod_result)
+    stage_fields = build_prod_stage_payload_map(stage_result)
+    ordered_keys = list(prod_fields.keys())
+    ordered_keys.extend(key for key in stage_fields.keys() if key not in prod_fields)
+
+    rows = []
+    for field_key in ordered_keys:
+        prod_value = str((prod_fields.get(field_key) or {}).get("value") or "").strip()
+        stage_value = str((stage_fields.get(field_key) or {}).get("value") or "").strip()
+        if not prod_value and not stage_value:
+            continue
+
+        if prod_value and stage_value:
+            status = VALIDATION_PASS_LABEL if prod_value == stage_value else "Changed"
+        elif prod_value:
+            status = "Missing on Stage"
+        else:
+            status = "Missing on Prod"
+
+        rows.append(
+            {
+                "Field": (prod_fields.get(field_key) or stage_fields.get(field_key) or {}).get("field") or field_key,
+                "Prod value": prod_value or "Not observed",
+                "Stage value": stage_value or "Not observed",
+                "Status": status,
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            {"Missing on Stage": 0, "Missing on Prod": 1, "Changed": 2, VALIDATION_PASS_LABEL: 3}.get(
+                row.get("Status"),
+                9,
+            ),
+            row.get("Field", "").lower(),
+        )
+    )
+    return rows
+
+
+def style_prod_stage_compare_table(dataframe: pd.DataFrame, status_column: str):
+    if dataframe.empty or status_column not in dataframe.columns:
+        return dataframe
+
+    def row_style(row):
+        status = str(row.get(status_column) or "").strip()
+        if status == VALIDATION_PASS_LABEL:
+            return ["background-color: rgba(22, 163, 74, 0.18)"] * len(row)
+        if status in {"Missing on Stage", "Changed", "Missing both"}:
+            return ["background-color: rgba(220, 38, 38, 0.18)"] * len(row)
+        if status == "Missing on Prod":
+            return ["background-color: rgba(202, 138, 4, 0.18)"] * len(row)
+        return [""] * len(row)
+
+    return dataframe.style.apply(row_style, axis=1)
+
+
 if active_section == "Audit URLs":
     st.markdown(
         """
@@ -14267,14 +14412,58 @@ if active_section == "Compare Prod vs Stage":
         if not prod_url or not stage_url:
             st.error("Enter both URLs.")
         else:
-            driver = create_driver(headless=True, capture_network=False)
+            driver = create_driver(headless=True, capture_network=True)
             try:
                 prod = audit_single_url(driver, prod_url, wait_cmp)
                 stage = audit_single_url(driver, stage_url, wait_cmp)
             finally:
                 safe_quit_driver(driver)
 
-            st.subheader("Comparison summary")
+            prod_summary = build_audit_focus_summary(prod)
+            stage_summary = build_audit_focus_summary(stage)
+            firing_df = pd.DataFrame(build_prod_stage_firing_rows(prod_summary, stage_summary))
+            field_df = pd.DataFrame(build_prod_stage_field_rows(prod, stage))
+            if field_df.empty:
+                field_df = pd.DataFrame(columns=["Field", "Prod value", "Stage value", "Status"])
+
+            stage_gap_count = int(field_df["Status"].isin(["Missing on Stage", "Changed"]).sum()) if not field_df.empty else 0
+            stage_missing_count = int((field_df["Status"] == "Missing on Stage").sum()) if not field_df.empty else 0
+            changed_count = int((field_df["Status"] == "Changed").sum()) if not field_df.empty else 0
+
+            st.subheader("Core firing checks")
+            st.dataframe(
+                style_prod_stage_compare_table(firing_df, "Status"),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            metric_col1, metric_col2, metric_col3 = st.columns(3)
+            metric_col1.metric("Stage gaps", stage_gap_count)
+            metric_col2.metric("Missing on Stage", stage_missing_count)
+            metric_col3.metric("Changed values", changed_count)
+
+            st.subheader("Field comparison")
+            status_options = ["Gaps only", "All fields", "Changed", "Missing on Stage", "Missing on Prod", VALIDATION_PASS_LABEL]
+            selected_status_filter = st.radio(
+                "Field view",
+                status_options,
+                horizontal=True,
+                key="prod_stage_field_filter",
+            )
+            if selected_status_filter == "Gaps only":
+                visible_field_df = field_df[field_df["Status"] != VALIDATION_PASS_LABEL]
+            elif selected_status_filter == "All fields":
+                visible_field_df = field_df
+            else:
+                visible_field_df = field_df[field_df["Status"] == selected_status_filter]
+
+            st.dataframe(
+                style_prod_stage_compare_table(visible_field_df, "Status"),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.subheader("Raw capture summary")
             st.dataframe(
                 pd.DataFrame(
                     [
