@@ -8591,6 +8591,12 @@ MULTI_DOMAIN_GA_MAPPING_CONTAINER_IDS = {
     "jagranjosh.com": "GTM-N62LNQ",
     "punjabijagran.com": "GTM-5CTQK3",
 }
+MULTI_DOMAIN_GA_MAPPING_MEASUREMENT_IDS = {
+    "thedailyjagran.com": "G-171L9K03BG",
+    "onlymyhealth.com": "G-7REYEWS85G",
+    "jagranjosh.com": "G-8J9SC9WB3T",
+    "punjabijagran.com": "G-18RV68H7Y1",
+}
 
 
 def _mapping_domain_key(domain: str) -> str:
@@ -8923,10 +8929,7 @@ def parse_ga_mapping_excel_templates(
     return imported_templates, notes
 
 
-def parse_multi_domain_ga_mapping_excel_templates(
-    excel_bytes: bytes,
-    default_measurement_id: str,
-) -> Tuple[List[dict], List[str]]:
+def parse_multi_domain_ga_mapping_excel_templates(excel_bytes: bytes) -> Tuple[List[dict], List[str]]:
     workbook = pd.ExcelFile(io.BytesIO(excel_bytes))
     imported_templates: List[dict] = []
     notes: List[str] = []
@@ -8950,13 +8953,17 @@ def parse_multi_domain_ga_mapping_excel_templates(
         detected_domain = _detect_mapping_sheet_domain(sheet)
         domain_key = _mapping_domain_key(detected_domain)
         container_id = MULTI_DOMAIN_GA_MAPPING_CONTAINER_IDS.get(domain_key)
+        measurement_id = MULTI_DOMAIN_GA_MAPPING_MEASUREMENT_IDS.get(domain_key)
         if not container_id:
+            continue
+        if not measurement_id:
+            notes.append(f"Skipped sheet '{sheet_name}': no measurement ID is configured for {detected_domain or domain_key}.")
             continue
 
         sheet_templates, sheet_notes = parse_ga_mapping_sheet_templates(
             sheet,
             detected_domain or domain_key,
-            default_measurement_id,
+            measurement_id,
             container_id,
         )
         imported_templates.extend(sheet_templates)
@@ -15084,9 +15091,14 @@ if active_section == "Template Manager":
                 )
                 if use_multi_domain_mapping:
                     st.caption(
-                        "Container IDs: thedailyjagran.com -> GTM-5CTQK3, "
-                        "onlymyhealth.com -> GTM-5LTRVCK, jagranjosh.com -> GTM-N62LNQ, "
-                        "punjabijagran.com -> GTM-5CTQK3."
+                        "Default domain, measurement ID, and container ID fields are ignored in multi-domain mode."
+                    )
+                    st.caption(
+                        "Multi-domain mode uses fixed IDs: "
+                        "thedailyjagran.com -> G-171L9K03BG / GTM-5CTQK3, "
+                        "onlymyhealth.com -> G-7REYEWS85G / GTM-5LTRVCK, "
+                        "jagranjosh.com -> G-8J9SC9WB3T / GTM-N62LNQ, "
+                        "punjabijagran.com -> G-18RV68H7Y1 / GTM-5CTQK3."
                     )
 
                 imported_mapping_templates = []
@@ -15095,8 +15107,7 @@ if active_section == "Template Manager":
                     try:
                         if use_multi_domain_mapping:
                             imported_mapping_templates, mapping_parse_notes = parse_multi_domain_ga_mapping_excel_templates(
-                                mapping_file.getvalue(),
-                                mapping_measurement_id,
+                                mapping_file.getvalue()
                             )
                         else:
                             imported_mapping_templates, mapping_parse_notes = parse_ga_mapping_excel_templates(
