@@ -13149,36 +13149,6 @@ def build_prod_stage_payload_map(result: dict) -> Dict[str, Dict[str, str]]:
     return field_map
 
 
-def apply_prod_stage_mobile_capture_profile(driver):
-    try:
-        driver.execute_cdp_cmd(
-            "Network.setUserAgentOverride",
-            {
-                "userAgent": (
-                    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
-                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
-                    "Mobile/15E148 Safari/604.1"
-                ),
-                "platform": "iPhone",
-            },
-        )
-        driver.execute_cdp_cmd(
-            "Emulation.setDeviceMetricsOverride",
-            {
-                "width": 390,
-                "height": 844,
-                "deviceScaleFactor": 3,
-                "mobile": True,
-            },
-        )
-        driver.execute_cdp_cmd(
-            "Emulation.setTouchEmulationEnabled",
-            {"enabled": True},
-        )
-    except Exception:
-        pass
-
-
 def get_prod_stage_staging_hostname(raw_url: str) -> str:
     parsed = urlparse(str(raw_url or "").strip())
     if not parsed.netloc and parsed.path:
@@ -13202,6 +13172,12 @@ def get_prod_stage_staging_hostname(raw_url: str) -> str:
     if any(first_label.startswith(f"{prefix}-") for prefix in staging_prefixes):
         return hostname
     return ""
+
+
+def can_use_prod_stage_local_browser_session() -> bool:
+    if os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get("STREAMLIT_CLOUD"):
+        return False
+    return not os.getcwd().startswith("/mount/src")
 
 
 def get_prod_stage_profile_dir(hostname: str) -> str:
@@ -14476,49 +14452,53 @@ if active_section == "Compare Prod vs Stage":
     stage_url = stage_col.text_input("Stage URL")
     detected_stage_hostname = get_prod_stage_staging_hostname(stage_url) or get_prod_stage_staging_hostname(prod_url)
     detected_stage_profile_dir = get_prod_stage_profile_dir(detected_stage_hostname) if detected_stage_hostname else ""
+    local_browser_session_supported = can_use_prod_stage_local_browser_session()
 
     wait_cmp = st.slider("Wait seconds", 4, 20, 8, key="wait_compare")
-    use_mobile_capture = st.checkbox(
-        "Use mobile capture profile",
-        value=True,
-        help="Uses an iPhone-sized viewport and mobile user agent for both URLs in this comparison.",
-    )
-    if detected_stage_hostname and "prod_stage_saved_session" not in st.session_state:
+    if detected_stage_hostname and local_browser_session_supported and "prod_stage_saved_session" not in st.session_state:
         st.session_state["prod_stage_saved_session"] = True
-    use_saved_stage_session = st.checkbox(
-        "Use saved staging login session",
-        key="prod_stage_saved_session",
-        help="For dev/stg/stage/pre-prod URLs, reuse a local Chrome profile so cookies stay available across runs.",
-    )
+    use_saved_stage_session = False
     login_wait_seconds = 0
-    if use_saved_stage_session and detected_stage_hostname:
-        st.caption(f"Staging session host: {detected_stage_hostname}")
-        login_wait_seconds = st.slider(
-            "Login wait seconds",
-            0,
-            90,
-            20,
-            key="prod_stage_login_wait",
-            help="When a saved staging session is used, the browser opens visibly and waits so you can finish login if needed.",
+    if local_browser_session_supported:
+        use_saved_stage_session = st.checkbox(
+            "Use saved staging login session",
+            key="prod_stage_saved_session",
+            help="For dev/stg/stage/pre-prod URLs, reuse a local Chrome profile so cookies stay available across runs.",
         )
-    use_visible_browser = st.checkbox(
-        "Run visible browser",
-        value=False,
-        help="Opens a normal Chrome window for staging pages that behave differently in headless mode.",
-    )
+        if use_saved_stage_session and detected_stage_hostname:
+            st.caption(f"Staging session host: {detected_stage_hostname}")
+            login_wait_seconds = st.slider(
+                "Login wait seconds",
+                0,
+                90,
+                20,
+                key="prod_stage_login_wait",
+                help="When a saved staging session is used, the browser opens visibly and waits so you can finish login if needed.",
+            )
+        use_visible_browser = st.checkbox(
+            "Run visible browser",
+            value=False,
+            help="Opens a normal Chrome window for staging pages that behave differently in headless mode.",
+        )
+    else:
+        use_visible_browser = False
+        if detected_stage_hostname:
+            st.caption("Saved staging login sessions and visible browser mode are available only when running the app locally.")
     if st.button("Run comparison"):
         if not prod_url or not stage_url:
             st.error("Enter both URLs.")
         else:
-            stage_profile_dir = detected_stage_profile_dir if use_saved_stage_session and detected_stage_hostname else None
+            stage_profile_dir = (
+                detected_stage_profile_dir
+                if local_browser_session_supported and use_saved_stage_session and detected_stage_hostname
+                else None
+            )
             driver = create_driver(
-                headless=not (use_visible_browser or stage_profile_dir),
+                headless=not (local_browser_session_supported and (use_visible_browser or stage_profile_dir)),
                 performance_logs=True,
                 capture_network=True,
                 user_data_dir=stage_profile_dir,
             )
-            if use_mobile_capture:
-                apply_prod_stage_mobile_capture_profile(driver)
             try:
                 if stage_profile_dir and login_wait_seconds:
                     st.info("Opening staging URL with saved browser profile. Complete login in the Chrome window if prompted.")
