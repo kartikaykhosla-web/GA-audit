@@ -469,6 +469,7 @@ def create_driver(
     capture_network: bool = True,
     page_load_timeout: int = 12,
     prefer_safe_mode: bool = False,
+    user_data_dir: Optional[str] = None,
 ):
     selected_binary, chromedriver_path = _resolve_chrome_paths()
 
@@ -479,6 +480,9 @@ def create_driver(
             chrome_options.add_argument("--headless" if safe_mode else "--headless=new")
         if selected_binary:
             chrome_options.binary_location = selected_binary
+        if user_data_dir:
+            os.makedirs(user_data_dir, exist_ok=True)
+            chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
 
         base_args = [
             "--no-sandbox",
@@ -13175,6 +13179,38 @@ def apply_prod_stage_mobile_capture_profile(driver):
         pass
 
 
+def get_prod_stage_staging_hostname(raw_url: str) -> str:
+    parsed = urlparse(str(raw_url or "").strip())
+    if not parsed.netloc and parsed.path:
+        parsed = urlparse(f"https://{parsed.path}")
+    hostname = parsed.hostname or ""
+    hostname = hostname.lower().strip(".")
+    if not hostname:
+        return ""
+
+    first_label = hostname.split(".", 1)[0]
+    staging_prefixes = (
+        "dev",
+        "stg",
+        "stage",
+        "staging",
+        "preprod",
+        "pre-prod",
+    )
+    if first_label in staging_prefixes:
+        return hostname
+    if any(first_label.startswith(f"{prefix}-") for prefix in staging_prefixes):
+        return hostname
+    return ""
+
+
+def get_prod_stage_profile_dir(hostname: str) -> str:
+    safe_hostname = re.sub(r"[^a-z0-9_.-]+", "_", str(hostname or "").lower()).strip("._-")
+    if not safe_hostname:
+        safe_hostname = "staging"
+    return os.path.expanduser(os.path.join("~", ".ga_audit_browser_profiles", "prod_stage", safe_hostname))
+
+
 def build_prod_stage_field_rows(prod_result: dict, stage_result: dict) -> List[Dict[str, str]]:
     prod_fields = build_prod_stage_payload_map(prod_result)
     stage_fields = build_prod_stage_payload_map(stage_result)
@@ -14438,6 +14474,8 @@ if active_section == "Compare Prod vs Stage":
     prod_col, stage_col = st.columns(2)
     prod_url = prod_col.text_input("Prod URL")
     stage_url = stage_col.text_input("Stage URL")
+    detected_stage_hostname = get_prod_stage_staging_hostname(stage_url) or get_prod_stage_staging_hostname(prod_url)
+    detected_stage_profile_dir = get_prod_stage_profile_dir(detected_stage_hostname) if detected_stage_hostname else ""
 
     wait_cmp = st.slider("Wait seconds", 4, 20, 8, key="wait_compare")
     use_mobile_capture = st.checkbox(
@@ -14445,6 +14483,24 @@ if active_section == "Compare Prod vs Stage":
         value=True,
         help="Uses an iPhone-sized viewport and mobile user agent for both URLs in this comparison.",
     )
+    if detected_stage_hostname and "prod_stage_saved_session" not in st.session_state:
+        st.session_state["prod_stage_saved_session"] = True
+    use_saved_stage_session = st.checkbox(
+        "Use saved staging login session",
+        key="prod_stage_saved_session",
+        help="For dev/stg/stage/pre-prod URLs, reuse a local Chrome profile so cookies stay available across runs.",
+    )
+    login_wait_seconds = 0
+    if use_saved_stage_session and detected_stage_hostname:
+        st.caption(f"Staging session host: {detected_stage_hostname}")
+        login_wait_seconds = st.slider(
+            "Login wait seconds",
+            0,
+            90,
+            20,
+            key="prod_stage_login_wait",
+            help="When a saved staging session is used, the browser opens visibly and waits so you can finish login if needed.",
+        )
     use_visible_browser = st.checkbox(
         "Run visible browser",
         value=False,
@@ -14454,14 +14510,20 @@ if active_section == "Compare Prod vs Stage":
         if not prod_url or not stage_url:
             st.error("Enter both URLs.")
         else:
+            stage_profile_dir = detected_stage_profile_dir if use_saved_stage_session and detected_stage_hostname else None
             driver = create_driver(
-                headless=not use_visible_browser,
+                headless=not (use_visible_browser or stage_profile_dir),
                 performance_logs=True,
                 capture_network=True,
+                user_data_dir=stage_profile_dir,
             )
             if use_mobile_capture:
                 apply_prod_stage_mobile_capture_profile(driver)
             try:
+                if stage_profile_dir and login_wait_seconds:
+                    st.info("Opening staging URL with saved browser profile. Complete login in the Chrome window if prompted.")
+                    driver.get(stage_url)
+                    time.sleep(login_wait_seconds)
                 prod = audit_single_url(driver, prod_url, wait_cmp)
                 stage = audit_single_url(driver, stage_url, wait_cmp)
             finally:
