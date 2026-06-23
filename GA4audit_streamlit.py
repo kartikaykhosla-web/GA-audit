@@ -14445,11 +14445,16 @@ if active_section == "Compare Prod vs Stage":
         value=True,
         help="Uses an iPhone-sized viewport and mobile user agent for both URLs in this comparison.",
     )
+    use_visible_browser = st.checkbox(
+        "Run visible browser",
+        value=False,
+        help="Opens a normal Chrome window for staging pages that behave differently in headless mode.",
+    )
     if st.button("Run comparison"):
         if not prod_url or not stage_url:
             st.error("Enter both URLs.")
         else:
-            driver = create_driver(headless=True, capture_network=True)
+            driver = create_driver(headless=not use_visible_browser, capture_network=True)
             if use_mobile_capture:
                 apply_prod_stage_mobile_capture_profile(driver)
             try:
