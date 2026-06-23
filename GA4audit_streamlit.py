@@ -15,7 +15,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Tuple, Optional, Set, Callable
-from urllib.parse import urlparse, parse_qs, urlunparse, unquote_plus
+from urllib.parse import urlparse, parse_qs, parse_qsl, urlencode, urlunparse, unquote_plus
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -3952,6 +3952,40 @@ def _format_hits_sample(hits: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def redact_sensitive_url_query(raw_url: str, extra_sensitive_keys: Optional[Set[str]] = None) -> str:
+    parsed = urlparse(str(raw_url or ""))
+    if not parsed.query:
+        return str(raw_url or "")
+
+    sensitive_keys = {
+        "audit_token",
+        "access_token",
+        "auth_token",
+        "token",
+    }
+    configured_token_param = os.environ.get("STAGE_AUDIT_TOKEN_PARAM", "")
+    try:
+        configured_token_param = str(st.secrets.get("STAGE_AUDIT_TOKEN_PARAM", configured_token_param) or "")
+    except Exception:
+        pass
+    if configured_token_param:
+        sensitive_keys.add(configured_token_param)
+    if extra_sensitive_keys:
+        sensitive_keys.update(key for key in extra_sensitive_keys if key)
+
+    query_pairs = []
+    redacted = False
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        if key in sensitive_keys:
+            query_pairs.append((key, "[redacted]"))
+            redacted = True
+        else:
+            query_pairs.append((key, value))
+    if not redacted:
+        return str(raw_url or "")
+    return urlunparse(parsed._replace(query=urlencode(query_pairs)))
+
+
 # -------------------------
 # Core auditor
 # -------------------------
@@ -3967,14 +4001,15 @@ def audit_single_url(
     quick_video_probe: bool = False,
     lightweight_capture: bool = False,
 ) -> Dict[str, Any]:
-    print(f"\n🔍 Auditing: {url}")
+    safe_display_url = redact_sensitive_url_query(url)
+    print(f"\n🔍 Auditing: {safe_display_url}")
 
     audit_start = time.time()
     requires_video_playback = force_video_playback or single_audit_requires_video_playback(template_rules)
     requires_scroll_capture = force_scroll_capture or single_audit_requires_scroll_capture(template_rules)
 
     result: Dict[str, Any] = {
-        "page_url": url,
+        "page_url": safe_display_url,
         "page_title": "",
         "http_status_hint": "",
         "preload_hook_installed": False,
@@ -13180,6 +13215,39 @@ def can_use_prod_stage_local_browser_session() -> bool:
     return not os.getcwd().startswith("/mount/src")
 
 
+def get_prod_stage_secret_value(secret_name: str, default: str = "") -> str:
+    try:
+        value = st.secrets.get(secret_name, "")
+    except Exception:
+        value = ""
+    if value in (None, ""):
+        value = os.environ.get(secret_name, default)
+    return str(value or default).strip()
+
+
+def get_prod_stage_audit_token_config() -> Tuple[str, str]:
+    token = get_prod_stage_secret_value("STAGE_AUDIT_TOKEN")
+    token_param = get_prod_stage_secret_value("STAGE_AUDIT_TOKEN_PARAM", "audit_token") or "audit_token"
+    return token, token_param
+
+
+def append_prod_stage_audit_token(raw_url: str, token: str, token_param: str) -> str:
+    if not token or not token_param or not get_prod_stage_staging_hostname(raw_url):
+        return raw_url
+
+    parsed = urlparse(str(raw_url or "").strip())
+    if not parsed.netloc and parsed.path:
+        parsed = urlparse(f"https://{parsed.path}")
+
+    query_pairs = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key != token_param
+    ]
+    query_pairs.append((token_param, token))
+    return urlunparse(parsed._replace(query=urlencode(query_pairs)))
+
+
 def get_prod_stage_profile_dir(hostname: str) -> str:
     safe_hostname = re.sub(r"[^a-z0-9_.-]+", "_", str(hostname or "").lower()).strip("._-")
     if not safe_hostname:
@@ -14453,8 +14521,14 @@ if active_section == "Compare Prod vs Stage":
     detected_stage_hostname = get_prod_stage_staging_hostname(stage_url) or get_prod_stage_staging_hostname(prod_url)
     detected_stage_profile_dir = get_prod_stage_profile_dir(detected_stage_hostname) if detected_stage_hostname else ""
     local_browser_session_supported = can_use_prod_stage_local_browser_session()
+    stage_audit_token, stage_audit_token_param = get_prod_stage_audit_token_config()
 
     wait_cmp = st.slider("Wait seconds", 4, 20, 8, key="wait_compare")
+    if detected_stage_hostname:
+        if stage_audit_token:
+            st.caption(f"Staging audit token will be added as `{stage_audit_token_param}` for staging URLs.")
+        else:
+            st.caption("No `STAGE_AUDIT_TOKEN` secret is configured for staging URL access.")
     if detected_stage_hostname and local_browser_session_supported and "prod_stage_saved_session" not in st.session_state:
         st.session_state["prod_stage_saved_session"] = True
     use_saved_stage_session = False
@@ -14493,6 +14567,8 @@ if active_section == "Compare Prod vs Stage":
                 if local_browser_session_supported and use_saved_stage_session and detected_stage_hostname
                 else None
             )
+            prod_audit_url = append_prod_stage_audit_token(prod_url, stage_audit_token, stage_audit_token_param)
+            stage_audit_url = append_prod_stage_audit_token(stage_url, stage_audit_token, stage_audit_token_param)
             driver = create_driver(
                 headless=not (local_browser_session_supported and (use_visible_browser or stage_profile_dir)),
                 performance_logs=True,
@@ -14502,10 +14578,10 @@ if active_section == "Compare Prod vs Stage":
             try:
                 if stage_profile_dir and login_wait_seconds:
                     st.info("Opening staging URL with saved browser profile. Complete login in the Chrome window if prompted.")
-                    driver.get(stage_url)
+                    driver.get(stage_audit_url)
                     time.sleep(login_wait_seconds)
-                prod = audit_single_url(driver, prod_url, wait_cmp)
-                stage = audit_single_url(driver, stage_url, wait_cmp)
+                prod = audit_single_url(driver, prod_audit_url, wait_cmp)
+                stage = audit_single_url(driver, stage_audit_url, wait_cmp)
             finally:
                 safe_quit_driver(driver)
 
