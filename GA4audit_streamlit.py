@@ -14551,6 +14551,13 @@ if active_section == "Compare Prod vs Stage":
         )
         if use_saved_stage_session and detected_stage_hostname:
             st.caption(f"Staging session host: {detected_stage_hostname}")
+            if st.button("Reset saved staging session", key="reset_prod_stage_saved_session"):
+                try:
+                    if os.path.isdir(detected_stage_profile_dir):
+                        shutil.rmtree(detected_stage_profile_dir)
+                    st.success("Saved staging session cleared. Run comparison again and log in in the Chrome window.")
+                except Exception as exc:
+                    st.error(f"Could not clear saved staging session. Close any opened Chrome window and try again. {exc}")
             login_wait_seconds = st.slider(
                 "Login wait seconds",
                 0,
