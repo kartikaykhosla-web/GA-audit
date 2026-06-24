@@ -13233,7 +13233,7 @@ def get_prod_stage_audit_token_config() -> Tuple[str, str]:
 
 def append_prod_stage_audit_token(raw_url: str, token: str, token_param: str) -> str:
     if not token or not token_param or not get_prod_stage_staging_hostname(raw_url):
-        return raw_url
+        return normalize_prod_stage_url(raw_url)
 
     parsed = urlparse(str(raw_url or "").strip())
     if not parsed.netloc and parsed.path:
@@ -13246,6 +13246,16 @@ def append_prod_stage_audit_token(raw_url: str, token: str, token_param: str) ->
     ]
     query_pairs.append((token_param, token))
     return urlunparse(parsed._replace(query=urlencode(query_pairs)))
+
+
+def normalize_prod_stage_url(raw_url: str) -> str:
+    text = str(raw_url or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if parsed.scheme and parsed.netloc:
+        return text
+    return f"https://{text.lstrip('/')}"
 
 
 def get_prod_stage_profile_dir(hostname: str) -> str:
