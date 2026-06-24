@@ -483,6 +483,7 @@ def create_driver(
         if user_data_dir:
             os.makedirs(user_data_dir, exist_ok=True)
             chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
+            chrome_options.add_argument("--remote-debugging-port=0")
 
         base_args = [
             "--no-sandbox",
@@ -495,6 +496,7 @@ def create_driver(
             "--disable-sync",
             "--metrics-recording-only",
             "--no-first-run",
+            "--no-default-browser-check",
             "--window-size=1920,1080",
         ]
         if safe_mode:
