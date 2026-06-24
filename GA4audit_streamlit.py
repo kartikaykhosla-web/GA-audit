@@ -13308,6 +13308,50 @@ def build_prod_stage_field_rows(prod_result: dict, stage_result: dict) -> List[D
     return rows
 
 
+def dataframe_field_value_map(dataframe: pd.DataFrame) -> Dict[str, str]:
+    if dataframe is None or dataframe.empty:
+        return {}
+
+    value_map: Dict[str, str] = {}
+    for _, row in dataframe.iterrows():
+        field = str(row.get("Field") or "").strip()
+        if not field:
+            continue
+        value_map[field] = str(row.get("Value") or "").strip()
+    return value_map
+
+
+def build_prod_stage_snapshot_section_rows(prod_snapshot: dict, stage_snapshot: dict, section_key: str) -> pd.DataFrame:
+    prod_values = dataframe_field_value_map(prod_snapshot.get(section_key))
+    stage_values = dataframe_field_value_map(stage_snapshot.get(section_key))
+    ordered_fields = list(prod_values.keys())
+    ordered_fields.extend(field for field in stage_values.keys() if field not in prod_values)
+
+    rows = []
+    for field in ordered_fields:
+        prod_value = prod_values.get(field, "")
+        stage_value = stage_values.get(field, "")
+        if prod_value and stage_value:
+            status = VALIDATION_PASS_LABEL if prod_value == stage_value else "Changed"
+        elif prod_value:
+            status = "Missing on Stage"
+        elif stage_value:
+            status = "Missing on Prod"
+        else:
+            continue
+
+        rows.append(
+            {
+                "Field": field,
+                "Prod value": prod_value or "Not observed",
+                "Stage value": stage_value or "Not observed",
+                "Status": status,
+            }
+        )
+
+    return pd.DataFrame(rows, columns=["Field", "Prod value", "Stage value", "Status"])
+
+
 def style_prod_stage_compare_table(dataframe: pd.DataFrame, status_column: str):
     if dataframe.empty or status_column not in dataframe.columns:
         return dataframe
@@ -14619,6 +14663,8 @@ if active_section == "Compare Prod vs Stage":
 
             prod_summary = build_audit_focus_summary(prod)
             stage_summary = build_audit_focus_summary(stage)
+            prod_snapshot = build_datalayer_snapshot_export(prod)
+            stage_snapshot = build_datalayer_snapshot_export(stage)
             firing_df = pd.DataFrame(build_prod_stage_firing_rows(prod_summary, stage_summary))
             field_df = pd.DataFrame(build_prod_stage_field_rows(prod, stage))
             if field_df.empty:
@@ -14660,6 +14706,22 @@ if active_section == "Compare Prod vs Stage":
                 use_container_width=True,
                 hide_index=True,
             )
+
+            st.subheader("DataLayer snapshot comparison")
+            for section_label, section_key in (
+                ("Trigger Event", "trigger_df"),
+                ("Computed State", "computed_df"),
+                ("Execution Payload", "execution_df"),
+            ):
+                section_df = build_prod_stage_snapshot_section_rows(prod_snapshot, stage_snapshot, section_key)
+                if section_df.empty:
+                    section_df = pd.DataFrame(columns=["Field", "Prod value", "Stage value", "Status"])
+                st.markdown(f"#### {section_label}")
+                st.dataframe(
+                    style_prod_stage_compare_table(section_df, "Status"),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
             st.subheader("Raw capture summary")
             st.dataframe(
