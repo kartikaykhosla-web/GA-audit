@@ -13248,6 +13248,61 @@ def append_prod_stage_audit_token(raw_url: str, token: str, token_param: str) ->
     return urlunparse(parsed._replace(query=urlencode(query_pairs)))
 
 
+def get_prod_stage_auth_cookies() -> List[Dict[str, Any]]:
+    raw_value = get_prod_stage_secret_value("STAGE_AUTH_COOKIES")
+    if not raw_value:
+        return []
+    try:
+        cookies = json.loads(raw_value)
+    except Exception:
+        return []
+    if isinstance(cookies, dict):
+        cookies = [cookies]
+    if not isinstance(cookies, list):
+        return []
+
+    cleaned_cookies = []
+    for cookie in cookies:
+        if not isinstance(cookie, dict):
+            continue
+        name = str(cookie.get("name") or "").strip()
+        value = str(cookie.get("value") or "").strip()
+        if not name or not value:
+            continue
+        cleaned = {
+            "name": name,
+            "value": value,
+            "path": str(cookie.get("path") or "/").strip() or "/",
+        }
+        domain = str(cookie.get("domain") or "").strip()
+        if domain:
+            cleaned["domain"] = domain
+        if "secure" in cookie:
+            cleaned["secure"] = bool(cookie.get("secure"))
+        if "httpOnly" in cookie:
+            cleaned["httpOnly"] = bool(cookie.get("httpOnly"))
+        cleaned_cookies.append(cleaned)
+    return cleaned_cookies
+
+
+def inject_prod_stage_auth_cookies(driver, stage_url: str, cookies: List[Dict[str, Any]]) -> int:
+    if not cookies or not get_prod_stage_staging_hostname(stage_url):
+        return 0
+
+    normalized_stage_url = normalize_prod_stage_url(stage_url)
+    parsed = urlparse(normalized_stage_url)
+    origin = urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
+    driver.get(origin)
+    inserted_count = 0
+    for cookie in cookies:
+        try:
+            driver.add_cookie(cookie)
+            inserted_count += 1
+        except Exception:
+            continue
+    return inserted_count
+
+
 def normalize_prod_stage_url(raw_url: str) -> str:
     text = str(raw_url or "").strip()
     if not text:
@@ -14576,6 +14631,7 @@ if active_section == "Compare Prod vs Stage":
     detected_stage_profile_dir = get_prod_stage_profile_dir(detected_stage_hostname) if detected_stage_hostname else ""
     local_browser_session_supported = can_use_prod_stage_local_browser_session()
     stage_audit_token, stage_audit_token_param = get_prod_stage_audit_token_config()
+    stage_auth_cookies = get_prod_stage_auth_cookies()
 
     wait_cmp = st.slider("Wait seconds", 4, 20, 8, key="wait_compare")
     if detected_stage_hostname:
@@ -14583,6 +14639,8 @@ if active_section == "Compare Prod vs Stage":
             st.caption(f"Staging audit token will be added as `{stage_audit_token_param}` for staging URLs.")
         else:
             st.caption("No `STAGE_AUDIT_TOKEN` secret is configured for staging URL access.")
+        if stage_auth_cookies:
+            st.caption(f"{len(stage_auth_cookies)} staging auth cookie(s) configured.")
     if detected_stage_hostname and "prod_stage_saved_session" not in st.session_state:
         st.session_state["prod_stage_saved_session"] = True
     use_saved_stage_session = False
@@ -14645,6 +14703,10 @@ if active_section == "Compare Prod vs Stage":
                     capture_network=True,
                 )
             try:
+                if stage_auth_cookies:
+                    inserted_cookie_count = inject_prod_stage_auth_cookies(driver, stage_audit_url, stage_auth_cookies)
+                    if inserted_cookie_count:
+                        st.info(f"Injected {inserted_cookie_count} staging auth cookie(s) before audit.")
                 if use_saved_stage_session and detected_stage_hostname and login_wait_seconds:
                     st.info("Opening staging URL. Complete login in the Chrome window if prompted.")
                     driver.get(stage_audit_url)
