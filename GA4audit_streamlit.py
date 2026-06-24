@@ -14588,15 +14588,28 @@ if active_section == "Compare Prod vs Stage":
             )
             prod_audit_url = append_prod_stage_audit_token(prod_url, stage_audit_token, stage_audit_token_param)
             stage_audit_url = append_prod_stage_audit_token(stage_url, stage_audit_token, stage_audit_token_param)
-            driver = create_driver(
-                headless=not (local_browser_session_supported and (use_visible_browser or stage_profile_dir)),
-                performance_logs=True,
-                capture_network=True,
-                user_data_dir=stage_profile_dir,
-            )
             try:
-                if stage_profile_dir and login_wait_seconds:
-                    st.info("Opening staging URL with saved browser profile. Complete login in the Chrome window if prompted.")
+                driver = create_driver(
+                    headless=not (local_browser_session_supported and (use_visible_browser or stage_profile_dir)),
+                    performance_logs=True,
+                    capture_network=True,
+                    user_data_dir=stage_profile_dir,
+                )
+            except RuntimeError as exc:
+                if not stage_profile_dir:
+                    raise
+                st.warning(
+                    "Saved staging session profile could not be opened. Retrying with a temporary visible Chrome session for this run."
+                )
+                stage_profile_dir = None
+                driver = create_driver(
+                    headless=not (local_browser_session_supported and (use_visible_browser or use_saved_stage_session)),
+                    performance_logs=True,
+                    capture_network=True,
+                )
+            try:
+                if use_saved_stage_session and detected_stage_hostname and login_wait_seconds:
+                    st.info("Opening staging URL. Complete login in the Chrome window if prompted.")
                     driver.get(stage_audit_url)
                     time.sleep(login_wait_seconds)
                 prod = audit_single_url(driver, prod_audit_url, wait_cmp)
