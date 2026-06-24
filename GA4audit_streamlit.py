@@ -13212,9 +13212,7 @@ def get_prod_stage_staging_hostname(raw_url: str) -> str:
 
 
 def can_use_prod_stage_local_browser_session() -> bool:
-    if os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get("STREAMLIT_CLOUD"):
-        return False
-    return not os.getcwd().startswith("/mount/src")
+    return True
 
 
 def get_prod_stage_secret_value(secret_name: str, default: str = "") -> str:
@@ -14585,56 +14583,51 @@ if active_section == "Compare Prod vs Stage":
             st.caption(f"Staging audit token will be added as `{stage_audit_token_param}` for staging URLs.")
         else:
             st.caption("No `STAGE_AUDIT_TOKEN` secret is configured for staging URL access.")
-    if detected_stage_hostname and local_browser_session_supported and "prod_stage_saved_session" not in st.session_state:
+    if detected_stage_hostname and "prod_stage_saved_session" not in st.session_state:
         st.session_state["prod_stage_saved_session"] = True
     use_saved_stage_session = False
     login_wait_seconds = 0
-    if local_browser_session_supported:
-        use_saved_stage_session = st.checkbox(
-            "Use saved staging login session",
-            key="prod_stage_saved_session",
-            help="For dev/stg/stage/pre-prod URLs, reuse a local Chrome profile so cookies stay available across runs.",
+    use_saved_stage_session = st.checkbox(
+        "Use saved staging login session",
+        key="prod_stage_saved_session",
+        help="For dev/stg/stage/pre-prod URLs, reuse a local Chrome profile so cookies stay available across runs.",
+    )
+    if use_saved_stage_session and detected_stage_hostname:
+        st.caption(f"Staging session host: {detected_stage_hostname}")
+        if st.button("Reset saved staging session", key="reset_prod_stage_saved_session"):
+            try:
+                if os.path.isdir(detected_stage_profile_dir):
+                    shutil.rmtree(detected_stage_profile_dir)
+                st.success("Saved staging session cleared. Run comparison again and log in in the Chrome window.")
+            except Exception as exc:
+                st.error(f"Could not clear saved staging session. Close any opened Chrome window and try again. {exc}")
+        login_wait_seconds = st.slider(
+            "Login wait seconds",
+            0,
+            90,
+            20,
+            key="prod_stage_login_wait",
+            help="When a saved staging session is used, the browser opens visibly and waits so you can finish login if needed.",
         )
-        if use_saved_stage_session and detected_stage_hostname:
-            st.caption(f"Staging session host: {detected_stage_hostname}")
-            if st.button("Reset saved staging session", key="reset_prod_stage_saved_session"):
-                try:
-                    if os.path.isdir(detected_stage_profile_dir):
-                        shutil.rmtree(detected_stage_profile_dir)
-                    st.success("Saved staging session cleared. Run comparison again and log in in the Chrome window.")
-                except Exception as exc:
-                    st.error(f"Could not clear saved staging session. Close any opened Chrome window and try again. {exc}")
-            login_wait_seconds = st.slider(
-                "Login wait seconds",
-                0,
-                90,
-                20,
-                key="prod_stage_login_wait",
-                help="When a saved staging session is used, the browser opens visibly and waits so you can finish login if needed.",
-            )
-        use_visible_browser = st.checkbox(
-            "Run visible browser",
-            value=False,
-            help="Opens a normal Chrome window for staging pages that behave differently in headless mode.",
-        )
-    else:
-        use_visible_browser = False
-        if detected_stage_hostname:
-            st.caption("Saved staging login sessions and visible browser mode are available only when running the app locally.")
+    use_visible_browser = st.checkbox(
+        "Run visible browser",
+        value=False,
+        help="Opens a normal Chrome window for staging pages that behave differently in headless mode.",
+    )
     if st.button("Run comparison"):
         if not prod_url or not stage_url:
             st.error("Enter both URLs.")
         else:
             stage_profile_dir = (
                 detected_stage_profile_dir
-                if local_browser_session_supported and use_saved_stage_session and detected_stage_hostname
+                if use_saved_stage_session and detected_stage_hostname
                 else None
             )
             prod_audit_url = append_prod_stage_audit_token(prod_url, stage_audit_token, stage_audit_token_param)
             stage_audit_url = append_prod_stage_audit_token(stage_url, stage_audit_token, stage_audit_token_param)
             try:
                 driver = create_driver(
-                    headless=not (local_browser_session_supported and (use_visible_browser or stage_profile_dir)),
+                    headless=not (use_visible_browser or stage_profile_dir),
                     performance_logs=True,
                     capture_network=True,
                     user_data_dir=stage_profile_dir,
@@ -14647,7 +14640,7 @@ if active_section == "Compare Prod vs Stage":
                 )
                 stage_profile_dir = None
                 driver = create_driver(
-                    headless=not (local_browser_session_supported and (use_visible_browser or use_saved_stage_session)),
+                    headless=not (use_visible_browser or use_saved_stage_session),
                     performance_logs=True,
                     capture_network=True,
                 )
