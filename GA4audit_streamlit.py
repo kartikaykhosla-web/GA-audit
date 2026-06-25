@@ -13249,6 +13249,25 @@ def append_prod_stage_audit_token(raw_url: str, token: str, token_param: str) ->
 
 
 def get_prod_stage_auth_cookies() -> List[Dict[str, Any]]:
+    single_cookie_name = get_prod_stage_secret_value("STAGE_AUTH_COOKIE_NAME")
+    single_cookie_value = get_prod_stage_secret_value("STAGE_AUTH_COOKIE_VALUE")
+    if single_cookie_name and single_cookie_value:
+        single_cookie = {
+            "name": single_cookie_name,
+            "value": single_cookie_value,
+            "path": get_prod_stage_secret_value("STAGE_AUTH_COOKIE_PATH", "/") or "/",
+        }
+        single_cookie_domain = get_prod_stage_secret_value("STAGE_AUTH_COOKIE_DOMAIN")
+        if single_cookie_domain:
+            single_cookie["domain"] = single_cookie_domain
+        single_cookie_secure = get_prod_stage_secret_value("STAGE_AUTH_COOKIE_SECURE")
+        if single_cookie_secure:
+            single_cookie["secure"] = single_cookie_secure.lower() in {"1", "true", "yes"}
+        single_cookie_http_only = get_prod_stage_secret_value("STAGE_AUTH_COOKIE_HTTP_ONLY")
+        if single_cookie_http_only:
+            single_cookie["httpOnly"] = single_cookie_http_only.lower() in {"1", "true", "yes"}
+        return [single_cookie]
+
     raw_value = get_prod_stage_secret_value("STAGE_AUTH_COOKIES")
     if not raw_value:
         return []
@@ -13286,7 +13305,11 @@ def get_prod_stage_auth_cookies() -> List[Dict[str, Any]]:
 
 
 def has_prod_stage_auth_cookie_secret() -> bool:
-    return bool(get_prod_stage_secret_value("STAGE_AUTH_COOKIES"))
+    return bool(
+        get_prod_stage_secret_value("STAGE_AUTH_COOKIES")
+        or get_prod_stage_secret_value("STAGE_AUTH_COOKIE_NAME")
+        or get_prod_stage_secret_value("STAGE_AUTH_COOKIE_VALUE")
+    )
 
 
 def inject_prod_stage_auth_cookies(driver, stage_url: str, cookies: List[Dict[str, Any]]) -> int:
@@ -14647,7 +14670,7 @@ if active_section == "Compare Prod vs Stage":
         if stage_auth_cookies:
             st.caption(f"{len(stage_auth_cookies)} staging auth cookie(s) configured.")
         elif stage_auth_cookie_secret_present:
-            st.warning("`STAGE_AUTH_COOKIES` is configured, but no valid cookie entries could be parsed.")
+            st.warning("Staging auth cookie secret is configured, but no valid cookie could be parsed.")
     if (
         detected_stage_hostname
         and "prod_stage_saved_session" not in st.session_state
