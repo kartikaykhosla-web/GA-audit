@@ -13348,12 +13348,33 @@ def inject_prod_stage_auth_cookies(driver, stage_url: str, cookies: List[Dict[st
     normalized_stage_url = normalize_prod_stage_url(stage_url)
     parsed = urlparse(normalized_stage_url)
     origin = urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
-    driver.get(origin)
+    try:
+        driver.execute_cdp_cmd("Network.enable", {})
+    except Exception:
+        pass
     inserted_count = 0
     for cookie in cookies:
         try:
-            driver.add_cookie(cookie)
-            inserted_count += 1
+            cookie_name = str(cookie.get("name") or "").strip()
+            cookie_params = {
+                "name": cookie_name,
+                "value": str(cookie.get("value") or ""),
+                "url": origin,
+                "path": str(cookie.get("path") or "/") or "/",
+                "secure": bool(cookie.get("secure", True)),
+                "httpOnly": bool(cookie.get("httpOnly", False)),
+            }
+            if not cookie_name.startswith("__Host-"):
+                cookie_domain = str(cookie.get("domain") or "").strip()
+                if cookie_domain:
+                    cookie_params["domain"] = cookie_domain
+            else:
+                cookie_params["path"] = "/"
+                cookie_params["secure"] = True
+
+            result = driver.execute_cdp_cmd("Network.setCookie", cookie_params)
+            if not isinstance(result, dict) or result.get("success", True):
+                inserted_count += 1
         except Exception:
             continue
     return inserted_count
