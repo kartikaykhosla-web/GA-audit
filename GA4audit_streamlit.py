@@ -13285,6 +13285,10 @@ def get_prod_stage_auth_cookies() -> List[Dict[str, Any]]:
     return cleaned_cookies
 
 
+def has_prod_stage_auth_cookie_secret() -> bool:
+    return bool(get_prod_stage_secret_value("STAGE_AUTH_COOKIES"))
+
+
 def inject_prod_stage_auth_cookies(driver, stage_url: str, cookies: List[Dict[str, Any]]) -> int:
     if not cookies or not get_prod_stage_staging_hostname(stage_url):
         return 0
@@ -14632,6 +14636,7 @@ if active_section == "Compare Prod vs Stage":
     local_browser_session_supported = can_use_prod_stage_local_browser_session()
     stage_audit_token, stage_audit_token_param = get_prod_stage_audit_token_config()
     stage_auth_cookies = get_prod_stage_auth_cookies()
+    stage_auth_cookie_secret_present = has_prod_stage_auth_cookie_secret()
 
     wait_cmp = st.slider("Wait seconds", 4, 20, 8, key="wait_compare")
     if detected_stage_hostname:
@@ -14641,7 +14646,14 @@ if active_section == "Compare Prod vs Stage":
             st.caption("No `STAGE_AUDIT_TOKEN` secret is configured for staging URL access.")
         if stage_auth_cookies:
             st.caption(f"{len(stage_auth_cookies)} staging auth cookie(s) configured.")
-    if detected_stage_hostname and "prod_stage_saved_session" not in st.session_state:
+        elif stage_auth_cookie_secret_present:
+            st.warning("`STAGE_AUTH_COOKIES` is configured, but no valid cookie entries could be parsed.")
+    if (
+        detected_stage_hostname
+        and "prod_stage_saved_session" not in st.session_state
+        and not stage_auth_cookies
+        and can_use_prod_stage_local_browser_session()
+    ):
         st.session_state["prod_stage_saved_session"] = True
     use_saved_stage_session = False
     login_wait_seconds = 0
@@ -14678,7 +14690,7 @@ if active_section == "Compare Prod vs Stage":
         else:
             stage_profile_dir = (
                 detected_stage_profile_dir
-                if use_saved_stage_session and detected_stage_hostname
+                if use_saved_stage_session and detected_stage_hostname and not stage_auth_cookies
                 else None
             )
             prod_audit_url = append_prod_stage_audit_token(prod_url, stage_audit_token, stage_audit_token_param)
@@ -14698,7 +14710,7 @@ if active_section == "Compare Prod vs Stage":
                 )
                 stage_profile_dir = None
                 driver = create_driver(
-                    headless=not (use_visible_browser or use_saved_stage_session),
+                    headless=not (use_visible_browser or (use_saved_stage_session and not stage_auth_cookies)),
                     performance_logs=True,
                     capture_network=True,
                 )
@@ -14707,7 +14719,7 @@ if active_section == "Compare Prod vs Stage":
                     inserted_cookie_count = inject_prod_stage_auth_cookies(driver, stage_audit_url, stage_auth_cookies)
                     if inserted_cookie_count:
                         st.info(f"Injected {inserted_cookie_count} staging auth cookie(s) before audit.")
-                if use_saved_stage_session and detected_stage_hostname and login_wait_seconds:
+                if use_saved_stage_session and detected_stage_hostname and login_wait_seconds and not stage_auth_cookies:
                     st.info("Opening staging URL. Complete login in the Chrome window if prompted.")
                     driver.get(stage_audit_url)
                     time.sleep(login_wait_seconds)
