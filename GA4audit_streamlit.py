@@ -13215,9 +13215,30 @@ def can_use_prod_stage_local_browser_session() -> bool:
     return True
 
 
+def find_secret_value_in_mapping(mapping: Any, secret_name: str) -> Any:
+    if not isinstance(mapping, dict):
+        try:
+            mapping = dict(mapping)
+        except Exception:
+            return ""
+
+    if secret_name in mapping:
+        return mapping.get(secret_name)
+
+    for value in mapping.values():
+        if not isinstance(value, dict):
+            try:
+                value = dict(value)
+            except Exception:
+                continue
+        if secret_name in value:
+            return value.get(secret_name)
+    return ""
+
+
 def get_prod_stage_secret_value(secret_name: str, default: str = "") -> str:
     try:
-        value = st.secrets.get(secret_name, "")
+        value = find_secret_value_in_mapping(st.secrets, secret_name)
     except Exception:
         value = ""
     if value in (None, ""):
@@ -13310,6 +13331,14 @@ def has_prod_stage_auth_cookie_secret() -> bool:
         or get_prod_stage_secret_value("STAGE_AUTH_COOKIE_NAME")
         or get_prod_stage_secret_value("STAGE_AUTH_COOKIE_VALUE")
     )
+
+
+def get_prod_stage_auth_cookie_secret_status() -> Dict[str, bool]:
+    return {
+        "json": bool(get_prod_stage_secret_value("STAGE_AUTH_COOKIES")),
+        "name": bool(get_prod_stage_secret_value("STAGE_AUTH_COOKIE_NAME")),
+        "value": bool(get_prod_stage_secret_value("STAGE_AUTH_COOKIE_VALUE")),
+    }
 
 
 def inject_prod_stage_auth_cookies(driver, stage_url: str, cookies: List[Dict[str, Any]]) -> int:
@@ -14660,6 +14689,7 @@ if active_section == "Compare Prod vs Stage":
     stage_audit_token, stage_audit_token_param = get_prod_stage_audit_token_config()
     stage_auth_cookies = get_prod_stage_auth_cookies()
     stage_auth_cookie_secret_present = has_prod_stage_auth_cookie_secret()
+    stage_auth_cookie_secret_status = get_prod_stage_auth_cookie_secret_status()
 
     wait_cmp = st.slider("Wait seconds", 4, 20, 8, key="wait_compare")
     if detected_stage_hostname:
@@ -14671,6 +14701,12 @@ if active_section == "Compare Prod vs Stage":
             st.caption(f"{len(stage_auth_cookies)} staging auth cookie(s) configured.")
         elif stage_auth_cookie_secret_present:
             st.warning("Staging auth cookie secret is configured, but no valid cookie could be parsed.")
+        st.caption(
+            "Cookie secret keys found: "
+            f"JSON={'yes' if stage_auth_cookie_secret_status['json'] else 'no'}, "
+            f"name={'yes' if stage_auth_cookie_secret_status['name'] else 'no'}, "
+            f"value={'yes' if stage_auth_cookie_secret_status['value'] else 'no'}."
+        )
     if (
         detected_stage_hostname
         and "prod_stage_saved_session" not in st.session_state
