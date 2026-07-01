@@ -13500,6 +13500,17 @@ def prepare_prod_stage_display_df(dataframe: pd.DataFrame, value_limit: int = 16
     return display_df
 
 
+PROD_STAGE_TABLE_WIDTH = 1280
+
+
+def render_prod_stage_dataframe(dataframe, *, hide_index: bool = True):
+    st.dataframe(
+        dataframe,
+        width=PROD_STAGE_TABLE_WIDTH,
+        hide_index=hide_index,
+    )
+
+
 def style_prod_stage_compare_table(dataframe: pd.DataFrame, status_column: str):
     if dataframe.empty or status_column not in dataframe.columns:
         return dataframe
@@ -14840,9 +14851,8 @@ if active_section == "Compare Prod vs Stage":
             changed_count = int((field_df["Status"] == "Changed").sum()) if not field_df.empty else 0
 
             st.subheader("Core firing checks")
-            st.dataframe(
+            render_prod_stage_dataframe(
                 style_prod_stage_compare_table(prepare_prod_stage_display_df(firing_df), "Status"),
-                use_container_width=True,
                 hide_index=True,
             )
 
@@ -14866,9 +14876,8 @@ if active_section == "Compare Prod vs Stage":
             else:
                 visible_field_df = field_df[field_df["Status"] == selected_status_filter]
 
-            st.dataframe(
+            render_prod_stage_dataframe(
                 style_prod_stage_compare_table(prepare_prod_stage_display_df(visible_field_df), "Status"),
-                use_container_width=True,
                 hide_index=True,
             )
 
@@ -14882,9 +14891,8 @@ if active_section == "Compare Prod vs Stage":
                 if section_df.empty:
                     section_df = pd.DataFrame(columns=["Field", "Prod value", "Stage value", "Status"])
                 st.markdown(f"#### {section_label}")
-                st.dataframe(
+                render_prod_stage_dataframe(
                     style_prod_stage_compare_table(prepare_prod_stage_display_df(section_df), "Status"),
-                    use_container_width=True,
                     hide_index=True,
                 )
 
@@ -14917,9 +14925,9 @@ if active_section == "Compare Prod vs Stage":
                     },
                 ]
             )
-            st.dataframe(
+            render_prod_stage_dataframe(
                 prepare_prod_stage_display_df(raw_capture_df),
-                use_container_width=True,
+                hide_index=True,
             )
 
 
