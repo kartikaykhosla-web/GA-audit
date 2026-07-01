@@ -4012,6 +4012,7 @@ def audit_single_url(
 
     result: Dict[str, Any] = {
         "page_url": safe_display_url,
+        "final_url": "",
         "page_title": "",
         "http_status_hint": "",
         "preload_hook_installed": False,
@@ -4165,6 +4166,11 @@ def audit_single_url(
             time.sleep(0.15)
 
     # Title
+    try:
+        result["final_url"] = redact_sensitive_url_query(driver.current_url)
+    except Exception:
+        result["final_url"] = ""
+
     try:
         result["page_title"] = driver.title
     except Exception:
@@ -13494,7 +13500,7 @@ def prepare_prod_stage_display_df(dataframe: pd.DataFrame, value_limit: int = 16
         return dataframe
 
     display_df = dataframe.copy()
-    for column in ("Prod detail", "Stage detail", "Prod value", "Stage value", "issues"):
+    for column in ("Prod detail", "Stage detail", "Prod value", "Stage value", "final_url", "issues"):
         if column in display_df.columns:
             display_df[column] = display_df[column].map(lambda value: truncate_prod_stage_display_value(value, value_limit))
     return display_df
@@ -14902,6 +14908,7 @@ if active_section == "Compare Prod vs Stage":
                     {
                         "env": "Prod",
                         "status": prod.get("status"),
+                        "final_url": prod.get("final_url"),
                         "page_template": prod.get("page_template"),
                         "ga4_execution_present": prod.get("ga4_execution_present"),
                         "ga4_collect_present": prod.get("ga4_collect_present"),
@@ -14914,6 +14921,7 @@ if active_section == "Compare Prod vs Stage":
                     {
                         "env": "Stage",
                         "status": stage.get("status"),
+                        "final_url": stage.get("final_url"),
                         "page_template": stage.get("page_template"),
                         "ga4_execution_present": stage.get("ga4_execution_present"),
                         "ga4_collect_present": stage.get("ga4_collect_present"),
