@@ -13482,6 +13482,24 @@ def build_prod_stage_snapshot_section_rows(prod_snapshot: dict, stage_snapshot: 
     return pd.DataFrame(rows, columns=["Field", "Prod value", "Stage value", "Status"])
 
 
+def truncate_prod_stage_display_value(value: Any, limit: int = 160) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
+
+
+def prepare_prod_stage_display_df(dataframe: pd.DataFrame, value_limit: int = 160) -> pd.DataFrame:
+    if dataframe is None or dataframe.empty:
+        return dataframe
+
+    display_df = dataframe.copy()
+    for column in ("Prod detail", "Stage detail", "Prod value", "Stage value", "issues"):
+        if column in display_df.columns:
+            display_df[column] = display_df[column].map(lambda value: truncate_prod_stage_display_value(value, value_limit))
+    return display_df
+
+
 def style_prod_stage_compare_table(dataframe: pd.DataFrame, status_column: str):
     if dataframe.empty or status_column not in dataframe.columns:
         return dataframe
@@ -14823,7 +14841,7 @@ if active_section == "Compare Prod vs Stage":
 
             st.subheader("Core firing checks")
             st.dataframe(
-                style_prod_stage_compare_table(firing_df, "Status"),
+                style_prod_stage_compare_table(prepare_prod_stage_display_df(firing_df), "Status"),
                 use_container_width=True,
                 hide_index=True,
             )
@@ -14849,7 +14867,7 @@ if active_section == "Compare Prod vs Stage":
                 visible_field_df = field_df[field_df["Status"] == selected_status_filter]
 
             st.dataframe(
-                style_prod_stage_compare_table(visible_field_df, "Status"),
+                style_prod_stage_compare_table(prepare_prod_stage_display_df(visible_field_df), "Status"),
                 use_container_width=True,
                 hide_index=True,
             )
@@ -14865,41 +14883,42 @@ if active_section == "Compare Prod vs Stage":
                     section_df = pd.DataFrame(columns=["Field", "Prod value", "Stage value", "Status"])
                 st.markdown(f"#### {section_label}")
                 st.dataframe(
-                    style_prod_stage_compare_table(section_df, "Status"),
+                    style_prod_stage_compare_table(prepare_prod_stage_display_df(section_df), "Status"),
                     use_container_width=True,
                     hide_index=True,
                 )
 
             st.subheader("Raw capture summary")
+            raw_capture_df = pd.DataFrame(
+                [
+                    {
+                        "env": "Prod",
+                        "status": prod.get("status"),
+                        "page_template": prod.get("page_template"),
+                        "ga4_execution_present": prod.get("ga4_execution_present"),
+                        "ga4_collect_present": prod.get("ga4_collect_present"),
+                        "comscore_present": prod.get("comscore_present"),
+                        "chartbeat_present": prod.get("chartbeat_present"),
+                        "pv_page_location": prod.get("pv_page_location"),
+                        "pv_page_title": prod.get("pv_page_title"),
+                        "issues": prod.get("issues"),
+                    },
+                    {
+                        "env": "Stage",
+                        "status": stage.get("status"),
+                        "page_template": stage.get("page_template"),
+                        "ga4_execution_present": stage.get("ga4_execution_present"),
+                        "ga4_collect_present": stage.get("ga4_collect_present"),
+                        "comscore_present": stage.get("comscore_present"),
+                        "chartbeat_present": stage.get("chartbeat_present"),
+                        "pv_page_location": stage.get("pv_page_location"),
+                        "pv_page_title": stage.get("pv_page_title"),
+                        "issues": stage.get("issues"),
+                    },
+                ]
+            )
             st.dataframe(
-                pd.DataFrame(
-                    [
-                        {
-                            "env": "Prod",
-                            "status": prod.get("status"),
-                            "page_template": prod.get("page_template"),
-                            "ga4_execution_present": prod.get("ga4_execution_present"),
-                            "ga4_collect_present": prod.get("ga4_collect_present"),
-                            "comscore_present": prod.get("comscore_present"),
-                            "chartbeat_present": prod.get("chartbeat_present"),
-                            "pv_page_location": prod.get("pv_page_location"),
-                            "pv_page_title": prod.get("pv_page_title"),
-                            "issues": prod.get("issues"),
-                        },
-                        {
-                            "env": "Stage",
-                            "status": stage.get("status"),
-                            "page_template": stage.get("page_template"),
-                            "ga4_execution_present": stage.get("ga4_execution_present"),
-                            "ga4_collect_present": stage.get("ga4_collect_present"),
-                            "comscore_present": stage.get("comscore_present"),
-                            "chartbeat_present": stage.get("chartbeat_present"),
-                            "pv_page_location": stage.get("pv_page_location"),
-                            "pv_page_title": stage.get("pv_page_title"),
-                            "issues": stage.get("issues"),
-                        },
-                    ]
-                ),
+                prepare_prod_stage_display_df(raw_capture_df),
                 use_container_width=True,
             )
 
