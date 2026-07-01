@@ -14891,7 +14891,6 @@ if active_section == "Compare Prod vs Stage":
             for section_label, section_key in (
                 ("Trigger Event", "trigger_df"),
                 ("Computed State", "computed_df"),
-                ("Execution Payload", "execution_df"),
             ):
                 section_df = build_prod_stage_snapshot_section_rows(prod_snapshot, stage_snapshot, section_key)
                 if section_df.empty:
