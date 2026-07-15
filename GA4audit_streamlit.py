@@ -5069,6 +5069,12 @@ def _normalize_template_flag(value) -> bool:
     return str(value or "").strip().lower() not in {"", "false", "0", "no", "inactive"}
 
 
+def template_is_active(template: Optional[dict]) -> bool:
+    if not template:
+        return False
+    return _normalize_template_flag(template.get("active", True))
+
+
 def _clean_sheet_record(record: dict, headers: List[str]) -> dict:
     cleaned = {header: "" for header in headers}
     for key, value in (record or {}).items():
@@ -5576,17 +5582,46 @@ def _jsonb(value):
 
 
 def _compact_plan_for_storage(domain_name: str, plan_rows: List[dict]) -> List[dict]:
+    fresh_templates = active_templates
+    fresh_rules_by_template = template_rules_by_template
+    try:
+        clear_template_data_cache()
+        fresh_templates, fresh_rules, _ = load_templates_and_rules(cache_version=f"bulk-job-{uuid.uuid4().hex}")
+        fresh_rules_by_template = {}
+        for rule in fresh_rules:
+            fresh_rules_by_template.setdefault(str(rule.get("template_id") or "").strip(), []).append(rule)
+    except Exception:
+        fresh_templates = active_templates
+        fresh_rules_by_template = template_rules_by_template
+    fresh_templates_by_id = {
+        str(template.get("template_id") or "").strip(): template
+        for template in fresh_templates or []
+        if str(template.get("template_id") or "").strip()
+    }
+    fresh_active_template_ids = {
+        template_id
+        for template_id, template in fresh_templates_by_id.items()
+        if template_is_active(template)
+    }
     compact_plan = []
     for row in compact_domain_audit_plan(plan_rows):
         template = dict(row.get("template") or {})
+        template_id = str(template.get("template_id") or row.get("template_id") or "").strip()
+        if template_id and template_id in fresh_templates_by_id and template_id not in fresh_active_template_ids:
+            continue
+        if template_id and template_id in fresh_active_template_ids:
+            template = dict(fresh_templates_by_id[template_id])
+        if not template_is_active(template):
+            continue
         rules = get_effective_template_rules(
             template,
-            active_templates,
-            template_rules_by_template,
+            fresh_templates,
+            fresh_rules_by_template,
         )
         compact_plan.append(
             {
                 **row,
+                "template": template,
                 "domain_name": domain_name,
                 "rules": rules,
             }
@@ -5889,6 +5924,8 @@ def neon_create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[
     ensure_neon_ready()
     job_id = f"job_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     compact_plan = _compact_plan_for_storage(domain_name, plan_rows)
+    if not compact_plan:
+        return False, "No active templates are available for this audit job."
     payload = {
         "domain_name": domain_name,
         "wait_seconds": int(wait_seconds or 8),
@@ -6789,6 +6826,8 @@ def create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict]
     if sheet_storage_is_configured():
         job_id = f"job_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
         compact_plan = _compact_plan_for_storage(domain_name, plan_rows)
+        if not compact_plan:
+            return False, "No active templates are available for this audit job."
         payload = {
             "domain_name": domain_name,
             "wait_seconds": int(wait_seconds or 8),
@@ -6825,6 +6864,8 @@ def create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict]
     compact_plan = []
     for row in compact_domain_audit_plan(plan_rows):
         template = dict(row.get("template") or {})
+        if not template_is_active(template):
+            continue
         rules = get_effective_template_rules(
             template,
             active_templates,
@@ -6837,6 +6878,8 @@ def create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict]
                 "rules": rules,
             }
         )
+    if not compact_plan:
+        return False, "No active templates are available for this audit job."
     payload = {
         "domain_name": domain_name,
         "wait_seconds": int(wait_seconds or 8),
@@ -11824,6 +11867,8 @@ def build_domain_audit_plan_from_templates(
         template_id = str(plan_template.get("template_id") or "").strip()
         if not template_id or template_id in seen_template_ids:
             return
+        if not template_is_active(plan_template):
+            return
         seen_template_ids.add(template_id)
         is_video_capture = (
             not is_article_detail_template(plan_template, rules_by_template)
@@ -11890,10 +11935,15 @@ def build_rerun_audit_plan_from_rows(
     all_templates: List[dict],
     rules_by_template: Optional[Dict[str, List[dict]]] = None,
 ) -> Tuple[List[dict], List[str]]:
-    templates_by_id = {
+    all_templates_by_id = {
         str(template.get("template_id") or "").strip(): template
         for template in all_templates or []
         if str(template.get("template_id") or "").strip()
+    }
+    templates_by_id = {
+        template_id: template
+        for template_id, template in all_templates_by_id.items()
+        if template_is_active(template)
     }
     plan_rows: List[dict] = []
     skipped_rows: List[str] = []
@@ -11924,12 +11974,19 @@ def build_rerun_audit_plan_from_rows(
     for row in failed_rows or []:
         sample_url_raw = str(row.get("sample_url") or "").strip()
         template_name = str(row.get("template_name") or "Unnamed template").strip()
+        row_template_id = str(row.get("template_id") or "").strip()
+        if row_template_id and row_template_id in all_templates_by_id and row_template_id not in templates_by_id:
+            skipped_rows.append(f"{template_name}: template is inactive")
+            continue
         if not sample_url_raw:
             skipped_rows.append(f"{template_name}: missing URL")
             continue
         _, sample_url, sample_error = normalize_single_url(sample_url_raw)
         template = resolve_template(row)
         template_id = str(template.get("template_id") or row.get("template_id") or "").strip()
+        if not template_is_active(template):
+            skipped_rows.append(f"{template_name}: template is inactive")
+            continue
         detail_payload = row.get("detail_payload") or {}
         capture_mode = str(detail_payload.get("capture_mode") or "").strip().lower()
         if not capture_mode:

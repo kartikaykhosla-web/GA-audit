@@ -35,6 +35,8 @@ from selenium.webdriver.chrome.service import Service
 
 SUPABASE_JOB_TABLE = "bulk_audit_jobs"
 SUPABASE_RESULT_TABLE = "bulk_audit_results"
+SUPABASE_TEMPLATE_TABLE = "ga_audit_templates"
+SUPABASE_TEMPLATE_RULE_TABLE = "ga_audit_template_rules"
 DEFAULT_LOG_SHEET_ID = "1e_fp0fAOeEAHaRtFJUv-rt-i0sqUOhszYOrOk7Cv5QU"
 DEFAULT_BULK_JOBS_WORKSHEET = "Bulk Audit Jobs"
 DEFAULT_BULK_RESULTS_WORKSHEET = "Bulk Audit Results"
@@ -311,6 +313,54 @@ def neon_load_job(job_id: str) -> dict:
     if not row:
         raise RuntimeError(f"Bulk audit job not found: {job_id}")
     return row
+
+
+def neon_load_template_rules(template_id: str) -> List[dict]:
+    template_id = str(template_id or "").strip()
+    if not template_id:
+        return []
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    r.rule_id,
+                    r.template_id,
+                    r.rule_scope,
+                    r.field_name,
+                    r.rule_type,
+                    r.expected_values,
+                    r.notes,
+                    r.created_by,
+                    r.created_at
+                FROM ga_audit_template_rules r
+                LEFT JOIN ga_audit_templates t ON t.template_id = r.template_id
+                WHERE r.template_id = %s
+                  AND COALESCE(t.active, true) = true
+                ORDER BY r.rule_scope ASC, r.field_name ASC, r.rule_id ASC
+                """,
+                (template_id,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
+def neon_load_template_active(template_id: str) -> Optional[bool]:
+    template_id = str(template_id or "").strip()
+    if not template_id:
+        return None
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT active FROM ga_audit_templates WHERE template_id = %s LIMIT 1",
+                (template_id,),
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    value = row.get("active")
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() not in {"", "false", "0", "no", "inactive"}
 
 
 def neon_insert_result(job_id: str, plan_row: dict, result: dict):
@@ -629,6 +679,71 @@ def supabase_request(method: str, table: str, params: Optional[dict] = None, pay
         return response.json()
     except Exception:
         return []
+
+
+def load_current_template_rules(template_id: str) -> List[dict]:
+    template_id = str(template_id or "").strip()
+    if not template_id:
+        return []
+    if neon_is_configured():
+        return neon_load_template_rules(template_id)
+    if supabase_is_configured():
+        return supabase_request(
+            "GET",
+            SUPABASE_TEMPLATE_RULE_TABLE,
+            params={
+                "select": "rule_id,template_id,rule_scope,field_name,rule_type,expected_values,notes,created_by,created_at",
+                "template_id": f"eq.{template_id}",
+                "order": "rule_scope.asc,field_name.asc,rule_id.asc",
+            },
+        )
+    return []
+
+
+def load_current_template_active(template_id: str) -> Optional[bool]:
+    template_id = str(template_id or "").strip()
+    if not template_id:
+        return None
+    if neon_is_configured():
+        return neon_load_template_active(template_id)
+    if supabase_is_configured():
+        rows = supabase_request(
+            "GET",
+            SUPABASE_TEMPLATE_TABLE,
+            params={"select": "active", "template_id": f"eq.{template_id}", "limit": "1"},
+        )
+        if not rows:
+            return None
+        value = rows[0].get("active")
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() not in {"", "false", "0", "no", "inactive"}
+    return None
+
+
+def refresh_plan_rules_from_store(plan: List[dict]) -> List[dict]:
+    refreshed_plan = []
+    for plan_row in plan or []:
+        row = dict(plan_row or {})
+        template = row.get("template") or {}
+        template_id = str(template.get("template_id") or row.get("template_id") or "").strip()
+        if template_id:
+            try:
+                is_active = load_current_template_active(template_id)
+            except Exception as exc:
+                print(f"Could not refresh active status for template {template_id}: {exc}", flush=True)
+                is_active = None
+            if is_active is False:
+                print(f"Skipping inactive template {template_id}", flush=True)
+                continue
+            try:
+                current_rules = load_current_template_rules(template_id)
+            except Exception as exc:
+                print(f"Could not refresh rules for template {template_id}: {exc}", flush=True)
+            else:
+                row["rules"] = current_rules
+        refreshed_plan.append(row)
+    return refreshed_plan
 
 
 def update_job(job_id: str, values: dict):
@@ -2544,6 +2659,7 @@ def main():
     if isinstance(payload, str):
         payload = json.loads(payload)
     plan = payload.get("plan") or []
+    plan = refresh_plan_rules_from_store(plan)
     wait_seconds = int(payload.get("wait_seconds") or 8)
     total = len(plan)
 
