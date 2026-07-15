@@ -11885,6 +11885,103 @@ def compact_domain_audit_plan(plan_rows: List[dict]) -> List[dict]:
     return compact_rows
 
 
+def build_rerun_audit_plan_from_rows(
+    failed_rows: List[dict],
+    all_templates: List[dict],
+    rules_by_template: Optional[Dict[str, List[dict]]] = None,
+) -> Tuple[List[dict], List[str]]:
+    templates_by_id = {
+        str(template.get("template_id") or "").strip(): template
+        for template in all_templates or []
+        if str(template.get("template_id") or "").strip()
+    }
+    plan_rows: List[dict] = []
+    skipped_rows: List[str] = []
+    seen_keys: Set[Tuple[str, str, str]] = set()
+
+    def resolve_template(row: dict) -> dict:
+        template_id = str(row.get("template_id") or "").strip()
+        template = templates_by_id.get(template_id)
+        if template:
+            return template
+        if "__video_interaction" in template_id:
+            base_template_id = template_id.split("__video_interaction", 1)[0]
+            base_template = templates_by_id.get(base_template_id)
+            if base_template:
+                for companion_template in build_companion_validation_templates(base_template, all_templates, rules_by_template):
+                    if str(companion_template.get("template_id") or "").strip() == template_id:
+                        return companion_template
+        return {
+            "template_id": template_id,
+            "template_name": row.get("template_name") or "Unnamed template",
+            "domain_name": row.get("domain") or "",
+            "measurement_id": row.get("measurement_id") or "",
+            "container_id": row.get("container_id") or "",
+            "url_pattern": row.get("sample_url") or "",
+            "active": True,
+        }
+
+    for row in failed_rows or []:
+        sample_url_raw = str(row.get("sample_url") or "").strip()
+        template_name = str(row.get("template_name") or "Unnamed template").strip()
+        if not sample_url_raw:
+            skipped_rows.append(f"{template_name}: missing URL")
+            continue
+        _, sample_url, sample_error = normalize_single_url(sample_url_raw)
+        template = resolve_template(row)
+        template_id = str(template.get("template_id") or row.get("template_id") or "").strip()
+        detail_payload = row.get("detail_payload") or {}
+        capture_mode = str(detail_payload.get("capture_mode") or "").strip().lower()
+        if not capture_mode:
+            capture_mode = "video_mvp" if is_explicit_video_interaction_template(template) else "standard"
+        dedupe_key = (template_id, sample_url or sample_url_raw, capture_mode)
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        plan_rows.append(
+            {
+                "template": template,
+                "template_id": template_id,
+                "template_name": str(template.get("template_name") or template_name),
+                "sample_url": sample_url,
+                "sample_error": sample_error,
+                "override_url": sample_url_raw,
+                "parent_template_id": "",
+                "is_companion_template": "__video_interaction" in template_id,
+                "capture_mode": capture_mode or "standard",
+            }
+        )
+    return plan_rows, skipped_rows
+
+
+def create_and_dispatch_bulk_audit_job(
+    email_id: str,
+    domain_name: str,
+    plan_rows: List[dict],
+    wait_seconds: int,
+) -> Tuple[bool, str, str]:
+    if not plan_rows:
+        return False, "No URLs are available to rerun.", ""
+    success, response = create_bulk_audit_job(
+        email_id,
+        domain_name,
+        plan_rows,
+        wait_seconds,
+    )
+    if not success:
+        return False, response, ""
+    job_id = response
+    trigger_success, trigger_message = trigger_bulk_audit_workflow(job_id)
+    if not trigger_success:
+        return False, trigger_message, job_id
+    dispatch_marked, dispatch_message = mark_bulk_audit_job_dispatched(job_id)
+    st.session_state["latest_bulk_audit_job_id"] = job_id
+    st.session_state["bulk_audit_force_latest_job_id"] = job_id
+    if not dispatch_marked:
+        return True, f"Bulk audit dispatched, but status could not be marked as dispatched: {dispatch_message}", job_id
+    return True, f"Bulk audit dispatched to GitHub Actions. Job ID: {job_id}", job_id
+
+
 def summarize_validation_failures(
     result: dict,
     template: dict,
@@ -14671,6 +14768,73 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                 else:
                     st.markdown("#### URLs Needing Attention")
                     st.dataframe(issues_df, use_container_width=True, hide_index=True)
+                    rerun_plan, skipped_rerun_rows = build_rerun_audit_plan_from_rows(
+                        issue_rows,
+                        active_templates,
+                        template_rules_by_template,
+                    )
+                    rerun_disabled_reason = ""
+                    if not (neon_is_configured() or sheet_storage_is_configured() or supabase_is_configured()):
+                        rerun_disabled_reason = "Bulk audit storage is not configured."
+                    elif not github_is_configured():
+                        rerun_disabled_reason = "GitHub trigger is not configured."
+                    elif not rerun_plan:
+                        rerun_disabled_reason = "No failed URLs are available to rerun."
+
+                    rerun_cols = st.columns([1.4, 4])
+                    rerun_all_clicked = rerun_cols[0].button(
+                        "Rerun failed URLs",
+                        key=f"rerun_failed_bulk_job_{selected_job_id}",
+                        disabled=bool(rerun_disabled_reason),
+                        type="primary",
+                        use_container_width=True,
+                    )
+                    rerun_cols[1].caption(
+                        rerun_disabled_reason
+                        or f"Creates a new job with only the {len(rerun_plan)} failed URL(s) from this run."
+                    )
+                    if rerun_all_clicked:
+                        rerun_success, rerun_message, _ = create_and_dispatch_bulk_audit_job(
+                            logged_in_email,
+                            report_domain,
+                            rerun_plan,
+                            domain_wait_seconds,
+                        )
+                        if rerun_success:
+                            st.success(rerun_message)
+                        else:
+                            st.error(rerun_message)
+                    if skipped_rerun_rows:
+                        st.caption(f"Skipped {len(skipped_rerun_rows)} failed row(s) without a usable URL.")
+
+                    with st.expander("Rerun individual failed URLs", expanded=False):
+                        for issue_index, row in enumerate(issue_rows):
+                            row_plan, row_skipped = build_rerun_audit_plan_from_rows(
+                                [row],
+                                active_templates,
+                                template_rules_by_template,
+                            )
+                            sample_url = str(row.get("sample_url") or "").strip()
+                            row_cols = st.columns([2.2, 4.4, 1.1])
+                            row_cols[0].markdown(f"**{row.get('template_name') or 'Unnamed template'}**")
+                            row_cols[1].write(sample_url or "No URL")
+                            row_rerun_clicked = row_cols[2].button(
+                                "Rerun",
+                                key=f"rerun_failed_url_{selected_job_id}_{issue_index}_{_slugify_identifier(str(row.get('result_id') or row.get('template_id') or issue_index))}",
+                                disabled=bool(rerun_disabled_reason) or not row_plan or bool(row_skipped),
+                                use_container_width=True,
+                            )
+                            if row_rerun_clicked:
+                                rerun_success, rerun_message, _ = create_and_dispatch_bulk_audit_job(
+                                    logged_in_email,
+                                    report_domain,
+                                    row_plan,
+                                    domain_wait_seconds,
+                                )
+                                if rerun_success:
+                                    st.success(rerun_message)
+                                else:
+                                    st.error(rerun_message)
 
                 full_report_df = pd.DataFrame(
                     [
