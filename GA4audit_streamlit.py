@@ -13590,16 +13590,6 @@ This capture is split into three layers:
             if selected_domain_filter == "All domains"
             or get_template_domain_label(template) == selected_domain_filter
         ]
-        entered_url_domain = normalized_domain_from_raw_url(url_text)
-        if entered_url_domain == "herzindagi.com" and not any(
-            _normalize_template_domain_key(template.get("domain_name") or "") == "herzindagi.com"
-            for template in single_audit_templates
-        ):
-            st.info(
-                "HerZindagi templates are not currently loaded from the active template store. "
-                "If they were available earlier, the app is likely reading from a fallback store right now. "
-                "Use Template Manager -> Install HerZindagi templates to restore the bundled HerZindagi set."
-            )
         template_options = [
             None,
             *sorted(
@@ -14954,44 +14944,6 @@ if active_section == "Template Manager":
             for rule in template_rules:
                 template_rules_by_template.setdefault(str(rule.get("template_id") or "").strip(), []).append(rule)
             rule_scope_labels = {value: label for label, value in RULE_SCOPE_OPTIONS.items()}
-
-            herzindagi_seeds = get_herzindagi_bundled_template_seeds()
-            has_herzindagi_templates = any(
-                _normalize_template_domain_key(template.get("domain_name") or "") == "herzindagi.com"
-                for template in template_records
-            )
-            if herzindagi_seeds:
-                herzindagi_rule_count = sum(len(seed.get("rules") or []) for seed in herzindagi_seeds)
-                if not has_herzindagi_templates:
-                    st.info(
-                        f"HerZindagi templates are available in the bundled config but are not currently loaded "
-                        f"from the active template store: {len(herzindagi_seeds)} template(s), {herzindagi_rule_count} rule(s). "
-                        f"If they were visible earlier, the app is likely using a fallback store right now. "
-                        f"Click install to restore the bundled HerZindagi templates into the current store."
-                    )
-                    hz_button_label = "Install HerZindagi templates"
-                    hz_button_key = "install_herzindagi_templates"
-                else:
-                    st.caption(
-                        f"HerZindagi template sync is available: "
-                        f"{len(herzindagi_seeds)} template(s), {herzindagi_rule_count} rule(s)."
-                    )
-                    hz_button_label = "Repair/sync HerZindagi templates"
-                    hz_button_key = "repair_sync_herzindagi_templates"
-
-                if st.button(hz_button_label, key=hz_button_key):
-                    success, response = replace_templates_from_seed_templates(
-                        logged_in_email,
-                        herzindagi_seeds,
-                        template_records,
-                        template_rules,
-                        "HerZindagi bundled templates",
-                    )
-                    if success:
-                        st.success(response)
-                        st.rerun()
-                    else:
-                        st.error(response)
 
             domain_options = sorted(
                 {get_template_domain_label(template) for template in template_records},
