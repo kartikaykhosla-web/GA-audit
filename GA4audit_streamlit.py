@@ -7074,6 +7074,46 @@ def is_primary_article_detail_result(row: dict) -> bool:
     return "article detail" in template_name and "video interaction" not in template_name
 
 
+def chartbeat_check_applies_to_text(value: Any) -> bool:
+    normalized = _normalize_template_name_key(str(value or ""))
+    if not normalized:
+        return False
+    if "video interaction" in normalized:
+        return False
+    is_homepage = "homepage" in normalized or "home page" in normalized
+    is_article = (
+        normalized in {"article", "article page", "article detail"}
+        or "article detail" in normalized
+        or "article page" in normalized
+    )
+    return is_homepage or is_article
+
+
+def chartbeat_check_applies(subject: Optional[dict], rules: Optional[List[dict]] = None) -> bool:
+    subject = subject or {}
+    candidates = [
+        subject.get("template_name"),
+        subject.get("page_type"),
+        subject.get("template_page_type"),
+        subject.get("pageType"),
+    ]
+    result_json = subject.get("result_json")
+    if isinstance(result_json, dict):
+        candidates.extend(
+            [
+                result_json.get("template_name"),
+                result_json.get("page_type"),
+                result_json.get("template_page_type"),
+                result_json.get("pageType"),
+            ]
+        )
+    for rule in rules or []:
+        field_name = _normalize_template_name_key(rule.get("field_name") or "")
+        if field_name == "page type" or field_name == "page_type":
+            candidates.append(rule.get("expected_values"))
+    return any(chartbeat_check_applies_to_text(candidate) for candidate in candidates)
+
+
 def is_video_only_failure_text(value: Any) -> bool:
     normalized = normalize_dimension_name(value)
     return any(
@@ -7180,6 +7220,7 @@ def applicable_bulk_issue_parts(row: dict) -> List[str]:
 
 def bulk_result_issue_flags(row: dict) -> Dict[str, bool]:
     video_companion = is_bulk_video_companion_result(row)
+    chartbeat_applicable = chartbeat_check_applies(row)
     execution_failures, event_failures = applicable_bulk_failure_rows(row)
     issue_parts = applicable_bulk_issue_parts(row)
     ga_issue_parts = [part for part in issue_parts if not is_vendor_only_issue_text(part)]
@@ -7200,6 +7241,7 @@ def bulk_result_issue_flags(row: dict) -> Dict[str, bool]:
     )
     chartbeat_issue = bool(
         not video_companion
+        and chartbeat_applicable
         and (
             not row.get("chartbeat_present")
             or any("chartbeat" in part.lower() for part in issue_parts)
@@ -7648,29 +7690,32 @@ def render_bulk_audit_result_detail(
         st.dataframe(comscore_display_df, use_container_width=True, hide_index=True)
 
     st.markdown("### Chartbeat")
-    total_chartbeat_fires = sum(
-        int(chartbeat_row.get("times_fired") or chartbeat_row.get("Times Fired") or 0)
-        for chartbeat_row in chartbeat_rows
-        if isinstance(chartbeat_row, dict)
-    )
-    if row.get("chartbeat_present") and total_chartbeat_fires <= 0:
-        total_chartbeat_fires = max(1, len(view_model["chartbeat_hits"]))
-    chartbeat_validation_df = pd.DataFrame(
-        [
-            {
-                "Check": "Chartbeat request",
-                "Validation": VALIDATION_PASS_LABEL if row.get("chartbeat_present") else VALIDATION_FAIL_LABEL,
-                "Times Fired": total_chartbeat_fires,
-            }
-        ]
-    )
-    st.dataframe(
-        style_validation_table(chartbeat_validation_df, "Validation"),
-        use_container_width=True,
-        hide_index=True,
-    )
-    if row.get("chartbeat_present"):
-        st.caption("Detailed Chartbeat request values remain available under Advanced debug.")
+    if not chartbeat_check_applies(selected_template or row, selected_template_rules):
+        st.info("Chartbeat check skipped because this template is not an article or home page.")
+    else:
+        total_chartbeat_fires = sum(
+            int(chartbeat_row.get("times_fired") or chartbeat_row.get("Times Fired") or 0)
+            for chartbeat_row in chartbeat_rows
+            if isinstance(chartbeat_row, dict)
+        )
+        if row.get("chartbeat_present") and total_chartbeat_fires <= 0:
+            total_chartbeat_fires = max(1, len(view_model["chartbeat_hits"]))
+        chartbeat_validation_df = pd.DataFrame(
+            [
+                {
+                    "Check": "Chartbeat request",
+                    "Validation": VALIDATION_PASS_LABEL if row.get("chartbeat_present") else VALIDATION_FAIL_LABEL,
+                    "Times Fired": total_chartbeat_fires,
+                }
+            ]
+        )
+        st.dataframe(
+            style_validation_table(chartbeat_validation_df, "Validation"),
+            use_container_width=True,
+            hide_index=True,
+        )
+        if row.get("chartbeat_present"):
+            st.caption("Detailed Chartbeat request values remain available under Advanced debug.")
 
     with st.expander("Advanced debug", expanded=False):
         left_col, right_col = st.columns(2)
@@ -14096,7 +14141,9 @@ This capture is split into three layers:
                             st.dataframe(comscore_display_df, use_container_width=True, hide_index=True)
 
                     st.markdown("### Chartbeat")
-                    if capture_failed:
+                    if not chartbeat_check_applies(selected_template, selected_template_rules):
+                        st.info("Chartbeat check skipped because this template is not an article or home page.")
+                    elif capture_failed:
                         st.info("Chartbeat check skipped because this browser run captured no audit signal.")
                     elif not audit_summary["chartbeat_present"]:
                         chartbeat_validation_df = pd.DataFrame(
