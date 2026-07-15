@@ -7188,6 +7188,12 @@ def applicable_bulk_issue_parts(row: dict) -> List[str]:
             for part in issue_parts
             if not is_stored_validation_issue_text(part)
         ]
+    if not chartbeat_check_applies(row):
+        issue_parts = [
+            part
+            for part in issue_parts
+            if "chartbeat" not in part.lower()
+        ]
     if not is_primary_article_detail_result(row):
         return issue_parts
     raw_execution_failures = [
