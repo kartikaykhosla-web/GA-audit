@@ -51,7 +51,8 @@ token = "github_pat_or_fine_grained_token_with_actions_write"
 Set one of these connection values:
 
 - Streamlit secrets: `[neon] database_url = "postgresql://..."`
-- Environment/repository secret: `NEON_DATABASE_URL`
+- Cloud Run environment variable or Secret Manager-backed variable: `NEON_DATABASE_URL`
+- GitHub Actions repository secret: `NEON_DATABASE_URL`
 - Fallback names supported by code: `DATABASE_URL`, `POSTGRES_URL`
 
 The app creates the required Neon tables automatically when it connects:
@@ -63,6 +64,37 @@ The app creates the required Neon tables automatically when it connects:
 - `bulk_audit_results`
 
 Use a pooled Neon connection string if the deployed app has connection churn. Keep `sslmode=require` in the URL.
+
+## Cloud Run Environment Variables
+
+Cloud Run does not need Streamlit `st.secrets` for Neon. Configure the deployed service with environment variables, preferably backed by Secret Manager.
+
+Required for Neon:
+
+```text
+NEON_DATABASE_URL=postgresql://user:password@host/neondb?sslmode=require&channel_binding=require
+```
+
+Supported fallback names, if your platform already uses them:
+
+```text
+DATABASE_URL=postgresql://...
+POSTGRES_URL=postgresql://...
+```
+
+The app checks environment variables first, then falls back to Streamlit secrets. For Cloud Run, prefer `NEON_DATABASE_URL` so the purpose is clear.
+
+Required if the Cloud Run app should trigger GitHub Actions bulk audits:
+
+```text
+GITHUB_OWNER=kartikaykhosla-web
+GITHUB_REPO=GA-audit
+GITHUB_WORKFLOW=bulk-audit.yml
+GITHUB_REF_NAME=main
+GITHUB_TOKEN=github_pat_or_fine_grained_token_with_actions_write
+```
+
+If deploying from `adminjnmgit/GA-audit`, set `GITHUB_OWNER=adminjnmgit` instead.
 
 ## GitHub Actions Secrets
 

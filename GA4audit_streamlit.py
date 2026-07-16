@@ -5554,7 +5554,7 @@ def neon_is_configured() -> bool:
 def neon_connect():
     database_url = get_neon_settings().get("database_url")
     if not database_url:
-        raise RuntimeError("Neon is not configured. Add NEON_DATABASE_URL or DATABASE_URL.")
+        raise RuntimeError("Neon is not configured. Add NEON_DATABASE_URL, DATABASE_URL, or POSTGRES_URL.")
     if not psycopg or not dict_row:
         raise RuntimeError("psycopg is not installed.")
     return psycopg.connect(database_url, row_factory=dict_row)
