@@ -8350,15 +8350,7 @@ def build_companion_validation_templates(
     all_templates: List[dict],
     rules_by_template: Optional[Dict[str, List[dict]]] = None,
 ) -> List[dict]:
-    real_companions = find_companion_templates(base_template, all_templates, rules_by_template)
-    if real_companions:
-        return real_companions
-
-    runtime_companion = build_runtime_video_companion_template(base_template, rules_by_template)
-    if runtime_companion:
-        return [runtime_companion]
-
-    return []
+    return find_companion_templates(base_template, all_templates, rules_by_template)
 
 
 def get_effective_template_rules(
@@ -11995,6 +11987,9 @@ def build_rerun_audit_plan_from_rows(
         sample_url_raw = str(row.get("sample_url") or "").strip()
         template_name = str(row.get("template_name") or "Unnamed template").strip()
         row_template_id = str(row.get("template_id") or "").strip()
+        if row_template_id and row_template_id not in all_templates_by_id:
+            skipped_rows.append(f"{template_name}: template is not in the active template store")
+            continue
         if row_template_id and row_template_id in all_templates_by_id and row_template_id not in templates_by_id:
             skipped_rows.append(f"{template_name}: template is inactive")
             continue
