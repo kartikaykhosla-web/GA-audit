@@ -5230,7 +5230,7 @@ def delete_template_record(template_id: str):
         return False, "Google Sheets logging is not configured yet."
 
     settings = get_template_sheet_settings()
-    template_ws, _ = get_template_worksheets(
+    template_ws, rules_ws = get_template_worksheets(
         json.dumps(service_account_info),
         settings["spreadsheet_id"],
         settings["template_worksheet_name"],
@@ -5251,6 +5251,16 @@ def delete_template_record(template_id: str):
     if row_index is None:
         return False, "Template not found."
 
+    rule_template_ids = rules_ws.col_values(2)
+    for rule_row_index in sorted(
+        [
+            index
+            for index, value in enumerate(rule_template_ids[1:], start=2)
+            if str(value or "").strip() == template_id_text
+        ],
+        reverse=True,
+    ):
+        rules_ws.delete_rows(rule_row_index)
     template_ws.delete_rows(row_index)
     return True, template_id_text
 
@@ -5753,6 +5763,10 @@ def neon_delete_template_record(template_id: str):
         return False, "Template ID is missing."
     with neon_connect() as conn:
         with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM ga_audit_template_rules WHERE template_id = %s",
+                (template_id_text,),
+            )
             cur.execute(
                 "DELETE FROM ga_audit_templates WHERE template_id = %s",
                 (template_id_text,),
@@ -6559,6 +6573,12 @@ def delete_template_record(template_id: str):
     if not template_id_text:
         return False, "Template ID is missing."
     try:
+        supabase_request(
+            "DELETE",
+            SUPABASE_TEMPLATE_RULE_TABLE,
+            params={"template_id": f"eq.{template_id_text}"},
+            prefer="return=minimal",
+        )
         supabase_request(
             "DELETE",
             SUPABASE_TEMPLATE_TABLE,
@@ -15416,6 +15436,32 @@ if active_section == "Template Manager":
                             if success:
                                 st.session_state["template_workspace_template_id"] = selected_template_id
                                 st.success(f"Template updated: {edit_template_name}")
+                                st.rerun()
+                            else:
+                                st.error(response)
+
+                    with st.expander("Remove template", expanded=False):
+                        st.warning("Removing a template also removes its configured rules from the active template store.")
+                        remove_template_name = str(selected_template.get("template_name") or "Unnamed template")
+                        remove_confirmation = st.text_input(
+                            "Type DELETE to confirm removal",
+                            key=f"delete_template_confirm_{selected_template_id}",
+                            placeholder="DELETE",
+                        )
+                        remove_template_clicked = st.button(
+                            "Remove selected template",
+                            key=f"delete_template_{selected_template_id}",
+                            disabled=str(remove_confirmation or "").strip() != "DELETE",
+                            type="secondary",
+                        )
+                        if remove_template_clicked:
+                            success, response = delete_template_record(selected_template_id)
+                            if success:
+                                st.session_state.pop("template_workspace_template_id", None)
+                                st.session_state.pop("template_rule_target_id", None)
+                                st.session_state.pop("template_rule_edit_id", None)
+                                st.session_state.pop(f"delete_template_confirm_{selected_template_id}", None)
+                                st.success(f"Template removed: {remove_template_name}")
                                 st.rerun()
                             else:
                                 st.error(response)
