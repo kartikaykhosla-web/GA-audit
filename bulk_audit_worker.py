@@ -5,8 +5,10 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
@@ -2648,6 +2650,51 @@ def insert_result(job_id: str, plan_row: dict, result: dict):
     supabase_request("POST", SUPABASE_RESULT_TABLE, payload=row, prefer="return=minimal")
 
 
+def get_bulk_audit_concurrency(total: int) -> int:
+    if total <= 1:
+        return 1
+    if sheet_storage_is_configured() and not (neon_is_configured() or supabase_is_configured()):
+        return 1
+    raw_value = os.environ.get("BULK_AUDIT_CONCURRENCY", "3")
+    try:
+        concurrency = int(str(raw_value or "3").strip())
+    except Exception:
+        concurrency = 3
+    return max(1, min(concurrency, 6, total))
+
+
+def build_worker_error_result(payload: dict, plan_row: dict, exc: Exception) -> dict:
+    template = plan_row.get("template") or {}
+    return {
+        "domain": payload.get("domain_name") or "",
+        "template_name": template.get("template_name") or plan_row.get("template_name") or "Unnamed template",
+        "sample_url": plan_row.get("sample_url") or "",
+        "audit_outcome": "Issue",
+        "implementation_status": "ERROR",
+        "pageview_triggered": False,
+        "pageview_source": "Not tested",
+        "ga_present": False,
+        "events_count": 0,
+        "events_fired": "None",
+        "container_id": "Not found",
+        "measurement_id": "Not found",
+        "comscore_present": False,
+        "chartbeat_present": False,
+        "issues": str(exc),
+        "execution_failures": [],
+        "event_failures": [],
+        "audit_duration_seconds": 0,
+        "detail_payload": {},
+    }
+
+
+def audit_plan_row(payload: dict, plan_row: dict, wait_seconds: int) -> tuple:
+    try:
+        return plan_row, audit_url(plan_row, wait_seconds), False
+    except Exception as exc:
+        return plan_row, build_worker_error_result(payload, plan_row, exc), True
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--job-id", required=True)
@@ -2670,48 +2717,69 @@ def main():
     update_job(args.job_id, {"status": "running", "started_at": utc_now(), "total_count": total})
     completed = 0
     failed = 0
+    concurrency = get_bulk_audit_concurrency(total)
+    print(f"Bulk audit worker concurrency: {concurrency}", flush=True)
     try:
-        for plan_row in plan:
-            if is_job_cancelled(args.job_id):
-                update_job(
-                    args.job_id,
-                    {
-                        "status": "cancelled",
-                        "completed_at": utc_now(),
-                        "completed_count": completed,
-                        "failed_count": failed,
-                    },
-                )
-                return
-            try:
-                result = audit_url(plan_row, wait_seconds)
-            except Exception as exc:
-                failed += 1
-                template = plan_row.get("template") or {}
-                result = {
-                    "domain": payload.get("domain_name") or "",
-                    "template_name": template.get("template_name") or plan_row.get("template_name") or "Unnamed template",
-                    "sample_url": plan_row.get("sample_url") or "",
-                    "audit_outcome": "Issue",
-                    "implementation_status": "ERROR",
-                    "pageview_triggered": False,
-                    "pageview_source": "Not tested",
-                    "ga_present": False,
-                    "events_count": 0,
-                    "events_fired": "None",
-                    "container_id": "Not found",
-                    "measurement_id": "Not found",
-                    "comscore_present": False,
-                    "chartbeat_present": False,
-                    "issues": str(exc),
-                    "execution_failures": [],
-                    "event_failures": [],
-                    "audit_duration_seconds": 0,
-                    "detail_payload": {},
-                }
-            insert_result(args.job_id, plan_row, result)
-            completed += 1
-            update_job(args.job_id, {"completed_count": completed, "failed_count": failed})
+        if concurrency <= 1:
+            for plan_row in plan:
+                if is_job_cancelled(args.job_id):
+                    update_job(
+                        args.job_id,
+                        {
+                            "status": "cancelled",
+                            "completed_at": utc_now(),
+                            "completed_count": completed,
+                            "failed_count": failed,
+                        },
+                    )
+                    return
+                plan_row, result, row_failed = audit_plan_row(payload, plan_row, wait_seconds)
+                if row_failed:
+                    failed += 1
+                insert_result(args.job_id, plan_row, result)
+                completed += 1
+                update_job(args.job_id, {"completed_count": completed, "failed_count": failed})
+        else:
+            plan_iter = iter(plan)
+            pending = set()
+            write_lock = threading.Lock()
+            with ThreadPoolExecutor(max_workers=concurrency) as executor:
+                def submit_next() -> bool:
+                    try:
+                        next_plan_row = next(plan_iter)
+                    except StopIteration:
+                        return False
+                    pending.add(executor.submit(audit_plan_row, payload, next_plan_row, wait_seconds))
+                    return True
+
+                for _ in range(concurrency):
+                    if not submit_next():
+                        break
+
+                while pending:
+                    done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        plan_row, result, row_failed = future.result()
+                        with write_lock:
+                            if row_failed:
+                                failed += 1
+                            insert_result(args.job_id, plan_row, result)
+                            completed += 1
+                            update_job(args.job_id, {"completed_count": completed, "failed_count": failed})
+                    if is_job_cancelled(args.job_id):
+                        update_job(
+                            args.job_id,
+                            {
+                                "status": "cancelled",
+                                "completed_at": utc_now(),
+                                "completed_count": completed,
+                                "failed_count": failed,
+                            },
+                        )
+                        return
+                    while len(pending) < concurrency:
+                        if not submit_next():
+                            break
         update_job(args.job_id, {"status": "completed", "completed_at": utc_now(), "completed_count": completed, "failed_count": failed})
     except Exception as exc:
         update_job(args.job_id, {"status": "failed", "error_message": str(exc), "completed_at": utc_now(), "completed_count": completed, "failed_count": failed})
