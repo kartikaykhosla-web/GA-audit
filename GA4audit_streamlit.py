@@ -14583,7 +14583,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
             )
             st.caption(
                 f"{len(audit_plan)} template URL(s) selected for {selected_domain}. "
-                "GitHub Actions will process them sequentially."
+                "GitHub Actions will process them with bounded parallel workers."
             )
 
             if audit_plan:
@@ -14625,7 +14625,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                 type="primary",
             )
             run_cols[1].caption(
-                "The selected templates will be processed one by one by GitHub Actions."
+                "The selected templates will be processed by GitHub Actions with bounded parallelism."
             )
             if run_clicked:
                 success, response = create_bulk_audit_job(

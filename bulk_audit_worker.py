@@ -10,7 +10,7 @@ import time
 import uuid
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -363,6 +363,66 @@ def neon_load_template_active(template_id: str) -> Optional[bool]:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() not in {"", "false", "0", "no", "inactive"}
+
+
+def neon_load_template_state_batch(template_ids: List[str]) -> Tuple[Dict[str, bool], Dict[str, List[dict]]]:
+    ordered_ids = []
+    seen_ids = set()
+    for template_id in template_ids or []:
+        template_id_text = str(template_id or "").strip()
+        if template_id_text and template_id_text not in seen_ids:
+            ordered_ids.append(template_id_text)
+            seen_ids.add(template_id_text)
+    if not ordered_ids:
+        return {}, {}
+
+    active_by_template: Dict[str, bool] = {}
+    rules_by_template: Dict[str, List[dict]] = {template_id: [] for template_id in ordered_ids}
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT template_id, active
+                FROM ga_audit_templates
+                WHERE template_id = ANY(%s)
+                """,
+                (ordered_ids,),
+            )
+            for row in cur.fetchall():
+                template_id = str(row.get("template_id") or "").strip()
+                value = row.get("active")
+                active_by_template[template_id] = (
+                    value
+                    if isinstance(value, bool)
+                    else str(value or "").strip().lower() not in {"", "false", "0", "no", "inactive"}
+                )
+
+            cur.execute(
+                """
+                SELECT
+                    r.rule_id,
+                    r.template_id,
+                    r.rule_scope,
+                    r.field_name,
+                    r.rule_type,
+                    r.expected_values,
+                    r.notes,
+                    r.created_by,
+                    r.created_at
+                FROM ga_audit_template_rules r
+                LEFT JOIN ga_audit_templates t ON t.template_id = r.template_id
+                WHERE r.template_id = ANY(%s)
+                  AND COALESCE(t.active, true) = true
+                ORDER BY r.template_id ASC, r.rule_scope ASC, r.field_name ASC, r.rule_id ASC
+                """,
+                (ordered_ids,),
+            )
+            for row in cur.fetchall():
+                rule = dict(row)
+                template_id = str(rule.get("template_id") or "").strip()
+                rules_by_template.setdefault(template_id, []).append(rule)
+
+    return active_by_template, rules_by_template
 
 
 def neon_insert_result(job_id: str, plan_row: dict, result: dict):
@@ -724,6 +784,32 @@ def load_current_template_active(template_id: str) -> Optional[bool]:
 
 
 def refresh_plan_rules_from_store(plan: List[dict]) -> List[dict]:
+    if neon_is_configured():
+        template_ids = []
+        for plan_row in plan or []:
+            template = (plan_row or {}).get("template") or {}
+            template_id = str(template.get("template_id") or (plan_row or {}).get("template_id") or "").strip()
+            if template_id:
+                template_ids.append(template_id)
+        try:
+            active_by_template, rules_by_template = neon_load_template_state_batch(template_ids)
+        except Exception as exc:
+            print(f"Could not batch refresh template rules from Neon: {exc}", flush=True)
+        else:
+            refreshed_plan = []
+            for plan_row in plan or []:
+                row = dict(plan_row or {})
+                template = row.get("template") or {}
+                template_id = str(template.get("template_id") or row.get("template_id") or "").strip()
+                is_active = active_by_template.get(template_id)
+                if is_active is False:
+                    print(f"Skipping inactive template {template_id}", flush=True)
+                    continue
+                if template_id in rules_by_template:
+                    row["rules"] = rules_by_template.get(template_id, [])
+                refreshed_plan.append(row)
+            return refreshed_plan
+
     refreshed_plan = []
     for plan_row in plan or []:
         row = dict(plan_row or {})
