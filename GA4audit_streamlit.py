@@ -1091,6 +1091,24 @@ GA4_PRELOAD_SCRIPT = r"""
                 });
             }
         }
+
+        if (typeof Element !== "undefined" && Element.prototype && !Element.prototype.__ga4AuditWrappedSetAttribute) {
+            var originalSetAttribute = Element.prototype.setAttribute;
+            Element.prototype.setAttribute = function (name, value) {
+                try {
+                    var attrName = String(name || "").toLowerCase();
+                    var tagName = String((this && this.tagName) || "").toLowerCase();
+                    if ((attrName === "src" || attrName === "href") && (tagName === "img" || tagName === "script" || tagName === "iframe")) {
+                        recordTransport(tagName + "_attribute", value || "", "GET", "");
+                    }
+                } catch (e) {}
+                return originalSetAttribute.apply(this, arguments);
+            };
+            Object.defineProperty(Element.prototype, "__ga4AuditWrappedSetAttribute", {
+                value: true,
+                configurable: true
+            });
+        }
     } catch (error) {}
 })();
 """

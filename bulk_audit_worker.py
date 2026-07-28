@@ -943,6 +943,43 @@ def install_datalayer_probe(driver):
     };
     proto.__gaAuditHooked = true;
   }
+  if (typeof HTMLImageElement !== "undefined" && HTMLImageElement.prototype && !HTMLImageElement.prototype.__gaAuditHookedSrc) {
+    const imageSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+    if (imageSrcDescriptor && imageSrcDescriptor.set && imageSrcDescriptor.get) {
+      Object.defineProperty(HTMLImageElement.prototype, "src", {
+        configurable: true,
+        enumerable: imageSrcDescriptor.enumerable,
+        get: function() {
+          return imageSrcDescriptor.get.call(this);
+        },
+        set: function(value) {
+          recordTransport("image", value || "", "GET", "");
+          return imageSrcDescriptor.set.call(this, value);
+        }
+      });
+      Object.defineProperty(HTMLImageElement.prototype, "__gaAuditHookedSrc", {
+        value: true,
+        configurable: true
+      });
+    }
+  }
+  if (typeof Element !== "undefined" && Element.prototype && !Element.prototype.__gaAuditHookedSetAttribute) {
+    const originalSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, value) {
+      try {
+        const attrName = String(name || "").toLowerCase();
+        const tagName = String((this && this.tagName) || "").toLowerCase();
+        if ((attrName === "src" || attrName === "href") && (tagName === "img" || tagName === "script" || tagName === "iframe")) {
+          recordTransport(tagName + "_attribute", value || "", "GET", "");
+        }
+      } catch (e) {}
+      return originalSetAttribute.apply(this, arguments);
+    };
+    Object.defineProperty(Element.prototype, "__gaAuditHookedSetAttribute", {
+      value: true,
+      configurable: true
+    });
+  }
   hookDataLayer();
   hookGtag();
   window.setInterval(() => { hookDataLayer(); hookGtag(); }, 100);
@@ -2439,6 +2476,50 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         resource_timing_network = extract_resource_timing_network(driver)
         transport_network = extract_probe_transport(probe)
         gtag_events = extract_probe_gtag_events(probe)
+        if not (
+            network["comscore_hits"]
+            or performance_network["comscore_hits"]
+            or resource_timing_network["comscore_hits"]
+            or transport_network["comscore_hits"]
+        ) or not (
+            network["chartbeat_hits"]
+            or performance_network["chartbeat_hits"]
+            or resource_timing_network["chartbeat_hits"]
+            or transport_network["chartbeat_hits"]
+        ):
+            time.sleep(2.0)
+            late_probe = get_probe_payload(driver)
+            late_network = extract_network(driver)
+            late_performance_network = extract_performance_log_network(driver)
+            late_resource_timing_network = extract_resource_timing_network(driver)
+            late_transport_network = extract_probe_transport(late_probe)
+            probe = late_probe or probe
+            network["comscore_hits"] = merge_hit_rows(network["comscore_hits"], late_network["comscore_hits"])
+            network["chartbeat_hits"] = merge_hit_rows(network["chartbeat_hits"], late_network["chartbeat_hits"])
+            performance_network["comscore_hits"] = merge_hit_rows(
+                performance_network["comscore_hits"],
+                late_performance_network["comscore_hits"],
+            )
+            performance_network["chartbeat_hits"] = merge_hit_rows(
+                performance_network["chartbeat_hits"],
+                late_performance_network["chartbeat_hits"],
+            )
+            resource_timing_network["comscore_hits"] = merge_hit_rows(
+                resource_timing_network["comscore_hits"],
+                late_resource_timing_network["comscore_hits"],
+            )
+            resource_timing_network["chartbeat_hits"] = merge_hit_rows(
+                resource_timing_network["chartbeat_hits"],
+                late_resource_timing_network["chartbeat_hits"],
+            )
+            transport_network["comscore_hits"] = merge_hit_rows(
+                transport_network["comscore_hits"],
+                late_transport_network["comscore_hits"],
+            )
+            transport_network["chartbeat_hits"] = merge_hit_rows(
+                transport_network["chartbeat_hits"],
+                late_transport_network["chartbeat_hits"],
+            )
     finally:
         try:
             driver.quit()
