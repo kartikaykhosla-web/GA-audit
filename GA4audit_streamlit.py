@@ -9738,6 +9738,11 @@ for template_rule in template_rules:
         str(template_rule.get("template_id") or "").strip(),
         [],
     ).append(template_rule)
+auditable_templates = [
+    template
+    for template in active_templates
+    if template_rules_by_template.get(str(template.get("template_id") or "").strip())
+]
 
 tab_labels = ["Audit URLs", "Domain Audit", "Compare Prod vs Stage"]
 if is_template_admin(logged_in_email):
@@ -13723,12 +13728,12 @@ This capture is split into three layers:
 
     selected_template = None
     available_video_companion_templates: List[dict] = []
-    if not active_templates:
-        st.warning("No active templates are available.")
+    if not auditable_templates:
+        st.warning("No active templates with rules are available.")
     else:
         single_audit_templates = [
             template
-            for template in active_templates
+            for template in auditable_templates
             if "video interaction" not in _normalize_template_name_key(template.get("template_name") or "")
         ]
         domain_options = sorted(
@@ -13781,7 +13786,7 @@ This capture is split into three layers:
                 template
                 for template in build_companion_validation_templates(
                     selected_template,
-                    active_templates,
+                    auditable_templates,
                     template_rules_by_template,
                 )
                 if is_video_interaction_template(template, template_rules_by_template)
@@ -13832,18 +13837,18 @@ This capture is split into three layers:
             status_box = st.empty()
             selected_template_rules = get_single_audit_template_rules(
                 selected_template,
-                active_templates,
+                auditable_templates,
                 template_rules_by_template,
             )
             companion_validation_templates = build_companion_validation_templates(
                 selected_template,
-                active_templates,
+                auditable_templates,
                 template_rules_by_template,
             )
             companion_rule_sets = [
                 get_single_audit_template_rules(
                     companion_template,
-                    active_templates,
+                    auditable_templates,
                     template_rules_by_template,
                 )
                 for companion_template in companion_validation_templates
@@ -14385,7 +14390,7 @@ This capture is split into three layers:
             video_capture_template = available_video_companion_templates[0]
             video_capture_rules = get_single_audit_template_rules(
                 video_capture_template,
-                active_templates,
+                auditable_templates,
                 template_rules_by_template,
             )
             video_progress = st.progress(0)
@@ -14446,7 +14451,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
             value=8,
             key="domain_audit_wait_seconds",
         )
-        active_domain_templates = [template for template in active_templates if template.get("active")]
+        active_domain_templates = auditable_templates
         domain_names = sorted(
             {get_template_domain_label(template) for template in active_domain_templates},
             key=str.lower,
@@ -14530,7 +14535,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                 for selected_template in selected_templates
                 for companion_template in build_companion_validation_templates(
                     selected_template,
-                    active_templates,
+                    auditable_templates,
                     template_rules_by_template,
                 )
             ]
@@ -14555,7 +14560,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
             audit_plan = build_domain_audit_plan_from_templates(
                 selected_templates,
                 override_urls=override_urls,
-                all_templates=active_templates,
+                all_templates=auditable_templates,
                 rules_by_template=template_rules_by_template,
             )
             st.caption(
@@ -14789,7 +14794,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     st.dataframe(issues_df, use_container_width=True, hide_index=True)
                     rerun_plan, skipped_rerun_rows = build_rerun_audit_plan_from_rows(
                         issue_rows,
-                        active_templates,
+                        auditable_templates,
                         template_rules_by_template,
                     )
                     rerun_disabled_reason = ""
@@ -14830,7 +14835,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                         for issue_index, row in enumerate(issue_rows):
                             row_plan, row_skipped = build_rerun_audit_plan_from_rows(
                                 [row],
-                                active_templates,
+                                auditable_templates,
                                 template_rules_by_template,
                             )
                             sample_url = str(row.get("sample_url") or "").strip()
@@ -14921,7 +14926,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                         row_template = next(
                             (
                                 template
-                                for template in active_templates
+                                for template in auditable_templates
                                 if str(template.get("template_id") or "").strip() == row_template_id
                             ),
                             {
@@ -14931,7 +14936,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                         )
                         row_template_rules = get_single_audit_template_rules(
                             row_template,
-                            active_templates,
+                            auditable_templates,
                             template_rules_by_template,
                         )
                         render_bulk_audit_result_detail(
