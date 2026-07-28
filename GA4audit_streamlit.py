@@ -7951,50 +7951,7 @@ def get_augmented_template_rules(
     template: Optional[dict],
     rules_by_template: Optional[Dict[str, List[dict]]] = None,
 ) -> List[dict]:
-    template_rules_list = get_rules_for_validation_template(template, rules_by_template)
-    seed = get_starter_template_seed(template)
-    if not seed:
-        return template_rules_list
-
-    seed_rules = seed.get("rules") or []
-    if not seed_rules:
-        return template_rules_list
-
-    merged_rules = list(template_rules_list)
-    template_id = str((template or {}).get("template_id") or "").strip()
-    existing_field_keys = {
-        _rule_field_merge_key(rule)
-        for rule in merged_rules
-    }
-
-    for rule in seed_rules:
-        field_key = _rule_field_merge_key(rule)
-        if field_key in existing_field_keys:
-            continue
-        merged_rule = dict(rule)
-        if template_id:
-            merged_rule["template_id"] = template_id
-        merged_rules.append(merged_rule)
-        existing_field_keys.add(field_key)
-
-    if template_uses_jagran_article_supplementals(template) and is_article_detail_template(template, rules_by_template):
-        indexed_rules = {
-            _rule_field_merge_key(rule): index
-            for index, rule in enumerate(merged_rules)
-        }
-        for rule in ARTICLE_DETAIL_SUPPLEMENTAL_RULES:
-            merged_rule = dict(rule)
-            if template_id:
-                merged_rule["template_id"] = template_id
-            field_key = _rule_field_merge_key(merged_rule)
-            existing_index = indexed_rules.get(field_key)
-            if existing_index is None:
-                merged_rules.append(merged_rule)
-                indexed_rules[field_key] = len(merged_rules) - 1
-            else:
-                merged_rules[existing_index] = merged_rule
-
-    return merged_rules
+    return get_rules_for_validation_template(template, rules_by_template)
 
 
 VIDEO_INTERACTION_FIELD_NAMES = {
@@ -8377,18 +8334,8 @@ def get_single_audit_template_rules(
     explicit_video_template = is_explicit_video_interaction_template(template)
     if template_rules_list:
         if explicit_video_template:
-            video_rules = [rule for rule in template_rules_list if is_video_related_rule(rule)]
-            if video_rules:
-                return merge_video_rules_with_defaults(video_rules, template)
-            return build_default_article_detail_video_rules(template)
+            return [rule for rule in template_rules_list if is_video_related_rule(rule)]
         return strip_video_rules_for_primary_audit(template_rules_list)
-
-    if explicit_video_template:
-        return derive_video_rules_from_article_detail_template(
-            template,
-            all_templates,
-            rules_by_template,
-        )
 
     return []
 
