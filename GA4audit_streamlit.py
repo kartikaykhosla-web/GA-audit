@@ -7586,11 +7586,32 @@ def enrich_bulk_report_rows_with_current_validation(
         for template in all_templates or []
         if str(template.get("template_id") or "").strip()
     }
+    templates_by_name_domain = {
+        (
+            _normalize_template_name_key(template.get("template_name") or ""),
+            _normalize_template_domain_key(template.get("domain_name") or ""),
+        ): template
+        for template in all_templates or []
+        if _normalize_template_name_key(template.get("template_name") or "")
+    }
+    templates_by_name: Dict[str, List[dict]] = {}
+    for template in all_templates or []:
+        template_name_key = _normalize_template_name_key(template.get("template_name") or "")
+        if template_name_key:
+            templates_by_name.setdefault(template_name_key, []).append(template)
     enriched_rows = []
     for row in report_rows or []:
         enriched_row = dict(row)
         template_id = str(enriched_row.get("template_id") or "").strip()
         template = templates_by_id.get(template_id)
+        if not template:
+            template_name_key = _normalize_template_name_key(enriched_row.get("template_name") or "")
+            domain_key = _normalize_template_domain_key(enriched_row.get("domain") or "")
+            template = templates_by_name_domain.get((template_name_key, domain_key))
+            if not template:
+                name_matches = templates_by_name.get(template_name_key) or []
+                if len(name_matches) == 1:
+                    template = name_matches[0]
         if template:
             template_rules_for_row = get_single_audit_template_rules(
                 template,
