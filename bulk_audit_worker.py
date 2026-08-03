@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -882,6 +883,35 @@ def is_job_cancelled(job_id: str) -> bool:
     return str(job.get("status") or "").strip().lower() == "cancelled"
 
 
+def _major_version(version_text: str) -> str:
+    match = re.search(r"\b(\d+)\.", version_text or "")
+    return match.group(1) if match else ""
+
+
+def _command_output(args: List[str]) -> str:
+    try:
+        completed = subprocess.run(args, capture_output=True, text=True, timeout=5)
+        return f"{completed.stdout or ''} {completed.stderr or ''}".strip()
+    except Exception:
+        return ""
+
+
+def _path_without_incompatible_chromedriver(chrome_binary: str, chromedriver: str) -> Optional[str]:
+    if not chrome_binary or not chromedriver:
+        return None
+    chrome_major = _major_version(_command_output([chrome_binary, "--version"]))
+    driver_major = _major_version(_command_output([chromedriver, "--version"]))
+    if not chrome_major or not driver_major or chrome_major == driver_major:
+        return None
+    driver_dir = os.path.dirname(os.path.abspath(chromedriver))
+    path_parts = os.environ.get("PATH", "").split(os.pathsep)
+    filtered_parts = [
+        part for part in path_parts
+        if os.path.abspath(part or ".") != driver_dir
+    ]
+    return os.pathsep.join(filtered_parts)
+
+
 def create_driver():
     options = Options()
     options.add_argument("--headless=new")
@@ -904,11 +934,19 @@ def create_driver():
     if chrome_binary:
         options.binary_location = chrome_binary
 
-    service = Service()
-    driver = webdriver.Chrome(
-        service=service,
-        options=options,
-    )
+    explicit_driver = os.environ.get("CHROMEDRIVER_PATH")
+    chromedriver = explicit_driver or shutil.which("chromedriver") or ""
+    service = Service(executable_path=explicit_driver) if explicit_driver and os.path.exists(explicit_driver) else None
+    original_path = os.environ.get("PATH", "")
+    fallback_path = _path_without_incompatible_chromedriver(chrome_binary, chromedriver)
+    try:
+        if fallback_path is not None and not service:
+            print("Ignoring incompatible chromedriver from PATH; Selenium Manager will resolve a matching driver.", flush=True)
+            os.environ["PATH"] = fallback_path
+        driver = webdriver.Chrome(service=service, options=options) if service else webdriver.Chrome(options=options)
+    finally:
+        if fallback_path is not None:
+            os.environ["PATH"] = original_path
     return driver
 
 
