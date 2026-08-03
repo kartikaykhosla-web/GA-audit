@@ -34,6 +34,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import TimeoutException
 
 
 SUPABASE_JOB_TABLE = "bulk_audit_jobs"
@@ -983,6 +984,14 @@ def create_driver():
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
     )
+    options.page_load_strategy = "eager"
+    options.add_experimental_option(
+        "prefs",
+        {
+            "profile.managed_default_content_settings.images": 2,
+            "profile.default_content_setting_values.notifications": 2,
+        },
+    )
     options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     chrome_binary = os.environ.get("CHROME_BINARY") or os.environ.get("CHROME_PATH")
     if chrome_binary:
@@ -1001,6 +1010,38 @@ def create_driver():
     finally:
         if fallback_path is not None:
             os.environ["PATH"] = original_path
+    page_load_timeout = int(os.environ.get("BULK_PAGE_LOAD_TIMEOUT_SECONDS") or "20")
+    try:
+        driver.set_page_load_timeout(max(8, min(page_load_timeout, 60)))
+        driver.set_script_timeout(5)
+    except Exception:
+        pass
+    try:
+        driver.execute_cdp_cmd("Network.enable", {})
+        driver.execute_cdp_cmd(
+            "Network.setBlockedURLs",
+            {
+                "urls": [
+                    "*.jpg",
+                    "*.jpeg",
+                    "*.png",
+                    "*.gif",
+                    "*.webp",
+                    "*.svg",
+                    "*.avif",
+                    "*.mp4",
+                    "*.webm",
+                    "*.m3u8",
+                    "*.ts",
+                    "*.woff",
+                    "*.woff2",
+                    "*.ttf",
+                    "*.otf",
+                ]
+            },
+        )
+    except Exception:
+        pass
     return driver
 
 
@@ -2595,7 +2636,13 @@ def audit_url(plan_row: dict, wait_seconds: int, driver=None) -> dict:
         except Exception:
             pass
         install_datalayer_probe(driver)
-        driver.get(sample_url)
+        try:
+            driver.get(sample_url)
+        except TimeoutException:
+            try:
+                driver.execute_script("window.stop();")
+            except Exception:
+                pass
         interaction_start = time.time()
         try:
             driver.execute_script(
