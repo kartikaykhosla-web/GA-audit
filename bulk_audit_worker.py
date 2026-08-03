@@ -1271,6 +1271,34 @@ def template_requires_scroll_capture(rules: List[dict]) -> bool:
     return False
 
 
+def chartbeat_check_applies_to_text(value: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", str(value or "").strip().lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized or "video interaction" in normalized:
+        return False
+    is_homepage = "homepage" in normalized or "home page" in normalized
+    is_article = (
+        normalized in {"article", "article page", "article detail"}
+        or "article detail" in normalized
+        or "article page" in normalized
+    )
+    return is_homepage or is_article
+
+
+def template_requires_chartbeat_check(template: dict, rules: List[dict]) -> bool:
+    candidates = [
+        template.get("template_name"),
+        template.get("page_type"),
+        template.get("template_page_type"),
+        template.get("pageType"),
+    ]
+    for rule in rules or []:
+        field_name = str(rule.get("field_name") or "").strip().lower()
+        if field_name in {"page_type", "page type"}:
+            candidates.append(rule.get("expected_values"))
+    return any(chartbeat_check_applies_to_text(candidate) for candidate in candidates)
+
+
 def _click_element(driver, element) -> bool:
     try:
         driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", element)
@@ -2503,6 +2531,7 @@ def audit_url(plan_row: dict, wait_seconds: int, driver=None) -> dict:
         driver = create_driver()
     requires_video_playback = template_requires_video_playback(rules)
     requires_scroll_capture = template_requires_scroll_capture(rules)
+    requires_chartbeat_check = template_requires_chartbeat_check(template, rules)
     page_video_expected = False
     try:
         try:
@@ -2610,18 +2639,21 @@ def audit_url(plan_row: dict, wait_seconds: int, driver=None) -> dict:
         resource_timing_network = extract_resource_timing_network(driver)
         transport_network = extract_probe_transport(probe)
         gtag_events = extract_probe_gtag_events(probe)
-        if not (
+        comscore_missing = not (
             network["comscore_hits"]
             or performance_network["comscore_hits"]
             or resource_timing_network["comscore_hits"]
             or transport_network["comscore_hits"]
-        ) or not (
+        )
+        chartbeat_missing = not (
             network["chartbeat_hits"]
             or performance_network["chartbeat_hits"]
             or resource_timing_network["chartbeat_hits"]
             or transport_network["chartbeat_hits"]
-        ):
-            time.sleep(2.0)
+        )
+        late_vendor_wait_seconds = float(os.environ.get("BULK_LATE_VENDOR_WAIT_SECONDS") or "1")
+        if late_vendor_wait_seconds > 0 and (comscore_missing or (requires_chartbeat_check and chartbeat_missing)):
+            time.sleep(min(late_vendor_wait_seconds, 3.0))
             late_probe = get_probe_payload(driver)
             late_network = extract_network(driver)
             late_performance_network = extract_performance_log_network(driver)

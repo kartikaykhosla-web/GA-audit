@@ -14487,7 +14487,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
             "Wait time per URL after page load (seconds)",
             min_value=4,
             max_value=20,
-            value=8,
+            value=5,
             key="domain_audit_wait_seconds",
         )
         active_domain_templates = auditable_templates
