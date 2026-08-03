@@ -2821,6 +2821,19 @@ def audit_url(plan_row: dict, wait_seconds: int, driver=None) -> dict:
             if normalize_event_name(item.get("event")) in {"pageview", "page_view"}:
                 selected_event = item
                 break
+    if selected_event and not any(
+        normalize_event_name(event.get("event_name") or "") == "page_view"
+        for event in ga_events
+    ):
+        ga_events.append(
+            {
+                "event_name": "page_view",
+                "params": compact_datalayer_payload(selected_event),
+                "status": "Observed",
+                "url": "",
+                "source": "dataLayer",
+            }
+        )
     selected_index = None
     if selected_event:
         selected_index = find_matching_datalayer_index(data_layer, selected_event)
