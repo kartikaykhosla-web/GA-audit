@@ -2192,15 +2192,21 @@ def run_video_mvp_capture(sample_url: str) -> Dict[str, Any]:
     if not os.path.exists(mvp_path):
         raise RuntimeError("video_event_mvp.py is missing from the bulk worker checkout.")
 
+    raw_timeout = os.environ.get("BULK_VIDEO_MVP_TIMEOUT_SECONDS", "75")
+    try:
+        timeout_seconds = max(30, min(int(str(raw_timeout or "75").strip()), 180))
+    except Exception:
+        timeout_seconds = 75
+
     output_path = ""
     try:
         with tempfile.NamedTemporaryFile(prefix="bulk-video-event-mvp-", suffix=".json", delete=False) as output_file:
             output_path = output_file.name
         completed = subprocess.run(
-            [sys.executable, mvp_path, "--url", sample_url, "--output", output_path, "--headless"],
+            [sys.executable, mvp_path, "--url", sample_url, "--output", output_path, "--headless", "--fast"],
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=timeout_seconds,
         )
         with open(output_path, "r", encoding="utf-8") as output_file:
             result = json.load(output_file)
@@ -2208,7 +2214,7 @@ def run_video_mvp_capture(sample_url: str) -> Dict[str, Any]:
             result["error"] = (completed.stderr or completed.stdout or "MVP capture subprocess failed.").strip()
         return result
     except subprocess.TimeoutExpired:
-        return {"error": "MVP capture subprocess timed out after 180 seconds.", "url": sample_url, "debug_steps": []}
+        return {"error": f"MVP capture subprocess timed out after {timeout_seconds} seconds.", "url": sample_url, "debug_steps": []}
     finally:
         if output_path:
             try:

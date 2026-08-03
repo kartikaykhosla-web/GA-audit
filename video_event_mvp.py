@@ -1131,7 +1131,12 @@ def normalized_has_field(normalized: Dict[str, Any], field_name: str) -> bool:
     return False
 
 
-def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional[bool] = None) -> Dict[str, Any]:
+def capture_video_event(
+    url: str,
+    headless: bool,
+    prefer_related_embed: Optional[bool] = None,
+    fast_mode: bool = False,
+) -> Dict[str, Any]:
     driver = None
     debug_steps: List[Dict[str, Any]] = []
     try:
@@ -1251,7 +1256,7 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
         latest_state = {}
         latest_video_state = {}
         any_click = clicked_initial or clicked_control or clicked_control_after_reset
-        poll_seconds = 26 if any_click else 2
+        poll_seconds = (12 if fast_mode else 26) if any_click else 2
         while time.time() - start < poll_seconds:
             latest_state = extract_state(driver)
             normalized = normalize_video_events(latest_state)
@@ -1260,11 +1265,12 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
                 matched = normalized
                 if first_match_at is None:
                     first_match_at = time.time()
-                if normalized_has_minimum_video_percent(normalized, 25.0) or time.time() - first_match_at >= 18:
+                max_match_wait = 8 if fast_mode else 18
+                if normalized_has_minimum_video_percent(normalized, 25.0) or time.time() - first_match_at >= max_match_wait:
                     break
             time.sleep(1.0)
 
-        if matched is None and auto_target and not prefer_related_embed:
+        if matched is None and auto_target and not prefer_related_embed and not fast_mode:
             debug_steps.append({"step": "fallback_to_related_embed", "reason": "primary_video_no_event"})
             related_found = scroll_to_related_video_embed(driver)
             debug_steps.append({"step": "scroll_to_related_video_embed", "success": related_found})
@@ -1346,8 +1352,19 @@ def capture_video_event(url: str, headless: bool, prefer_related_embed: Optional
         safe_quit(driver)
 
 
-def run_capture(url: str, headless: bool, output_path: Optional[str], prefer_related_embed: Optional[bool] = None) -> int:
-    result = capture_video_event(url=url, headless=headless, prefer_related_embed=prefer_related_embed)
+def run_capture(
+    url: str,
+    headless: bool,
+    output_path: Optional[str],
+    prefer_related_embed: Optional[bool] = None,
+    fast_mode: bool = False,
+) -> int:
+    result = capture_video_event(
+        url=url,
+        headless=headless,
+        prefer_related_embed=prefer_related_embed,
+        fast_mode=fast_mode,
+    )
     text = json.dumps(result, ensure_ascii=False, indent=2)
     print(text)
     if output_path:
@@ -1362,6 +1379,7 @@ def main() -> int:
     parser.add_argument("--url", default=DEFAULT_URL, help="Article URL to probe")
     parser.add_argument("--headless", action="store_true", help="Run Chrome headless")
     parser.add_argument("--prefer-related-embed", action="store_true", help="Target the end-of-page related video embed")
+    parser.add_argument("--fast", action="store_true", help="Use shorter polling and skip fallback probes for bulk audits")
     parser.add_argument("--output", default="", help="Optional JSON output file path")
     args = parser.parse_args()
     return run_capture(
@@ -1369,6 +1387,7 @@ def main() -> int:
         headless=args.headless,
         output_path=args.output or None,
         prefer_related_embed=True if args.prefer_related_embed else None,
+        fast_mode=args.fast,
     )
 
 
