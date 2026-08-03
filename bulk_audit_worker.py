@@ -306,6 +306,40 @@ def neon_update_job(job_id: str, values: dict):
             )
 
 
+def neon_record_job_result(job_id: str, total_count: int, row_failed: bool) -> dict:
+    ensure_neon_ready()
+    completed_at = utc_now()
+    with neon_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE bulk_audit_jobs
+                SET total_count = %s,
+                    completed_count = COALESCE(completed_count, 0) + 1,
+                    failed_count = COALESCE(failed_count, 0) + %s,
+                    status = CASE
+                        WHEN COALESCE(completed_count, 0) + 1 >= %s THEN 'completed'
+                        ELSE 'running'
+                    END,
+                    completed_at = CASE
+                        WHEN COALESCE(completed_count, 0) + 1 >= %s THEN %s
+                        ELSE completed_at
+                    END
+                WHERE job_id = %s
+                RETURNING completed_count, failed_count, status
+                """,
+                (
+                    int(total_count or 0),
+                    1 if row_failed else 0,
+                    int(total_count or 0),
+                    int(total_count or 0),
+                    completed_at,
+                    job_id,
+                ),
+            )
+            return dict(cur.fetchone() or {})
+
+
 def neon_load_job(job_id: str) -> dict:
     ensure_neon_ready()
     with neon_connect() as conn:
@@ -855,6 +889,24 @@ def update_job(job_id: str, values: dict):
         payload=values,
         prefer="return=minimal",
     )
+
+
+def record_job_result(job_id: str, total_count: int, row_failed: bool) -> dict:
+    if neon_is_configured():
+        return neon_record_job_result(job_id, total_count, row_failed)
+    job = load_job(job_id)
+    completed_count = int(job.get("completed_count") or 0) + 1
+    failed_count = int(job.get("failed_count") or 0) + (1 if row_failed else 0)
+    values = {
+        "total_count": total_count,
+        "completed_count": completed_count,
+        "failed_count": failed_count,
+        "status": "completed" if completed_count >= int(total_count or 0) else "running",
+    }
+    if values["status"] == "completed":
+        values["completed_at"] = utc_now()
+    update_job(job_id, values)
+    return values
 
 
 def load_job(job_id: str) -> dict:
@@ -2984,6 +3036,8 @@ def audit_plan_row(payload: dict, plan_row: dict, wait_seconds: int) -> tuple:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--job-id", required=True)
+    parser.add_argument("--chunk-index", type=int, default=0)
+    parser.add_argument("--chunk-count", type=int, default=1)
     args = parser.parse_args()
 
     require_storage_backend()
@@ -2993,8 +3047,16 @@ def main():
         payload = json.loads(payload)
     plan = payload.get("plan") or []
     plan = refresh_plan_rules_from_store(plan)
-    wait_seconds = int(payload.get("wait_seconds") or 8)
     total = len(plan)
+    chunk_count = max(1, int(args.chunk_count or 1))
+    chunk_index = max(0, min(int(args.chunk_index or 0), chunk_count - 1))
+    if chunk_count > 1:
+        plan = [row for index, row in enumerate(plan) if index % chunk_count == chunk_index]
+        print(
+            f"Processing chunk {chunk_index + 1}/{chunk_count}: {len(plan)} of {total} plan rows.",
+            flush=True,
+        )
+    wait_seconds = int(payload.get("wait_seconds") or 8)
 
     if str(job.get("status") or "").strip().lower() == "cancelled":
         update_job(args.job_id, {"status": "cancelled", "completed_at": utc_now(), "total_count": total})
@@ -3024,7 +3086,7 @@ def main():
                     failed += 1
                 insert_result(args.job_id, plan_row, result)
                 completed += 1
-                update_job(args.job_id, {"completed_count": completed, "failed_count": failed})
+                record_job_result(args.job_id, total, row_failed)
         else:
             plan_iter = iter(plan)
             pending = set()
@@ -3051,7 +3113,7 @@ def main():
                                 failed += 1
                             insert_result(args.job_id, plan_row, result)
                             completed += 1
-                            update_job(args.job_id, {"completed_count": completed, "failed_count": failed})
+                            record_job_result(args.job_id, total, row_failed)
                     if is_job_cancelled(args.job_id):
                         update_job(
                             args.job_id,
@@ -3066,9 +3128,10 @@ def main():
                     while len(pending) < concurrency:
                         if not submit_next():
                             break
-        update_job(args.job_id, {"status": "completed", "completed_at": utc_now(), "completed_count": completed, "failed_count": failed})
+        if not plan and chunk_count <= 1:
+            update_job(args.job_id, {"status": "completed", "completed_at": utc_now(), "completed_count": completed, "failed_count": failed})
     except Exception as exc:
-        update_job(args.job_id, {"status": "failed", "error_message": str(exc), "completed_at": utc_now(), "completed_count": completed, "failed_count": failed})
+        update_job(args.job_id, {"status": "failed", "error_message": str(exc), "completed_at": utc_now()})
         raise
 
 

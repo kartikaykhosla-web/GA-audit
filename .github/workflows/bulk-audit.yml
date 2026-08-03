@@ -7,6 +7,16 @@ on:
         description: Supabase bulk_audit_jobs.job_id to process
         required: true
         type: string
+      chunk_index:
+        description: Zero-based worker chunk index
+        required: false
+        default: "0"
+        type: string
+      chunk_count:
+        description: Total worker chunks for this job
+        required: false
+        default: "1"
+        type: string
 
 jobs:
   audit:
@@ -51,4 +61,4 @@ jobs:
       - name: Run bulk audit worker
         env:
           CHROME_BINARY: ${{ steps.setup-chrome.outputs.chrome-path }}
-        run: python bulk_audit_worker.py --job-id "${{ inputs.job_id }}"
+        run: python bulk_audit_worker.py --job-id "${{ inputs.job_id }}" --chunk-index "${{ inputs.chunk_index }}" --chunk-count "${{ inputs.chunk_count }}"

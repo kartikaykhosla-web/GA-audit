@@ -6723,7 +6723,7 @@ def github_is_configured() -> bool:
     return bool(settings["owner"] and settings["repo"] and settings["workflow"] and settings["token"])
 
 
-def trigger_bulk_audit_workflow(job_id: str) -> Tuple[bool, str]:
+def trigger_bulk_audit_workflow(job_id: str, chunk_index: int = 0, chunk_count: int = 1) -> Tuple[bool, str]:
     settings = get_github_settings()
     missing = [key for key in ("owner", "repo", "workflow", "token") if not settings.get(key)]
     if missing:
@@ -6739,12 +6739,48 @@ def trigger_bulk_audit_workflow(job_id: str) -> Tuple[bool, str]:
             "Authorization": f"Bearer {settings['token']}",
             "X-GitHub-Api-Version": "2022-11-28",
         },
-        json={"ref": settings["ref"], "inputs": {"job_id": job_id}},
+        json={
+            "ref": settings["ref"],
+            "inputs": {
+                "job_id": job_id,
+                "chunk_index": str(int(chunk_index or 0)),
+                "chunk_count": str(max(1, int(chunk_count or 1))),
+            },
+        },
         timeout=30,
     )
     if response.status_code not in {200, 201, 204}:
         return False, f"GitHub workflow trigger failed: {response.status_code} {response.text}"
     return True, "GitHub bulk audit workflow started."
+
+
+def get_bulk_audit_workflow_chunks(total_count: int) -> int:
+    try:
+        configured = int(str(os.environ.get("BULK_AUDIT_WORKFLOW_CHUNKS") or "").strip() or "0")
+    except Exception:
+        configured = 0
+    if configured > 0:
+        return max(1, min(configured, 8, max(1, int(total_count or 1))))
+    if total_count >= 40:
+        return 5
+    if total_count >= 20:
+        return 3
+    return 1
+
+
+def trigger_bulk_audit_workflows(job_id: str, total_count: int) -> Tuple[bool, str]:
+    chunk_count = get_bulk_audit_workflow_chunks(total_count)
+    errors = []
+    for chunk_index in range(chunk_count):
+        success, message = trigger_bulk_audit_workflow(job_id, chunk_index, chunk_count)
+        if not success:
+            errors.append(f"chunk {chunk_index + 1}/{chunk_count}: {message}")
+            break
+    if errors:
+        return False, "GitHub workflow trigger failed. " + " | ".join(errors)
+    if chunk_count == 1:
+        return True, "GitHub bulk audit workflow started."
+    return True, f"GitHub bulk audit started with {chunk_count} parallel workflow chunks."
 
 
 def get_bulk_jobs_worksheet():
@@ -12034,7 +12070,7 @@ def create_and_dispatch_bulk_audit_job(
     if not success:
         return False, response, ""
     job_id = response
-    trigger_success, trigger_message = trigger_bulk_audit_workflow(job_id)
+    trigger_success, trigger_message = trigger_bulk_audit_workflows(job_id, len(plan_rows))
     if not trigger_success:
         return False, trigger_message, job_id
     dispatch_marked, dispatch_message = mark_bulk_audit_job_dispatched(job_id)
@@ -12042,7 +12078,7 @@ def create_and_dispatch_bulk_audit_job(
     st.session_state["bulk_audit_force_latest_job_id"] = job_id
     if not dispatch_marked:
         return True, f"Bulk audit dispatched, but status could not be marked as dispatched: {dispatch_message}", job_id
-    return True, f"Bulk audit dispatched to GitHub Actions. Job ID: {job_id}", job_id
+    return True, f"{trigger_message} Job ID: {job_id}", job_id
 
 
 def summarize_validation_failures(
@@ -14659,14 +14695,14 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     st.error(response)
                 else:
                     job_id = response
-                    trigger_success, trigger_message = trigger_bulk_audit_workflow(job_id)
+                    trigger_success, trigger_message = trigger_bulk_audit_workflows(job_id, len(audit_plan))
                     if trigger_success:
                         dispatch_marked, dispatch_message = mark_bulk_audit_job_dispatched(job_id)
                         st.session_state["latest_bulk_audit_job_id"] = job_id
                         st.session_state["bulk_audit_force_latest_job_id"] = job_id
                         if not dispatch_marked:
                             st.warning(dispatch_message)
-                        st.success(f"Bulk audit dispatched to GitHub Actions. Job ID: {job_id}")
+                        st.success(f"{trigger_message} Job ID: {job_id}")
                     else:
                         st.error(trigger_message)
 
