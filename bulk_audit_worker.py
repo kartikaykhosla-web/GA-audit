@@ -94,6 +94,8 @@ VIDEO_EXECUTION_FIELDS = {
     "video_duration",
     "video_title",
 }
+
+_WORKER_LOCAL = threading.local()
 VIDEO_INTERACTION_DEPENDENT_FIELDS = {
     "player_type",
     "position_fold",
@@ -2485,7 +2487,7 @@ def audit_video_mvp_url(plan_row: dict, wait_seconds: int) -> dict:
     }
 
 
-def audit_url(plan_row: dict, wait_seconds: int) -> dict:
+def audit_url(plan_row: dict, wait_seconds: int, driver=None) -> dict:
     if str(plan_row.get("capture_mode") or "").strip().lower() == "video_mvp":
         return audit_video_mvp_url(plan_row, wait_seconds)
 
@@ -2496,7 +2498,9 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
         raise RuntimeError(plan_row.get("sample_error") or "No sample URL available.")
 
     start = time.time()
-    driver = create_driver()
+    owns_driver = driver is None
+    if owns_driver:
+        driver = create_driver()
     requires_video_playback = template_requires_video_playback(rules)
     requires_scroll_capture = template_requires_scroll_capture(rules)
     page_video_expected = False
@@ -2651,10 +2655,11 @@ def audit_url(plan_row: dict, wait_seconds: int) -> dict:
                 late_transport_network["chartbeat_hits"],
             )
     finally:
-        try:
-            driver.quit()
-        except Exception:
-            pass
+        if owns_driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
     data_layer = probe.get("pushes") if isinstance(probe.get("pushes"), list) else []
     state = probe.get("state") if isinstance(probe.get("state"), dict) else {}
@@ -2866,11 +2871,11 @@ def get_bulk_audit_concurrency(total: int) -> int:
         return 1
     if sheet_storage_is_configured() and not (neon_is_configured() or supabase_is_configured()):
         return 1
-    raw_value = os.environ.get("BULK_AUDIT_CONCURRENCY", "3")
+    raw_value = os.environ.get("BULK_AUDIT_CONCURRENCY", "4")
     try:
-        concurrency = int(str(raw_value or "3").strip())
+        concurrency = int(str(raw_value or "4").strip())
     except Exception:
-        concurrency = 3
+        concurrency = 4
     return max(1, min(concurrency, 6, total))
 
 
@@ -2899,10 +2904,48 @@ def build_worker_error_result(payload: dict, plan_row: dict, exc: Exception) -> 
     }
 
 
-def audit_plan_row(payload: dict, plan_row: dict, wait_seconds: int) -> tuple:
+def _quit_worker_driver() -> None:
+    driver = getattr(_WORKER_LOCAL, "driver", None)
+    if driver is None:
+        return
     try:
-        return plan_row, audit_url(plan_row, wait_seconds), False
+        driver.quit()
+    except Exception:
+        pass
+    _WORKER_LOCAL.driver = None
+
+
+def audit_plan_row(payload: dict, plan_row: dict, wait_seconds: int) -> tuple:
+    template = plan_row.get("template") or {}
+    template_name = str(template.get("template_name") or plan_row.get("template_name") or "Unnamed template")
+    capture_mode = str(plan_row.get("capture_mode") or "standard").strip().lower() or "standard"
+    row_start = time.time()
+    print(f"Starting {capture_mode} audit: {template_name}", flush=True)
+    try:
+        if str(plan_row.get("capture_mode") or "").strip().lower() == "video_mvp":
+            result = audit_url(plan_row, wait_seconds)
+            print(f"Finished {capture_mode} audit in {time.time() - row_start:.1f}s: {template_name}", flush=True)
+            return plan_row, result, False
+
+        driver = getattr(_WORKER_LOCAL, "driver", None)
+        if driver is None:
+            driver = create_driver()
+            _WORKER_LOCAL.driver = driver
+        try:
+            result = audit_url(plan_row, wait_seconds, driver=driver)
+            print(f"Finished {capture_mode} audit in {time.time() - row_start:.1f}s: {template_name}", flush=True)
+            return plan_row, result, False
+        except Exception:
+            _quit_worker_driver()
+            driver = create_driver()
+            _WORKER_LOCAL.driver = driver
+            result = audit_url(plan_row, wait_seconds, driver=driver)
+            print(f"Finished {capture_mode} audit after driver retry in {time.time() - row_start:.1f}s: {template_name}", flush=True)
+            return plan_row, result, False
     except Exception as exc:
+        if str(plan_row.get("capture_mode") or "").strip().lower() != "video_mvp":
+            _quit_worker_driver()
+        print(f"Failed {capture_mode} audit in {time.time() - row_start:.1f}s: {template_name}: {exc}", flush=True)
         return plan_row, build_worker_error_result(payload, plan_row, exc), True
 
 
