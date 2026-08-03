@@ -2312,11 +2312,11 @@ def run_video_mvp_capture(sample_url: str) -> Dict[str, Any]:
     if not os.path.exists(mvp_path):
         raise RuntimeError("video_event_mvp.py is missing from the bulk worker checkout.")
 
-    raw_timeout = os.environ.get("BULK_VIDEO_MVP_TIMEOUT_SECONDS", "75")
+    raw_timeout = os.environ.get("BULK_VIDEO_MVP_TIMEOUT_SECONDS", "30")
     try:
-        timeout_seconds = max(30, min(int(str(raw_timeout or "75").strip()), 180))
+        timeout_seconds = max(15, min(int(str(raw_timeout or "30").strip()), 180))
     except Exception:
-        timeout_seconds = 75
+        timeout_seconds = 30
 
     output_path = ""
     try:
