@@ -988,7 +988,6 @@ def create_driver():
     options.add_experimental_option(
         "prefs",
         {
-            "profile.managed_default_content_settings.images": 2,
             "profile.default_content_setting_values.notifications": 2,
         },
     )
@@ -1022,13 +1021,6 @@ def create_driver():
             "Network.setBlockedURLs",
             {
                 "urls": [
-                    "*.jpg",
-                    "*.jpeg",
-                    "*.png",
-                    "*.gif",
-                    "*.webp",
-                    "*.svg",
-                    "*.avif",
                     "*.mp4",
                     "*.webm",
                     "*.m3u8",
