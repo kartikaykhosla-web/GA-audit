@@ -3040,6 +3040,74 @@ def build_worker_error_result(payload: dict, plan_row: dict, exc: Exception) -> 
     }
 
 
+def get_bulk_row_timeout_seconds() -> int:
+    raw_value = os.environ.get("BULK_ROW_TIMEOUT_SECONDS", "90")
+    try:
+        return max(30, min(int(str(raw_value or "90").strip()), 300))
+    except Exception:
+        return 90
+
+
+def run_single_plan_row(input_path: str, output_path: str) -> int:
+    with open(input_path, "r", encoding="utf-8") as handle:
+        row_payload = json.load(handle)
+    payload = row_payload.get("payload") or {}
+    plan_row = row_payload.get("plan_row") or {}
+    wait_seconds = int(row_payload.get("wait_seconds") or 8)
+    plan_row, result, row_failed = audit_plan_row(payload, plan_row, wait_seconds, allow_subprocess=False)
+    with open(output_path, "w", encoding="utf-8") as handle:
+        json.dump({"result": result, "row_failed": bool(row_failed)}, handle)
+    return 0
+
+
+def audit_plan_row_in_subprocess(payload: dict, plan_row: dict, wait_seconds: int) -> tuple:
+    template = plan_row.get("template") or {}
+    template_name = str(template.get("template_name") or plan_row.get("template_name") or "Unnamed template")
+    capture_mode = str(plan_row.get("capture_mode") or "standard").strip().lower() or "standard"
+    timeout_seconds = get_bulk_row_timeout_seconds()
+    row_start = time.time()
+    print(f"Starting {capture_mode} audit subprocess: {template_name}", flush=True)
+    input_path = ""
+    output_path = ""
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".json") as input_file:
+            input_path = input_file.name
+            json.dump({"payload": payload, "plan_row": plan_row, "wait_seconds": wait_seconds}, input_file)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".json") as output_file:
+            output_path = output_file.name
+        completed = subprocess.run(
+            [sys.executable, __file__, "--single-row-input", input_path, "--single-row-output", output_path],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        if completed.stdout:
+            print(completed.stdout.strip(), flush=True)
+        if completed.stderr:
+            print(completed.stderr.strip(), flush=True)
+        if completed.returncode != 0:
+            raise RuntimeError(f"Row subprocess failed with exit code {completed.returncode}")
+        with open(output_path, "r", encoding="utf-8") as handle:
+            result_payload = json.load(handle)
+        print(f"Finished {capture_mode} audit subprocess in {time.time() - row_start:.1f}s: {template_name}", flush=True)
+        return plan_row, result_payload.get("result") or {}, bool(result_payload.get("row_failed"))
+    except subprocess.TimeoutExpired:
+        message = f"Bulk row audit timed out after {timeout_seconds} seconds."
+        print(f"Failed {capture_mode} audit subprocess in {time.time() - row_start:.1f}s: {template_name}: {message}", flush=True)
+        return plan_row, build_worker_error_result(payload, plan_row, RuntimeError(message)), True
+    except Exception as exc:
+        print(f"Failed {capture_mode} audit subprocess in {time.time() - row_start:.1f}s: {template_name}: {exc}", flush=True)
+        return plan_row, build_worker_error_result(payload, plan_row, exc), True
+    finally:
+        for path in (input_path, output_path):
+            if not path:
+                continue
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
+
+
 def _quit_worker_driver() -> None:
     driver = getattr(_WORKER_LOCAL, "driver", None)
     if driver is None:
@@ -3051,7 +3119,9 @@ def _quit_worker_driver() -> None:
     _WORKER_LOCAL.driver = None
 
 
-def audit_plan_row(payload: dict, plan_row: dict, wait_seconds: int) -> tuple:
+def audit_plan_row(payload: dict, plan_row: dict, wait_seconds: int, allow_subprocess: bool = True) -> tuple:
+    if allow_subprocess:
+        return audit_plan_row_in_subprocess(payload, plan_row, wait_seconds)
     template = plan_row.get("template") or {}
     template_name = str(template.get("template_name") or plan_row.get("template_name") or "Unnamed template")
     capture_mode = str(plan_row.get("capture_mode") or "standard").strip().lower() or "standard"
@@ -3087,10 +3157,20 @@ def audit_plan_row(payload: dict, plan_row: dict, wait_seconds: int) -> tuple:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--job-id", required=True)
+    parser.add_argument("--job-id", required=False)
     parser.add_argument("--chunk-index", type=int, default=0)
     parser.add_argument("--chunk-count", type=int, default=1)
+    parser.add_argument("--single-row-input", default="")
+    parser.add_argument("--single-row-output", default="")
     args = parser.parse_args()
+
+    if args.single_row_input:
+        if not args.single_row_output:
+            raise RuntimeError("--single-row-output is required with --single-row-input")
+        raise SystemExit(run_single_plan_row(args.single_row_input, args.single_row_output))
+
+    if not args.job_id:
+        raise RuntimeError("--job-id is required")
 
     require_storage_backend()
     job = load_job(args.job_id)
