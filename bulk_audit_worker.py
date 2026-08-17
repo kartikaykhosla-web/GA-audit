@@ -3007,11 +3007,11 @@ def get_bulk_audit_concurrency(total: int) -> int:
         return 1
     if sheet_storage_is_configured() and not (neon_is_configured() or supabase_is_configured()):
         return 1
-    raw_value = os.environ.get("BULK_AUDIT_CONCURRENCY", "2")
+    raw_value = os.environ.get("BULK_AUDIT_CONCURRENCY", "1")
     try:
-        concurrency = int(str(raw_value or "2").strip())
+        concurrency = int(str(raw_value or "1").strip())
     except Exception:
-        concurrency = 2
+        concurrency = 1
     return max(1, min(concurrency, 4, total))
 
 
@@ -3049,14 +3049,17 @@ def get_bulk_row_timeout_seconds() -> int:
 
 
 def run_single_plan_row(input_path: str, output_path: str) -> int:
-    with open(input_path, "r", encoding="utf-8") as handle:
-        row_payload = json.load(handle)
-    payload = row_payload.get("payload") or {}
-    plan_row = row_payload.get("plan_row") or {}
-    wait_seconds = int(row_payload.get("wait_seconds") or 8)
-    plan_row, result, row_failed = audit_plan_row(payload, plan_row, wait_seconds, allow_subprocess=False)
-    with open(output_path, "w", encoding="utf-8") as handle:
-        json.dump({"result": result, "row_failed": bool(row_failed)}, handle)
+    try:
+        with open(input_path, "r", encoding="utf-8") as handle:
+            row_payload = json.load(handle)
+        payload = row_payload.get("payload") or {}
+        plan_row = row_payload.get("plan_row") or {}
+        wait_seconds = int(row_payload.get("wait_seconds") or 8)
+        plan_row, result, row_failed = audit_plan_row(payload, plan_row, wait_seconds, allow_subprocess=False)
+        with open(output_path, "w", encoding="utf-8") as handle:
+            json.dump({"result": result, "row_failed": bool(row_failed)}, handle)
+    finally:
+        _quit_worker_driver()
     return 0
 
 
