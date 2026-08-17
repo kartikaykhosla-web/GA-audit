@@ -170,13 +170,3 @@ Legacy Supabase fallback, only if still needed:
    - `Bulk Audit Results`
 4. Put the sheet ID in Streamlit `[sheets].spreadsheet_id`.
 5. Put the same sheet ID in the GitHub Actions secret `GOOGLE_SHEET_ID` if using Sheets for bulk worker storage.
-
-## Keep-Awake URL
-
-`.github/workflows/keep_streamlit_awake.yml` currently pings:
-
-```text
-https://ga4-audit.streamlit.app/
-```
-
-Update that URL if the migrated Streamlit app uses a different domain.
