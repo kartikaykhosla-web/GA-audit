@@ -3007,12 +3007,12 @@ def get_bulk_audit_concurrency(total: int) -> int:
         return 1
     if sheet_storage_is_configured() and not (neon_is_configured() or supabase_is_configured()):
         return 1
-    raw_value = os.environ.get("BULK_AUDIT_CONCURRENCY", "4")
+    raw_value = os.environ.get("BULK_AUDIT_CONCURRENCY", "2")
     try:
-        concurrency = int(str(raw_value or "4").strip())
+        concurrency = int(str(raw_value or "2").strip())
     except Exception:
-        concurrency = 4
-    return max(1, min(concurrency, 6, total))
+        concurrency = 2
+    return max(1, min(concurrency, 4, total))
 
 
 def build_worker_error_result(payload: dict, plan_row: dict, exc: Exception) -> dict:
@@ -3041,11 +3041,11 @@ def build_worker_error_result(payload: dict, plan_row: dict, exc: Exception) -> 
 
 
 def get_bulk_row_timeout_seconds() -> int:
-    raw_value = os.environ.get("BULK_ROW_TIMEOUT_SECONDS", "90")
+    raw_value = os.environ.get("BULK_ROW_TIMEOUT_SECONDS", "150")
     try:
-        return max(30, min(int(str(raw_value or "90").strip()), 300))
+        return max(45, min(int(str(raw_value or "150").strip()), 300))
     except Exception:
-        return 90
+        return 150
 
 
 def run_single_plan_row(input_path: str, output_path: str) -> int:
@@ -3199,6 +3199,7 @@ def main():
     failed = 0
     concurrency = get_bulk_audit_concurrency(total)
     print(f"Bulk audit worker concurrency: {concurrency}", flush=True)
+    print(f"Bulk audit row timeout: {get_bulk_row_timeout_seconds()}s", flush=True)
     try:
         if concurrency <= 1:
             for plan_row in plan:
