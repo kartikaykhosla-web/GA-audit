@@ -92,7 +92,7 @@ CLOUD_RUN_REGION=asia-south1
 CLOUD_RUN_JOB_NAME=ga-audit-worker
 ```
 
-The Cloud Run service account used by the Streamlit app needs permission to run the job. Grant a role that includes `run.jobs.run`, such as `roles/run.developer`, on the worker job or project.
+The Cloud Run service account used by the Streamlit app needs permission to run the job and cancel running executions from the Stop button. Grant a role that includes `run.jobs.run` and `run.executions.cancel`, such as `roles/run.developer`, on the worker job or project.
 
 The app also supports these aliases:
 

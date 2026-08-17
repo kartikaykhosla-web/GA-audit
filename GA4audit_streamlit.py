@@ -6758,6 +6758,13 @@ def cloud_run_job_is_configured() -> bool:
     return bool(settings["project_id"] and settings["region"] and settings["job_name"])
 
 
+def get_cloud_run_job_resource_name() -> str:
+    settings = get_cloud_run_job_settings()
+    if not (settings["project_id"] and settings["region"] and settings["job_name"]):
+        return ""
+    return f"projects/{settings['project_id']}/locations/{settings['region']}/jobs/{settings['job_name']}"
+
+
 def get_bulk_audit_launcher_name() -> str:
     if cloud_run_job_is_configured():
         return "Cloud Run Jobs"
@@ -6783,6 +6790,27 @@ def get_google_access_token() -> Tuple[bool, str]:
         return True, token
     except Exception as exc:
         return False, str(exc)
+
+
+def find_cloud_run_execution_name(payload: Any) -> str:
+    job_resource = get_cloud_run_job_resource_name()
+    if not job_resource:
+        return ""
+    found = []
+
+    def visit(value: Any):
+        if isinstance(value, str):
+            if "/executions/" in value and value.startswith(job_resource):
+                found.append(value)
+        elif isinstance(value, dict):
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload)
+    return found[0] if found else ""
 
 
 def trigger_cloud_run_audit_job(job_id: str, chunk_index: int = 0, chunk_count: int = 1) -> Tuple[bool, str]:
@@ -6825,7 +6853,155 @@ def trigger_cloud_run_audit_job(job_id: str, chunk_index: int = 0, chunk_count: 
     )
     if response.status_code not in {200, 201, 202}:
         return False, f"Cloud Run Job trigger failed: {response.status_code} {response.text}"
-    return True, "Cloud Run bulk audit job started."
+    try:
+        response_payload = response.json() if response.text else {}
+    except Exception:
+        response_payload = {}
+    execution_name = find_cloud_run_execution_name(response_payload)
+    if execution_name:
+        append_bulk_audit_cloud_run_execution(job_id, execution_name)
+    message = "Cloud Run bulk audit job started."
+    if execution_name:
+        message = f"{message} Execution: {execution_name.rsplit('/', 1)[-1]}"
+    return True, message
+
+
+def cancel_cloud_run_execution(execution_name: str) -> Tuple[bool, str]:
+    execution_name = str(execution_name or "").strip()
+    if not execution_name:
+        return False, "Cloud Run execution name is missing."
+    token_success, token_or_error = get_google_access_token()
+    if not token_success:
+        return False, f"Cloud Run Job authentication failed: {token_or_error}"
+    response = requests.post(
+        f"https://run.googleapis.com/v2/{execution_name}:cancel",
+        headers={
+            "Authorization": f"Bearer {token_or_error}",
+            "Content-Type": "application/json",
+        },
+        json={},
+        timeout=30,
+    )
+    if response.status_code in {200, 201, 202}:
+        return True, f"Cancelled {execution_name.rsplit('/', 1)[-1]}"
+    if response.status_code == 404:
+        return True, f"Execution already gone: {execution_name.rsplit('/', 1)[-1]}"
+    return False, f"{execution_name.rsplit('/', 1)[-1]}: {response.status_code} {response.text}"
+
+
+def append_bulk_audit_cloud_run_execution(job_id: str, execution_name: str) -> None:
+    job_id = str(job_id or "").strip()
+    execution_name = str(execution_name or "").strip()
+    if not job_id or not execution_name:
+        return
+    try:
+        if neon_is_configured():
+            ensure_neon_ready()
+            with neon_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT payload FROM bulk_audit_jobs WHERE job_id = %s LIMIT 1", (job_id,))
+                    record = cur.fetchone() or {}
+                    payload = dict(record.get("payload") or {})
+                    executions = [
+                        str(item)
+                        for item in (payload.get("cloud_run_executions") or [])
+                        if str(item or "").strip()
+                    ]
+                    if execution_name not in executions:
+                        executions.append(execution_name)
+                    payload["cloud_run_executions"] = executions
+                    cur.execute(
+                        "UPDATE bulk_audit_jobs SET payload = %s WHERE job_id = %s",
+                        (_jsonb(payload), job_id),
+                    )
+            return
+    except Exception:
+        if not sheet_storage_is_configured() and not supabase_is_configured():
+            return
+
+    if sheet_storage_is_configured():
+        try:
+            worksheet = get_bulk_jobs_worksheet()
+            row_index = _find_sheet_row_by_first_column(worksheet, job_id)
+            if row_index is None:
+                return
+            existing_row = worksheet.row_values(row_index)
+            existing_map = {
+                header: (existing_row[idx] if idx < len(existing_row) else "")
+                for idx, header in enumerate(BULK_JOB_HEADERS)
+            }
+            payload = _sheet_json(existing_map.get("payload"), {})
+            executions = [
+                str(item)
+                for item in (payload.get("cloud_run_executions") or [])
+                if str(item or "").strip()
+            ]
+            if execution_name not in executions:
+                executions.append(execution_name)
+            payload["cloud_run_executions"] = executions
+            _update_sheet_row(worksheet, BULK_JOB_HEADERS, row_index, {"payload": payload})
+            return
+        except Exception:
+            if not supabase_is_configured():
+                return
+
+    if supabase_is_configured():
+        try:
+            rows = supabase_request(
+                "GET",
+                SUPABASE_BULK_JOB_TABLE,
+                params={"job_id": f"eq.{job_id}", "select": "payload", "limit": "1"},
+            )
+            record = rows[0] if rows else {}
+            payload = dict(record.get("payload") or {})
+            executions = [
+                str(item)
+                for item in (payload.get("cloud_run_executions") or [])
+                if str(item or "").strip()
+            ]
+            if execution_name not in executions:
+                executions.append(execution_name)
+            payload["cloud_run_executions"] = executions
+            supabase_request(
+                "PATCH",
+                SUPABASE_BULK_JOB_TABLE,
+                params={"job_id": f"eq.{job_id}"},
+                payload={"payload": payload},
+                prefer="return=minimal",
+            )
+        except Exception:
+            return
+
+
+def extract_cloud_run_executions_from_job(job_record: Optional[dict]) -> List[str]:
+    payload = (job_record or {}).get("payload") or {}
+    if isinstance(payload, str):
+        payload = _sheet_json(payload, {})
+    executions = []
+    for item in payload.get("cloud_run_executions") or []:
+        item_text = str(item or "").strip()
+        if item_text and item_text not in executions:
+            executions.append(item_text)
+    return executions
+
+
+def cancel_cloud_run_executions_for_job(job_record: Optional[dict]) -> Tuple[bool, str]:
+    if not cloud_run_job_is_configured():
+        return True, ""
+    executions = extract_cloud_run_executions_from_job(job_record)
+    if not executions:
+        return True, "No Cloud Run execution name was stored for this job."
+    failures = []
+    successes = []
+    for execution_name in executions:
+        success, message = cancel_cloud_run_execution(execution_name)
+        if success:
+            successes.append(message)
+        else:
+            failures.append(message)
+    if failures:
+        return False, "Cloud Run cancellation failed: " + " | ".join(failures)
+    return True, "Cloud Run execution cancellation requested. " + " | ".join(successes)
 
 
 def trigger_bulk_audit_workflow(job_id: str, chunk_index: int = 0, chunk_count: int = 1) -> Tuple[bool, str]:
@@ -7116,10 +7292,14 @@ def load_bulk_audit_jobs(domain_name: str = "", limit: int = 10) -> Tuple[List[d
         return [], str(exc)
 
 
-def cancel_bulk_audit_job(job_id: str) -> Tuple[bool, str]:
+def cancel_bulk_audit_job(job_id: str, job_record: Optional[dict] = None) -> Tuple[bool, str]:
+    cloud_cancel_success, cloud_cancel_message = cancel_cloud_run_executions_for_job(job_record)
     if neon_is_configured():
         try:
-            return neon_cancel_bulk_audit_job(job_id)
+            success, message = neon_cancel_bulk_audit_job(job_id)
+            if cloud_cancel_message:
+                message = f"{message} {cloud_cancel_message}"
+            return success and cloud_cancel_success, message
         except Exception as exc:
             if not sheet_storage_is_configured():
                 return False, str(exc)
@@ -7140,7 +7320,10 @@ def cancel_bulk_audit_job(job_id: str) -> Tuple[bool, str]:
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
-            return True, "Bulk audit stop requested."
+            message = "Bulk audit stop requested."
+            if cloud_cancel_message:
+                message = f"{message} {cloud_cancel_message}"
+            return cloud_cancel_success, message
         except Exception as exc:
             return False, str(exc)
 
@@ -7159,7 +7342,10 @@ def cancel_bulk_audit_job(job_id: str) -> Tuple[bool, str]:
             },
             prefer="return=minimal",
         )
-        return True, "Bulk audit stop requested."
+        message = "Bulk audit stop requested."
+        if cloud_cancel_message:
+            message = f"{message} {cloud_cancel_message}"
+        return cloud_cancel_success, message
     except Exception as exc:
         return False, str(exc)
 
@@ -14896,10 +15082,10 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     disabled=job_status not in active_job_statuses,
                 )
                 if stop_clicked:
-                    cancel_success, cancel_message = cancel_bulk_audit_job(selected_job_id)
+                    cancel_success, cancel_message = cancel_bulk_audit_job(selected_job_id, selected_job)
                     if cancel_success:
                         st.session_state["latest_bulk_audit_job_id"] = selected_job_id
-                        st.warning("Audit stop requested. The worker will stop after the current URL finishes.")
+                        st.warning(cancel_message or "Audit stop requested.")
                         st.rerun()
                     else:
                         st.error(cancel_message)
