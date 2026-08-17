@@ -23,9 +23,13 @@ import requests
 import streamlit as st
 try:
     import gspread
+    import google.auth
+    from google.auth.transport.requests import Request as GoogleAuthRequest
     from google.oauth2.service_account import Credentials
 except Exception:
     gspread = None
+    google = None
+    GoogleAuthRequest = None
     Credentials = None
 try:
     import psycopg
@@ -6047,7 +6051,7 @@ def neon_mark_bulk_audit_job_dispatched(job_id: str) -> Tuple[bool, str]:
             )
             if cur.rowcount == 0:
                 return False, "Bulk audit job was already picked up or could not be found."
-    return True, "Bulk audit dispatched to GitHub Actions."
+    return True, f"Bulk audit dispatched to {get_bulk_audit_launcher_name()}."
 
 
 def neon_load_bulk_audit_results(job_id: str) -> Tuple[List[dict], str]:
@@ -6723,6 +6727,107 @@ def github_is_configured() -> bool:
     return bool(settings["owner"] and settings["repo"] and settings["workflow"] and settings["token"])
 
 
+def get_cloud_run_job_settings() -> Dict[str, str]:
+    settings = {
+        "project_id": (
+            os.environ.get("CLOUD_RUN_PROJECT_ID", "").strip()
+            or os.environ.get("GCP_PROJECT_ID", "").strip()
+            or os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+        ),
+        "region": (
+            os.environ.get("CLOUD_RUN_REGION", "").strip()
+            or os.environ.get("GCP_REGION", "").strip()
+            or os.environ.get("GOOGLE_CLOUD_REGION", "").strip()
+        ),
+        "job_name": os.environ.get("CLOUD_RUN_JOB_NAME", "").strip(),
+    }
+    try:
+        raw = st.secrets.get("cloud_run_job", {})
+    except Exception:
+        raw = {}
+    if raw:
+        raw_settings = dict(raw)
+        settings["project_id"] = settings["project_id"] or str(raw_settings.get("project_id") or "").strip()
+        settings["region"] = settings["region"] or str(raw_settings.get("region") or "").strip()
+        settings["job_name"] = settings["job_name"] or str(raw_settings.get("job_name") or "").strip()
+    return settings
+
+
+def cloud_run_job_is_configured() -> bool:
+    settings = get_cloud_run_job_settings()
+    return bool(settings["project_id"] and settings["region"] and settings["job_name"])
+
+
+def get_bulk_audit_launcher_name() -> str:
+    if cloud_run_job_is_configured():
+        return "Cloud Run Jobs"
+    if github_is_configured():
+        return "GitHub Actions"
+    return "bulk worker"
+
+
+def bulk_audit_launcher_is_configured() -> bool:
+    return cloud_run_job_is_configured() or github_is_configured()
+
+
+def get_google_access_token() -> Tuple[bool, str]:
+    if google is None or GoogleAuthRequest is None:
+        return False, "google-auth is not available in this runtime."
+    try:
+        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        if not credentials.valid:
+            credentials.refresh(GoogleAuthRequest())
+        token = str(getattr(credentials, "token", "") or "").strip()
+        if not token:
+            return False, "Google credentials did not return an access token."
+        return True, token
+    except Exception as exc:
+        return False, str(exc)
+
+
+def trigger_cloud_run_audit_job(job_id: str, chunk_index: int = 0, chunk_count: int = 1) -> Tuple[bool, str]:
+    settings = get_cloud_run_job_settings()
+    missing = [key for key in ("project_id", "region", "job_name") if not settings.get(key)]
+    if missing:
+        return False, f"Cloud Run Job trigger is not configured. Missing: {', '.join(missing)}."
+    token_success, token_or_error = get_google_access_token()
+    if not token_success:
+        return False, f"Cloud Run Job authentication failed: {token_or_error}"
+
+    url = (
+        f"https://run.googleapis.com/v2/projects/{settings['project_id']}"
+        f"/locations/{settings['region']}/jobs/{settings['job_name']}:run"
+    )
+    response = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {token_or_error}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "overrides": {
+                "containerOverrides": [
+                    {
+                        "args": [
+                            "bulk_audit_worker.py",
+                            "--job-id",
+                            job_id,
+                            "--chunk-index",
+                            str(int(chunk_index or 0)),
+                            "--chunk-count",
+                            str(max(1, int(chunk_count or 1))),
+                        ]
+                    }
+                ]
+            }
+        },
+        timeout=30,
+    )
+    if response.status_code not in {200, 201, 202}:
+        return False, f"Cloud Run Job trigger failed: {response.status_code} {response.text}"
+    return True, "Cloud Run bulk audit job started."
+
+
 def trigger_bulk_audit_workflow(job_id: str, chunk_index: int = 0, chunk_count: int = 1) -> Tuple[bool, str]:
     settings = get_github_settings()
     missing = [key for key in ("owner", "repo", "workflow", "token") if not settings.get(key)]
@@ -6770,17 +6875,19 @@ def get_bulk_audit_workflow_chunks(total_count: int) -> int:
 
 def trigger_bulk_audit_workflows(job_id: str, total_count: int) -> Tuple[bool, str]:
     chunk_count = get_bulk_audit_workflow_chunks(total_count)
+    launcher_name = get_bulk_audit_launcher_name()
+    trigger_one = trigger_cloud_run_audit_job if cloud_run_job_is_configured() else trigger_bulk_audit_workflow
     errors = []
     for chunk_index in range(chunk_count):
-        success, message = trigger_bulk_audit_workflow(job_id, chunk_index, chunk_count)
+        success, message = trigger_one(job_id, chunk_index, chunk_count)
         if not success:
             errors.append(f"chunk {chunk_index + 1}/{chunk_count}: {message}")
             break
     if errors:
-        return False, "GitHub workflow trigger failed. " + " | ".join(errors)
+        return False, f"{launcher_name} trigger failed. " + " | ".join(errors)
     if chunk_count == 1:
-        return True, "GitHub bulk audit workflow started."
-    return True, f"GitHub bulk audit started with {chunk_count} parallel workflow chunks."
+        return True, f"{launcher_name} bulk audit worker started."
+    return True, f"{launcher_name} bulk audit started with {chunk_count} parallel worker chunks."
 
 
 def get_bulk_jobs_worksheet():
@@ -7081,7 +7188,7 @@ def mark_bulk_audit_job_dispatched(job_id: str) -> Tuple[bool, str]:
                     "started_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
-            return True, "Bulk audit dispatched to GitHub Actions."
+            return True, f"Bulk audit dispatched to {get_bulk_audit_launcher_name()}."
         except Exception as exc:
             return False, str(exc)
 
@@ -7100,7 +7207,7 @@ def mark_bulk_audit_job_dispatched(job_id: str) -> Tuple[bool, str]:
             },
             prefer="return=minimal",
         )
-        return True, "Bulk audit dispatched to GitHub Actions."
+        return True, f"Bulk audit dispatched to {get_bulk_audit_launcher_name()}."
     except Exception as exc:
         return False, str(exc)
 
@@ -14512,7 +14619,7 @@ if active_section == "Domain Audit":
         """
 Run a domain-level audit from saved templates.
 
-Choose a domain, select templates, and click Run audit. The browser work runs in GitHub Actions and writes results back to Supabase, so Streamlit stays lightweight.
+Choose a domain, select templates, and click Run audit. The browser work runs in an external worker and writes results back to storage, so Streamlit stays lightweight.
 """
     )
 
@@ -14640,7 +14747,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
             )
             st.caption(
                 f"{len(audit_plan)} template URL(s) selected for {selected_domain}. "
-                "GitHub Actions will process them with bounded parallel workers."
+                f"{get_bulk_audit_launcher_name()} will process them with bounded parallel workers."
             )
 
             if audit_plan:
@@ -14666,23 +14773,23 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
 
             st.markdown("### Run Bulk Audit")
             st.caption(
-                "This runs in GitHub Actions. Streamlit creates the job and reads stored results, "
+                f"This runs in {get_bulk_audit_launcher_name()}. Streamlit creates the job and reads stored results, "
                 "so the app should not hit Selenium memory limits."
             )
-            if not github_is_configured():
+            if not bulk_audit_launcher_is_configured():
                 st.warning(
-                    "GitHub trigger is not configured in Streamlit secrets. Add [github] owner, repo, workflow, and token."
+                    "Bulk audit worker is not configured. Configure Cloud Run Jobs with GCP_PROJECT_ID, GCP_REGION, and CLOUD_RUN_JOB_NAME."
                 )
 
             run_cols = st.columns([1, 3])
             run_clicked = run_cols[0].button(
                 "Run audit",
-                key=f"start_github_domain_audit_{domain_state_key}",
-                disabled=not audit_plan or not (neon_is_configured() or sheet_storage_is_configured() or supabase_is_configured()) or not github_is_configured(),
+                key=f"start_bulk_domain_audit_{domain_state_key}",
+                disabled=not audit_plan or not (neon_is_configured() or sheet_storage_is_configured() or supabase_is_configured()) or not bulk_audit_launcher_is_configured(),
                 type="primary",
             )
             run_cols[1].caption(
-                "The selected templates will be processed by GitHub Actions with bounded parallelism."
+                f"The selected templates will be processed by {get_bulk_audit_launcher_name()} with bounded parallelism."
             )
             if run_clicked:
                 success, response = create_bulk_audit_job(
@@ -14766,7 +14873,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     st.caption("Auto-refreshing job status while this audit is in progress.")
                     if job_status in {"queued", "dispatched"}:
                         st.caption(
-                            "GitHub Actions is starting the worker. The first status update can take about a minute while dependencies install."
+                            f"{get_bulk_audit_launcher_name()} is starting the worker. The first status update can take about a minute while the worker starts."
                         )
                     st_autorefresh(interval=10000, key=f"bulk_audit_autorefresh_{selected_job_id}")
 
@@ -14875,8 +14982,8 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     rerun_disabled_reason = ""
                     if not (neon_is_configured() or sheet_storage_is_configured() or supabase_is_configured()):
                         rerun_disabled_reason = "Bulk audit storage is not configured."
-                    elif not github_is_configured():
-                        rerun_disabled_reason = "GitHub trigger is not configured."
+                    elif not bulk_audit_launcher_is_configured():
+                        rerun_disabled_reason = "Bulk audit worker is not configured."
                     elif not rerun_plan:
                         rerun_disabled_reason = "No failed URLs are available to rerun."
 
