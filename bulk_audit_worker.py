@@ -967,7 +967,7 @@ def _path_without_incompatible_chromedriver(chrome_binary: str, chromedriver: st
     return os.pathsep.join(filtered_parts)
 
 
-def create_driver():
+def create_driver(fast_mode: bool = False):
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
@@ -977,6 +977,8 @@ def create_driver():
     options.add_argument("--disable-background-networking")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-notifications")
     options.add_argument("--autoplay-policy=no-user-gesture-required")
     options.add_argument("--window-size=1365,1600")
     options.add_argument("--ignore-certificate-errors")
@@ -1010,27 +1012,46 @@ def create_driver():
         if fallback_path is not None:
             os.environ["PATH"] = original_path
     page_load_timeout = int(os.environ.get("BULK_PAGE_LOAD_TIMEOUT_SECONDS") or "20")
+    if fast_mode:
+        page_load_timeout = int(os.environ.get("BULK_FAST_RETRY_PAGE_LOAD_TIMEOUT_SECONDS") or "10")
     try:
         driver.set_page_load_timeout(max(8, min(page_load_timeout, 60)))
-        driver.set_script_timeout(5)
+        driver.set_script_timeout(3 if fast_mode else 5)
     except Exception:
         pass
     try:
         driver.execute_cdp_cmd("Network.enable", {})
+        blocked_urls = [
+            "*.mp4",
+            "*.webm",
+            "*.m3u8",
+            "*.ts",
+            "*.woff",
+            "*.woff2",
+            "*.ttf",
+            "*.otf",
+        ]
+        if fast_mode:
+            blocked_urls.extend(
+                [
+                    "*doubleclick.net/*",
+                    "*googlesyndication.com/*",
+                    "*googletagservices.com/*",
+                    "*adservice.google.*/*",
+                    "*amazon-adsystem.com/*",
+                    "*taboola.com/*",
+                    "*outbrain.com/*",
+                    "*criteo.com/*",
+                    "*pubmatic.com/*",
+                    "*rubiconproject.com/*",
+                    "*adsrvr.org/*",
+                    "*yieldmo.com/*",
+                    "*moatads.com/*",
+                ]
+            )
         driver.execute_cdp_cmd(
             "Network.setBlockedURLs",
-            {
-                "urls": [
-                    "*.mp4",
-                    "*.webm",
-                    "*.m3u8",
-                    "*.ts",
-                    "*.woff",
-                    "*.woff2",
-                    "*.ttf",
-                    "*.otf",
-                ]
-            },
+            {"urls": blocked_urls},
         )
     except Exception:
         pass
@@ -2610,12 +2631,16 @@ def audit_url(plan_row: dict, wait_seconds: int, driver=None) -> dict:
     if plan_row.get("sample_error") or not sample_url:
         raise RuntimeError(plan_row.get("sample_error") or "No sample URL available.")
 
+    fast_retry = bool(plan_row.get("_bulk_fast_retry"))
     start = time.time()
     owns_driver = driver is None
     if owns_driver:
-        driver = create_driver()
+        driver = create_driver(fast_mode=fast_retry)
     requires_video_playback = template_requires_video_playback(rules)
     requires_scroll_capture = template_requires_scroll_capture(rules)
+    if fast_retry:
+        requires_video_playback = False
+        requires_scroll_capture = False
     requires_chartbeat_check = template_requires_chartbeat_check(template, rules)
     page_video_expected = False
     try:
@@ -2656,6 +2681,9 @@ def audit_url(plan_row: dict, wait_seconds: int, driver=None) -> dict:
         try:
             scroll_points = (0, 25, 50, 75, 100) if (requires_scroll_capture or requires_video_playback) else (0, 100)
             scroll_pause = 0.8 if (requires_scroll_capture or requires_video_playback) else 0.2
+            if fast_retry:
+                scroll_points = (0, 100)
+                scroll_pause = 0.1
             for percent in scroll_points:
                 driver.execute_script(
                     """
@@ -2671,6 +2699,8 @@ def audit_url(plan_row: dict, wait_seconds: int, driver=None) -> dict:
         except Exception:
             pass
         base_wait_seconds = max(1, int(wait_seconds or 8))
+        if fast_retry:
+            base_wait_seconds = min(base_wait_seconds, 4)
         elapsed_after_load = time.time() - interaction_start
         initial_settle = min(1.0, max(0.0, base_wait_seconds - elapsed_after_load))
         if initial_settle:
@@ -2743,6 +2773,8 @@ def audit_url(plan_row: dict, wait_seconds: int, driver=None) -> dict:
             or transport_network["chartbeat_hits"]
         )
         late_vendor_wait_seconds = float(os.environ.get("BULK_LATE_VENDOR_WAIT_SECONDS") or "1")
+        if fast_retry:
+            late_vendor_wait_seconds = min(late_vendor_wait_seconds, 0.5)
         if late_vendor_wait_seconds > 0 and (comscore_missing or (requires_chartbeat_check and chartbeat_missing)):
             time.sleep(min(late_vendor_wait_seconds, 3.0))
             late_probe = get_probe_payload(driver)
@@ -3048,6 +3080,22 @@ def get_bulk_row_timeout_seconds() -> int:
         return 150
 
 
+def get_bulk_fast_retry_timeout_seconds() -> int:
+    raw_value = os.environ.get("BULK_FAST_RETRY_TIMEOUT_SECONDS", "90")
+    try:
+        return max(30, min(int(str(raw_value or "90").strip()), 180))
+    except Exception:
+        return 90
+
+
+def get_bulk_row_timeout_retries() -> int:
+    raw_value = os.environ.get("BULK_ROW_TIMEOUT_RETRIES", "1")
+    try:
+        return max(0, min(int(str(raw_value or "1").strip()), 2))
+    except Exception:
+        return 1
+
+
 def run_single_plan_row(input_path: str, output_path: str) -> int:
     try:
         with open(input_path, "r", encoding="utf-8") as handle:
@@ -3068,47 +3116,71 @@ def audit_plan_row_in_subprocess(payload: dict, plan_row: dict, wait_seconds: in
     template_name = str(template.get("template_name") or plan_row.get("template_name") or "Unnamed template")
     capture_mode = str(plan_row.get("capture_mode") or "standard").strip().lower() or "standard"
     timeout_seconds = get_bulk_row_timeout_seconds()
+    fast_retry_timeout_seconds = get_bulk_fast_retry_timeout_seconds()
+    timeout_retries = get_bulk_row_timeout_retries()
     row_start = time.time()
     print(f"Starting {capture_mode} audit subprocess: {template_name}", flush=True)
-    input_path = ""
-    output_path = ""
-    try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".json") as input_file:
-            input_path = input_file.name
-            json.dump({"payload": payload, "plan_row": plan_row, "wait_seconds": wait_seconds}, input_file)
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".json") as output_file:
-            output_path = output_file.name
-        completed = subprocess.run(
-            [sys.executable, __file__, "--single-row-input", input_path, "--single-row-output", output_path],
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-        )
-        if completed.stdout:
-            print(completed.stdout.strip(), flush=True)
-        if completed.stderr:
-            print(completed.stderr.strip(), flush=True)
-        if completed.returncode != 0:
-            raise RuntimeError(f"Row subprocess failed with exit code {completed.returncode}")
-        with open(output_path, "r", encoding="utf-8") as handle:
-            result_payload = json.load(handle)
-        print(f"Finished {capture_mode} audit subprocess in {time.time() - row_start:.1f}s: {template_name}", flush=True)
-        return plan_row, result_payload.get("result") or {}, bool(result_payload.get("row_failed"))
-    except subprocess.TimeoutExpired:
-        message = f"Bulk row audit timed out after {timeout_seconds} seconds."
-        print(f"Failed {capture_mode} audit subprocess in {time.time() - row_start:.1f}s: {template_name}: {message}", flush=True)
-        return plan_row, build_worker_error_result(payload, plan_row, RuntimeError(message)), True
-    except Exception as exc:
-        print(f"Failed {capture_mode} audit subprocess in {time.time() - row_start:.1f}s: {template_name}: {exc}", flush=True)
-        return plan_row, build_worker_error_result(payload, plan_row, exc), True
-    finally:
-        for path in (input_path, output_path):
-            if not path:
+    timeout_messages = []
+    attempts = 1 + timeout_retries
+    for attempt_index in range(attempts):
+        input_path = ""
+        output_path = ""
+        fast_retry = attempt_index > 0
+        attempt_timeout = fast_retry_timeout_seconds if fast_retry else timeout_seconds
+        attempt_plan_row = dict(plan_row)
+        if fast_retry:
+            attempt_plan_row["_bulk_fast_retry"] = True
+            print(
+                f"Retrying {capture_mode} audit in fast mode after timeout: {template_name}",
+                flush=True,
+            )
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".json") as input_file:
+                input_path = input_file.name
+                json.dump({"payload": payload, "plan_row": attempt_plan_row, "wait_seconds": wait_seconds}, input_file)
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".json") as output_file:
+                output_path = output_file.name
+            completed = subprocess.run(
+                [sys.executable, __file__, "--single-row-input", input_path, "--single-row-output", output_path],
+                capture_output=True,
+                text=True,
+                timeout=attempt_timeout,
+            )
+            if completed.stdout:
+                print(completed.stdout.strip(), flush=True)
+            if completed.stderr:
+                print(completed.stderr.strip(), flush=True)
+            if completed.returncode != 0:
+                raise RuntimeError(f"Row subprocess failed with exit code {completed.returncode}")
+            with open(output_path, "r", encoding="utf-8") as handle:
+                result_payload = json.load(handle)
+            if fast_retry:
+                result = result_payload.get("result") or {}
+                detail_payload = result.get("detail_payload") if isinstance(result.get("detail_payload"), dict) else {}
+                detail_payload["bulk_fast_retry"] = True
+                result["detail_payload"] = detail_payload
+                result_payload["result"] = result
+            print(f"Finished {capture_mode} audit subprocess in {time.time() - row_start:.1f}s: {template_name}", flush=True)
+            return plan_row, result_payload.get("result") or {}, bool(result_payload.get("row_failed"))
+        except subprocess.TimeoutExpired:
+            message = f"Bulk row audit timed out after {attempt_timeout} seconds."
+            timeout_messages.append(message)
+            print(f"Failed {capture_mode} audit subprocess in {time.time() - row_start:.1f}s: {template_name}: {message}", flush=True)
+            if attempt_index < attempts - 1:
                 continue
-            try:
-                os.unlink(path)
-            except Exception:
-                pass
+            combined_message = " | ".join(timeout_messages)
+            return plan_row, build_worker_error_result(payload, plan_row, RuntimeError(combined_message)), True
+        except Exception as exc:
+            print(f"Failed {capture_mode} audit subprocess in {time.time() - row_start:.1f}s: {template_name}: {exc}", flush=True)
+            return plan_row, build_worker_error_result(payload, plan_row, exc), True
+        finally:
+            for path in (input_path, output_path):
+                if not path:
+                    continue
+                try:
+                    os.unlink(path)
+                except Exception:
+                    pass
 
 
 def _quit_worker_driver() -> None:
@@ -3128,8 +3200,10 @@ def audit_plan_row(payload: dict, plan_row: dict, wait_seconds: int, allow_subpr
     template = plan_row.get("template") or {}
     template_name = str(template.get("template_name") or plan_row.get("template_name") or "Unnamed template")
     capture_mode = str(plan_row.get("capture_mode") or "standard").strip().lower() or "standard"
+    fast_retry = bool(plan_row.get("_bulk_fast_retry"))
     row_start = time.time()
-    print(f"Starting {capture_mode} audit: {template_name}", flush=True)
+    mode_suffix = " fast retry" if fast_retry else ""
+    print(f"Starting {capture_mode}{mode_suffix} audit: {template_name}", flush=True)
     try:
         if str(plan_row.get("capture_mode") or "").strip().lower() == "video_mvp":
             result = audit_url(plan_row, wait_seconds)
@@ -3138,7 +3212,7 @@ def audit_plan_row(payload: dict, plan_row: dict, wait_seconds: int, allow_subpr
 
         driver = getattr(_WORKER_LOCAL, "driver", None)
         if driver is None:
-            driver = create_driver()
+            driver = create_driver(fast_mode=fast_retry)
             _WORKER_LOCAL.driver = driver
         try:
             result = audit_url(plan_row, wait_seconds, driver=driver)
@@ -3146,7 +3220,7 @@ def audit_plan_row(payload: dict, plan_row: dict, wait_seconds: int, allow_subpr
             return plan_row, result, False
         except Exception:
             _quit_worker_driver()
-            driver = create_driver()
+            driver = create_driver(fast_mode=fast_retry)
             _WORKER_LOCAL.driver = driver
             result = audit_url(plan_row, wait_seconds, driver=driver)
             print(f"Finished {capture_mode} audit after driver retry in {time.time() - row_start:.1f}s: {template_name}", flush=True)
