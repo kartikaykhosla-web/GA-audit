@@ -319,6 +319,7 @@ def neon_record_job_result(job_id: str, total_count: int, row_failed: bool) -> d
                     completed_count = COALESCE(completed_count, 0) + 1,
                     failed_count = COALESCE(failed_count, 0) + %s,
                     status = CASE
+                        WHEN lower(COALESCE(status, '')) IN ('cancelled', 'paused') THEN status
                         WHEN COALESCE(completed_count, 0) + 1 >= %s THEN 'completed'
                         ELSE 'running'
                     END,
@@ -896,13 +897,14 @@ def record_job_result(job_id: str, total_count: int, row_failed: bool) -> dict:
     if neon_is_configured():
         return neon_record_job_result(job_id, total_count, row_failed)
     job = load_job(job_id)
+    existing_status = str(job.get("status") or "").strip().lower()
     completed_count = int(job.get("completed_count") or 0) + 1
     failed_count = int(job.get("failed_count") or 0) + (1 if row_failed else 0)
     values = {
         "total_count": total_count,
         "completed_count": completed_count,
         "failed_count": failed_count,
-        "status": "completed" if completed_count >= int(total_count or 0) else "running",
+        "status": existing_status if existing_status in {"cancelled", "paused"} else ("completed" if completed_count >= int(total_count or 0) else "running"),
     }
     if values["status"] == "completed":
         values["completed_at"] = utc_now()
@@ -935,7 +937,7 @@ def is_job_cancelled(job_id: str) -> bool:
         job = load_job(job_id)
     except Exception:
         return False
-    return str(job.get("status") or "").strip().lower() == "cancelled"
+    return str(job.get("status") or "").strip().lower() in {"cancelled", "paused"}
 
 
 def _major_version(version_text: str) -> str:
@@ -3267,8 +3269,9 @@ def main():
         )
     wait_seconds = int(payload.get("wait_seconds") or 8)
 
-    if str(job.get("status") or "").strip().lower() == "cancelled":
-        update_job(args.job_id, {"status": "cancelled", "completed_at": utc_now(), "total_count": total})
+    starting_status = str(job.get("status") or "").strip().lower()
+    if starting_status in {"cancelled", "paused"}:
+        update_job(args.job_id, {"status": starting_status, "completed_at": utc_now(), "total_count": total})
         return
 
     update_job(args.job_id, {"status": "running", "started_at": utc_now(), "total_count": total})
@@ -3284,7 +3287,7 @@ def main():
                     update_job(
                         args.job_id,
                         {
-                            "status": "cancelled",
+                            "status": str(load_job(args.job_id).get("status") or "cancelled").strip().lower(),
                             "completed_at": utc_now(),
                             "completed_count": completed,
                             "failed_count": failed,
@@ -3328,7 +3331,7 @@ def main():
                         update_job(
                             args.job_id,
                             {
-                                "status": "cancelled",
+                                "status": str(load_job(args.job_id).get("status") or "cancelled").strip().lower(),
                                 "completed_at": utc_now(),
                                 "completed_count": completed,
                                 "failed_count": failed,

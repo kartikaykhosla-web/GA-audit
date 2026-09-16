@@ -7350,6 +7350,75 @@ def cancel_bulk_audit_job(job_id: str, job_record: Optional[dict] = None) -> Tup
         return False, str(exc)
 
 
+def pause_bulk_audit_job(job_id: str, job_record: Optional[dict] = None) -> Tuple[bool, str]:
+    cloud_cancel_success, cloud_cancel_message = cancel_cloud_run_executions_for_job(job_record)
+    if neon_is_configured():
+        try:
+            ensure_neon_ready()
+            with neon_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE bulk_audit_jobs
+                        SET status = %s, completed_at = %s
+                        WHERE job_id = %s
+                        """,
+                        ("paused", datetime.now(timezone.utc).isoformat(), job_id),
+                    )
+            message = "Bulk audit paused."
+            if cloud_cancel_message:
+                message = f"{message} {cloud_cancel_message}"
+            return cloud_cancel_success, message
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return False, str(exc)
+    if sheet_storage_is_configured():
+        if not str(job_id or "").strip():
+            return False, "Job ID is missing."
+        try:
+            worksheet = get_bulk_jobs_worksheet()
+            row_index = _find_sheet_row_by_first_column(worksheet, job_id)
+            if row_index is None:
+                return False, "Bulk audit job not found."
+            _update_sheet_row(
+                worksheet,
+                BULK_JOB_HEADERS,
+                row_index,
+                {
+                    "status": "paused",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            message = "Bulk audit paused."
+            if cloud_cancel_message:
+                message = f"{message} {cloud_cancel_message}"
+            return cloud_cancel_success, message
+        except Exception as exc:
+            return False, str(exc)
+
+    if not supabase_is_configured():
+        return False, "Supabase is not configured yet."
+    if not str(job_id or "").strip():
+        return False, "Job ID is missing."
+    try:
+        supabase_request(
+            "PATCH",
+            SUPABASE_BULK_JOB_TABLE,
+            params={"job_id": f"eq.{job_id}"},
+            payload={
+                "status": "paused",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
+            prefer="return=minimal",
+        )
+        message = "Bulk audit paused."
+        if cloud_cancel_message:
+            message = f"{message} {cloud_cancel_message}"
+        return cloud_cancel_success, message
+    except Exception as exc:
+        return False, str(exc)
+
+
 def mark_bulk_audit_job_dispatched(job_id: str) -> Tuple[bool, str]:
     if neon_is_configured():
         try:
@@ -7433,6 +7502,161 @@ def load_bulk_audit_results(job_id: str) -> Tuple[List[dict], str]:
         ), ""
     except Exception as exc:
         return [], str(exc)
+
+
+def parse_bulk_timestamp(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def load_bulk_audit_jobs_for_summary(
+    start_date,
+    end_date,
+    domains: Optional[List[str]] = None,
+    statuses: Optional[List[str]] = None,
+    requested_by: str = "",
+    limit: int = 500,
+) -> Tuple[List[dict], str]:
+    domains = [str(domain or "").strip() for domain in (domains or []) if str(domain or "").strip()]
+    statuses = [str(status or "").strip().lower() for status in (statuses or []) if str(status or "").strip()]
+    requested_by = str(requested_by or "").strip().lower()
+    start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+    end_dt = datetime.combine(end_date, datetime.max.time(), tzinfo=timezone.utc)
+
+    if neon_is_configured():
+        try:
+            ensure_neon_ready()
+            clauses = ["created_at >= %s", "created_at <= %s"]
+            params: List[Any] = [start_dt.isoformat(), end_dt.isoformat()]
+            if domains:
+                clauses.append("domain_name = ANY(%s)")
+                params.append(domains)
+            if statuses:
+                clauses.append("lower(COALESCE(status, '')) = ANY(%s)")
+                params.append(statuses)
+            if requested_by:
+                clauses.append("lower(COALESCE(requested_by, '')) LIKE %s")
+                params.append(f"%{requested_by}%")
+            params.append(int(limit or 500))
+            with neon_connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        SELECT *
+                        FROM bulk_audit_jobs
+                        WHERE {' AND '.join(clauses)}
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        params,
+                    )
+                    return list(cur.fetchall()), ""
+        except Exception as exc:
+            if not sheet_storage_is_configured():
+                return [], str(exc)
+
+    jobs, error_message = load_bulk_audit_jobs("", limit=max(int(limit or 500), 500))
+    if error_message:
+        return [], error_message
+    filtered_jobs = []
+    for job in jobs:
+        created_at = parse_bulk_timestamp(job.get("created_at"))
+        if not created_at or created_at < start_dt or created_at > end_dt:
+            continue
+        if domains and str(job.get("domain_name") or "").strip() not in domains:
+            continue
+        if statuses and str(job.get("status") or "").strip().lower() not in statuses:
+            continue
+        if requested_by and requested_by not in str(job.get("requested_by") or "").strip().lower():
+            continue
+        filtered_jobs.append(job)
+    return filtered_jobs[: int(limit or 500)], ""
+
+
+def get_bulk_job_payload(job_record: Optional[dict]) -> dict:
+    payload = (job_record or {}).get("payload") or {}
+    if isinstance(payload, str):
+        return _sheet_json(payload, {})
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def normalize_bulk_plan_url(value: Any) -> str:
+    return str(value or "").strip().rstrip("/")
+
+
+def bulk_plan_completion_key(plan_row: dict) -> Tuple[str, str, str]:
+    template_id = str(plan_row.get("template_id") or (plan_row.get("template") or {}).get("template_id") or "").strip()
+    sample_url = normalize_bulk_plan_url(plan_row.get("sample_url") or plan_row.get("override_url"))
+    capture_mode = str(plan_row.get("capture_mode") or "standard").strip().lower()
+    return template_id, sample_url, capture_mode
+
+
+def bulk_result_completion_key(result_row: dict) -> Tuple[str, str, str]:
+    template_id = str(result_row.get("template_id") or "").strip()
+    sample_url = normalize_bulk_plan_url(result_row.get("sample_url"))
+    detail_payload = result_row.get("detail_payload") or {}
+    if not detail_payload and isinstance(result_row.get("result_json"), dict):
+        detail_payload = result_row["result_json"].get("detail_payload") or {}
+    capture_mode = str(detail_payload.get("capture_mode") or "standard").strip().lower()
+    return template_id, sample_url, capture_mode
+
+
+def build_remaining_plan_from_job(job_record: dict, result_records: List[dict]) -> List[dict]:
+    payload = get_bulk_job_payload(job_record)
+    completed_keys = {
+        bulk_result_completion_key(row)
+        for row in bulk_result_records_to_report_rows(result_records)
+    }
+    remaining_plan = []
+    for plan_row in payload.get("plan") or []:
+        if bulk_plan_completion_key(plan_row) in completed_keys:
+            continue
+        remaining_plan.append(plan_row)
+    return remaining_plan
+
+
+def build_all_properties_audit_plan(
+    all_templates: List[dict],
+    rules_by_template: Dict[str, List[dict]],
+) -> List[dict]:
+    plan_rows: List[dict] = []
+    domains = sorted(
+        {get_template_domain_label(template) for template in all_templates or []},
+        key=str.lower,
+    )
+    for domain in domains:
+        domain_templates = [
+            template
+            for template in all_templates or []
+            if get_template_domain_label(template) == domain
+        ]
+        plan_rows.extend(
+            build_domain_audit_plan_from_templates(
+                domain_templates,
+                all_templates=all_templates,
+                rules_by_template=rules_by_template,
+            )
+        )
+    return plan_rows
+
+
+def create_and_dispatch_bulk_audit_job_from_existing_plan(
+    email_id: str,
+    domain_name: str,
+    plan_rows: List[dict],
+    wait_seconds: int,
+) -> Tuple[bool, str, str]:
+    return create_and_dispatch_bulk_audit_job(email_id, domain_name, plan_rows, wait_seconds)
 
 
 def bulk_result_records_to_report_rows(result_records: List[dict]) -> List[dict]:
@@ -10112,7 +10336,7 @@ auditable_templates = [
     if template_rules_by_template.get(str(template.get("template_id") or "").strip())
 ]
 
-tab_labels = ["Audit URLs", "Domain Audit", "Compare Prod vs Stage"]
+tab_labels = ["Audit URLs", "Domain Audit", "Bulk Summary", "Compare Prod vs Stage"]
 if is_template_admin(logged_in_email):
     tab_labels.append("Template Manager")
 
@@ -15330,6 +15554,317 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     )
                 except Exception as exc:
                     st.warning(f"PDF report could not be generated. {exc}")
+
+
+if active_section == "Bulk Summary":
+    st.markdown("View bulk audit activity, filter recent runs, and control cross-property audits.")
+
+    today = datetime.now(LOG_TIMEZONE).date()
+    default_start = today - timedelta(days=6)
+    with st.form("bulk_summary_filters", border=False):
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([1.4, 1.8, 1.8, 1.1])
+        date_range = filter_col1.date_input(
+            "Date range",
+            value=(default_start, today),
+            key="bulk_summary_date_range",
+        )
+        all_domain_options = sorted(
+            {get_template_domain_label(template) for template in auditable_templates},
+            key=str.lower,
+        )
+        selected_summary_domains = filter_col2.multiselect(
+            "Domains",
+            all_domain_options,
+            default=[],
+            placeholder="All domains",
+            key="bulk_summary_domain_filter",
+        )
+        status_options = ["queued", "dispatched", "running", "paused", "completed", "cancelled", "failed"]
+        selected_summary_statuses = filter_col3.multiselect(
+            "Statuses",
+            status_options,
+            default=[],
+            placeholder="All statuses",
+            key="bulk_summary_status_filter",
+        )
+        summary_limit = filter_col4.number_input(
+            "Max jobs",
+            min_value=25,
+            max_value=1000,
+            value=250,
+            step=25,
+            key="bulk_summary_limit",
+        )
+        requested_by_filter = st.text_input(
+            "Requested by contains",
+            value="",
+            key="bulk_summary_requested_by_filter",
+        )
+        filters_submitted = st.form_submit_button("Apply filters")
+
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_date, end_date = date_range
+    else:
+        start_date = end_date = date_range
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    jobs, jobs_error = load_bulk_audit_jobs_for_summary(
+        start_date,
+        end_date,
+        domains=selected_summary_domains,
+        statuses=selected_summary_statuses,
+        requested_by=requested_by_filter,
+        limit=int(summary_limit or 250),
+    )
+    if jobs_error:
+        st.warning(jobs_error)
+        jobs = []
+
+    status_counts: Dict[str, int] = {}
+    total_urls_planned = 0
+    total_urls_completed = 0
+    total_failed_rows = 0
+    durations_minutes: List[float] = []
+    daily_rows: Dict[str, Dict[str, int]] = {}
+    job_summary_rows = []
+    issue_rows: List[dict] = []
+    running_statuses = {"queued", "dispatched", "running"}
+
+    for job in jobs:
+        status = str(job.get("status") or "").strip().lower() or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+        total_count = int(job.get("total_count") or 0)
+        completed_count = int(job.get("completed_count") or 0)
+        failed_count = int(job.get("failed_count") or 0)
+        total_urls_planned += total_count
+        total_urls_completed += completed_count
+        total_failed_rows += failed_count
+
+        created_at = parse_bulk_timestamp(job.get("created_at"))
+        started_at = parse_bulk_timestamp(job.get("started_at"))
+        completed_at = parse_bulk_timestamp(job.get("completed_at"))
+        if started_at and completed_at and completed_at >= started_at:
+            durations_minutes.append((completed_at - started_at).total_seconds() / 60)
+        day_key = (created_at.astimezone(LOG_TIMEZONE).date().isoformat() if created_at else "Unknown")
+        day_bucket = daily_rows.setdefault(day_key, {"Jobs": 0, "URLs planned": 0, "URLs completed": 0, "Failed rows": 0})
+        day_bucket["Jobs"] += 1
+        day_bucket["URLs planned"] += total_count
+        day_bucket["URLs completed"] += completed_count
+        day_bucket["Failed rows"] += failed_count
+
+        result_records: List[dict] = []
+        report_rows: List[dict] = []
+        result_error = ""
+        if completed_count:
+            result_records, result_error = load_bulk_audit_results(str(job.get("job_id") or ""))
+            report_rows = bulk_result_records_to_report_rows(result_records)
+            report_rows = enrich_bulk_report_rows_with_current_validation(
+                report_rows,
+                active_templates,
+                template_rules_by_template,
+            )
+        report_issue_flags = [bulk_result_issue_flags(row) for row in report_rows]
+        urls_with_issues = sum(1 for flags in report_issue_flags if flags["any_issue"])
+        ga_issue_count = sum(1 for flags in report_issue_flags if flags["ga_issue"])
+        comscore_issue_count = sum(1 for flags in report_issue_flags if flags["comscore_issue"])
+        chartbeat_issue_count = sum(1 for flags in report_issue_flags if flags["chartbeat_issue"])
+        if report_rows:
+            issue_rows.extend(
+                {
+                    "Job ID": job.get("job_id"),
+                    "Domain": job.get("domain_name"),
+                    "Template": row.get("template_name"),
+                    "URL": row.get("sample_url"),
+                    "Issues": bulk_result_display_issues(row),
+                }
+                for row in report_rows
+                if bulk_result_issue_flags(row)["any_issue"]
+            )
+        job_summary_rows.append(
+            {
+                "Created": job.get("created_at") or "",
+                "Domain": job.get("domain_name") or "",
+                "Status": status,
+                "Completed": f"{completed_count}/{total_count}",
+                "Failed rows": failed_count,
+                "URLs with issues": urls_with_issues if report_rows else "",
+                "GA issues": ga_issue_count if report_rows else "",
+                "Comscore issues": comscore_issue_count if report_rows else "",
+                "Chartbeat issues": chartbeat_issue_count if report_rows else "",
+                "Requested by": job.get("requested_by") or "",
+                "Job ID": job.get("job_id") or "",
+                "Result status": result_error or "",
+            }
+        )
+
+    avg_duration = (sum(durations_minutes) / len(durations_minutes)) if durations_minutes else 0
+    metric_cols = st.columns(6)
+    metric_cols[0].metric("Bulk jobs", len(jobs), border=True)
+    metric_cols[1].metric("URLs planned", total_urls_planned, border=True)
+    metric_cols[2].metric("URLs completed", total_urls_completed, border=True)
+    metric_cols[3].metric("Failed rows", total_failed_rows, border=True)
+    metric_cols[4].metric("Active jobs", sum(status_counts.get(status, 0) for status in running_statuses), border=True)
+    metric_cols[5].metric("Avg duration", f"{avg_duration:.1f} min" if avg_duration else "-", border=True)
+
+    daily_df = pd.DataFrame(
+        [{"Date": date_key, **values} for date_key, values in sorted(daily_rows.items())]
+    )
+    chart_col1, chart_col2 = st.columns(2)
+    with chart_col1:
+        with st.container(border=True):
+            st.subheader("Audits per day")
+            if daily_df.empty:
+                st.info("No jobs in this date range.")
+            else:
+                st.bar_chart(daily_df, x="Date", y="Jobs")
+    with chart_col2:
+        with st.container(border=True):
+            st.subheader("URLs processed per day")
+            if daily_df.empty:
+                st.info("No URLs in this date range.")
+            else:
+                st.line_chart(daily_df, x="Date", y=["URLs planned", "URLs completed"])
+
+    st.markdown("### All-property bulk controls")
+    all_properties_wait_seconds = st.slider(
+        "Wait time per URL for all-property run",
+        min_value=4,
+        max_value=20,
+        value=5,
+        key="all_properties_wait_seconds",
+    )
+    all_properties_plan = build_all_properties_audit_plan(
+        auditable_templates,
+        template_rules_by_template,
+    )
+    domains_in_all_plan = sorted(
+        {
+            str((row.get("template") or {}).get("domain_name") or row.get("domain_name") or "").strip()
+            for row in all_properties_plan
+            if str((row.get("template") or {}).get("domain_name") or row.get("domain_name") or "").strip()
+        },
+        key=str.lower,
+    )
+    st.caption(
+        f"{len(all_properties_plan)} template URL(s) across {len(domains_in_all_plan)} propertie(s) are available for an all-property run."
+    )
+    control_cols = st.columns([1.1, 1.1, 1.1, 4])
+    run_all_clicked = control_cols[0].button(
+        "Run all properties",
+        key="run_all_properties_bulk_audit",
+        disabled=not all_properties_plan or not bulk_audit_launcher_is_configured(),
+        type="primary",
+    )
+    if run_all_clicked:
+        success, response, _ = create_and_dispatch_bulk_audit_job(
+            logged_in_email,
+            "All properties",
+            all_properties_plan,
+            all_properties_wait_seconds,
+        )
+        if success:
+            st.success(response)
+            st.rerun()
+        else:
+            st.error(response)
+
+    active_jobs = [
+        job for job in jobs
+        if str(job.get("status") or "").strip().lower() in running_statuses
+    ]
+    paused_jobs = [
+        job for job in jobs
+        if str(job.get("status") or "").strip().lower() == "paused"
+    ]
+    active_job_options = {
+        f"{job.get('created_at', '')} | {job.get('domain_name', '')} | {job.get('completed_count', 0)}/{job.get('total_count', 0)} | {job.get('job_id')}": job
+        for job in active_jobs
+    }
+    paused_job_options = {
+        f"{job.get('created_at', '')} | {job.get('domain_name', '')} | {job.get('completed_count', 0)}/{job.get('total_count', 0)} | {job.get('job_id')}": job
+        for job in paused_jobs
+    }
+    selected_active_job = None
+    selected_paused_job = None
+    if active_job_options:
+        selected_active_label = st.selectbox(
+            "Active job to pause",
+            list(active_job_options.keys()),
+            key="bulk_summary_active_job_to_pause",
+        )
+        selected_active_job = active_job_options[selected_active_label]
+    pause_clicked = control_cols[1].button(
+        "Pause selected",
+        key="pause_selected_bulk_job",
+        disabled=not selected_active_job,
+    )
+    if pause_clicked and selected_active_job:
+        pause_success, pause_message = pause_bulk_audit_job(
+            str(selected_active_job.get("job_id") or ""),
+            selected_active_job,
+        )
+        if pause_success:
+            st.warning(pause_message)
+            st.rerun()
+        else:
+            st.error(pause_message)
+
+    if paused_job_options:
+        selected_paused_label = st.selectbox(
+            "Paused job to continue",
+            list(paused_job_options.keys()),
+            key="bulk_summary_paused_job_to_continue",
+        )
+        selected_paused_job = paused_job_options[selected_paused_label]
+    continue_clicked = control_cols[2].button(
+        "Continue selected",
+        key="continue_selected_bulk_job",
+        disabled=not selected_paused_job,
+    )
+    if continue_clicked and selected_paused_job:
+        paused_result_records, paused_results_error = load_bulk_audit_results(str(selected_paused_job.get("job_id") or ""))
+        if paused_results_error:
+            st.error(paused_results_error)
+        else:
+            remaining_plan = build_remaining_plan_from_job(selected_paused_job, paused_result_records)
+            if not remaining_plan:
+                st.info("Nothing left to continue for this job.")
+            else:
+                resume_success, resume_message, _ = create_and_dispatch_bulk_audit_job_from_existing_plan(
+                    logged_in_email,
+                    str(selected_paused_job.get("domain_name") or "Resumed bulk audit"),
+                    remaining_plan,
+                    all_properties_wait_seconds,
+                )
+                if resume_success:
+                    st.success(f"{resume_message} Remaining URLs: {len(remaining_plan)}")
+                    st.rerun()
+                else:
+                    st.error(resume_message)
+    control_cols[3].caption(
+        "Pause stops the running worker and keeps completed rows. Continue creates a new job for only the URLs not yet completed."
+    )
+
+    st.markdown("### Bulk audit jobs")
+    jobs_df = pd.DataFrame(job_summary_rows)
+    if jobs_df.empty:
+        st.info("No bulk jobs found for this filter.")
+    else:
+        st.dataframe(jobs_df, width="stretch", hide_index=True)
+        st.download_button(
+            "Download summary CSV",
+            jobs_df.to_csv(index=False).encode("utf-8"),
+            export_filename("bulk_audit_summary", "csv"),
+            "text/csv",
+        )
+
+    with st.expander("Recent URLs with issues", expanded=False):
+        issues_summary_df = pd.DataFrame(issue_rows[:300])
+        if issues_summary_df.empty:
+            st.success("No issue rows found in the loaded jobs.")
+        else:
+            st.dataframe(issues_summary_df, width="stretch", hide_index=True)
 
 
 if active_section == "Compare Prod vs Stage":
