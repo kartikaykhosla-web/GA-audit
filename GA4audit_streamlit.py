@@ -10294,6 +10294,40 @@ def reset_templates_to_homepage_only(email_id: str):
         return _clear_template_cache_on_success(SHEET_RESET_TEMPLATES_TO_HOMEPAGE_ONLY(email_id))
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def get_build_identity() -> Dict[str, str]:
+    revision = (
+        os.environ.get("K_REVISION")
+        or os.environ.get("CLOUD_RUN_REVISION")
+        or os.environ.get("SERVICE_REVISION")
+        or ""
+    ).strip()
+    commit = (
+        os.environ.get("BUILD_ID")
+        or os.environ.get("COMMIT_SHA")
+        or os.environ.get("GITHUB_SHA")
+        or os.environ.get("SOURCE_COMMIT")
+        or ""
+    ).strip()
+    if not commit:
+        try:
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            ).strip()
+        except Exception:
+            commit = ""
+    if commit and len(commit) > 12:
+        commit = commit[:12]
+    return {
+        "revision": revision,
+        "commit": commit,
+    }
+
+
 def render_sidebar_session(email_id: str):
     with st.sidebar:
         st.markdown("### Session")
@@ -10313,6 +10347,12 @@ def render_sidebar_session(email_id: str):
         else:
             st.warning("Storage not configured")
             st.caption("Add `neon.database_url` to Streamlit secrets.")
+
+        build_identity = get_build_identity()
+        st.markdown("### Build")
+        st.caption(f"ID: `{build_identity.get('commit') or 'unknown'}`")
+        if build_identity.get("revision"):
+            st.caption(f"Revision: `{build_identity['revision']}`")
 
 
 logged_in_email = require_login()
