@@ -15832,7 +15832,7 @@ if active_section == "Bulk Summary":
     st.caption(
         f"{all_properties_plan_count} template URL(s) across {len(domains_in_all_plan)} properties are available for an all-property run."
     )
-    control_cols = st.columns([1.2, 1.2, 1.2, 1.2])
+    control_cols = st.columns([1.2, 1.2, 1.2, 1.2, 1.2])
     run_all_clicked = control_cols[0].button(
         "Run all properties",
         key="run_all_properties_bulk_audit",
@@ -15884,9 +15884,9 @@ if active_section == "Bulk Summary":
     selected_paused_job = None
     if active_job_options:
         selected_active_label = st.selectbox(
-            "Active job to pause",
+            "Active job to manage",
             list(active_job_options.keys()),
-            key="bulk_summary_active_job_to_pause",
+            key="bulk_summary_active_job_to_manage",
         )
         selected_active_job = active_job_options[selected_active_label]
     pause_clicked = control_cols[1].button(
@@ -15904,6 +15904,21 @@ if active_section == "Bulk Summary":
             st.rerun()
         else:
             st.error(pause_message)
+    cancel_clicked = control_cols[2].button(
+        "Cancel selected",
+        key="cancel_selected_bulk_job",
+        disabled=not selected_active_job,
+    )
+    if cancel_clicked and selected_active_job:
+        cancel_success, cancel_message = cancel_bulk_audit_job(
+            str(selected_active_job.get("job_id") or ""),
+            selected_active_job,
+        )
+        if cancel_success:
+            st.warning(cancel_message or "Bulk audit stop requested.")
+            st.rerun()
+        else:
+            st.error(cancel_message)
 
     if paused_job_options:
         selected_paused_label = st.selectbox(
@@ -15912,7 +15927,7 @@ if active_section == "Bulk Summary":
             key="bulk_summary_paused_job_to_continue",
         )
         selected_paused_job = paused_job_options[selected_paused_label]
-    continue_clicked = control_cols[2].button(
+    continue_clicked = control_cols[3].button(
         "Continue selected",
         key="continue_selected_bulk_job",
         disabled=not selected_paused_job,
@@ -15937,7 +15952,7 @@ if active_section == "Bulk Summary":
                     st.rerun()
                 else:
                     st.error(resume_message)
-    refresh_clicked = control_cols[3].button(
+    refresh_clicked = control_cols[4].button(
         "Refresh job status",
         key="refresh_bulk_summary_jobs",
     )
