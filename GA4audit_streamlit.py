@@ -7650,6 +7650,31 @@ def build_all_properties_audit_plan(
     return plan_rows
 
 
+def build_all_properties_audit_plans_by_domain(
+    all_templates: List[dict],
+    rules_by_template: Dict[str, List[dict]],
+) -> Dict[str, List[dict]]:
+    plans_by_domain: Dict[str, List[dict]] = {}
+    domains = sorted(
+        {get_template_domain_label(template) for template in all_templates or []},
+        key=str.lower,
+    )
+    for domain in domains:
+        domain_templates = [
+            template
+            for template in all_templates or []
+            if get_template_domain_label(template) == domain
+        ]
+        domain_plan = build_domain_audit_plan_from_templates(
+            domain_templates,
+            all_templates=all_templates,
+            rules_by_template=rules_by_template,
+        )
+        if domain_plan:
+            plans_by_domain[domain] = domain_plan
+    return plans_by_domain
+
+
 def create_and_dispatch_bulk_audit_job_from_existing_plan(
     email_id: str,
     domain_name: str,
@@ -15669,10 +15694,12 @@ if active_section == "Bulk Summary":
     daily_rows: Dict[str, Dict[str, int]] = {}
     job_summary_rows = []
     issue_rows: List[dict] = []
+    property_summary: Dict[str, Dict[str, Any]] = {}
     running_statuses = {"queued", "dispatched", "running"}
 
     for job in jobs:
         status = str(job.get("status") or "").strip().lower() or "unknown"
+        domain_name = str(job.get("domain_name") or "").strip()
         status_counts[status] = status_counts.get(status, 0) + 1
         total_count = int(job.get("total_count") or 0)
         completed_count = int(job.get("completed_count") or 0)
@@ -15713,7 +15740,7 @@ if active_section == "Bulk Summary":
             issue_rows.extend(
                 {
                     "Job ID": job.get("job_id"),
-                    "Domain": job.get("domain_name"),
+                    "Domain": domain_name,
                     "Template": row.get("template_name"),
                     "URL": row.get("sample_url"),
                     "Issues": bulk_result_display_issues(row),
@@ -15721,10 +15748,32 @@ if active_section == "Bulk Summary":
                 for row in report_rows
                 if bulk_result_issue_flags(row)["any_issue"]
             )
+        if domain_name and domain_name != "All properties":
+            property_bucket = property_summary.setdefault(
+                domain_name,
+                {
+                    "Property": domain_name,
+                    "Jobs": 0,
+                    "Active": 0,
+                    "URLs planned": 0,
+                    "URLs completed": 0,
+                    "Failed rows": 0,
+                    "URLs with issues": 0,
+                    "Last run": "",
+                },
+            )
+            property_bucket["Jobs"] += 1
+            property_bucket["Active"] += 1 if status in running_statuses else 0
+            property_bucket["URLs planned"] += total_count
+            property_bucket["URLs completed"] += completed_count
+            property_bucket["Failed rows"] += failed_count
+            property_bucket["URLs with issues"] += urls_with_issues if report_rows else 0
+            if str(job.get("created_at") or "") > str(property_bucket.get("Last run") or ""):
+                property_bucket["Last run"] = str(job.get("created_at") or "")
         job_summary_rows.append(
             {
                 "Created": job.get("created_at") or "",
-                "Domain": job.get("domain_name") or "",
+                "Domain": domain_name,
                 "Status": status,
                 "Completed": f"{completed_count}/{total_count}",
                 "Failed rows": failed_count,
@@ -15774,40 +15823,46 @@ if active_section == "Bulk Summary":
         value=5,
         key="all_properties_wait_seconds",
     )
-    all_properties_plan = build_all_properties_audit_plan(
+    all_properties_plans_by_domain = build_all_properties_audit_plans_by_domain(
         auditable_templates,
         template_rules_by_template,
     )
-    domains_in_all_plan = sorted(
-        {
-            str((row.get("template") or {}).get("domain_name") or row.get("domain_name") or "").strip()
-            for row in all_properties_plan
-            if str((row.get("template") or {}).get("domain_name") or row.get("domain_name") or "").strip()
-        },
-        key=str.lower,
-    )
+    all_properties_plan_count = sum(len(plan_rows) for plan_rows in all_properties_plans_by_domain.values())
+    domains_in_all_plan = sorted(all_properties_plans_by_domain, key=str.lower)
     st.caption(
-        f"{len(all_properties_plan)} template URL(s) across {len(domains_in_all_plan)} propertie(s) are available for an all-property run."
+        f"{all_properties_plan_count} template URL(s) across {len(domains_in_all_plan)} properties are available for an all-property run."
     )
-    control_cols = st.columns([1.1, 1.1, 1.1, 4])
+    control_cols = st.columns([1.2, 1.2, 1.2, 1.2])
     run_all_clicked = control_cols[0].button(
         "Run all properties",
         key="run_all_properties_bulk_audit",
-        disabled=not all_properties_plan or not bulk_audit_launcher_is_configured(),
+        disabled=not all_properties_plan_count or not bulk_audit_launcher_is_configured(),
         type="primary",
     )
     if run_all_clicked:
-        success, response, _ = create_and_dispatch_bulk_audit_job(
-            logged_in_email,
-            "All properties",
-            all_properties_plan,
-            all_properties_wait_seconds,
-        )
-        if success:
-            st.success(response)
-            st.rerun()
+        dispatch_successes = []
+        dispatch_errors = []
+        for domain_name, domain_plan in all_properties_plans_by_domain.items():
+            success, response, job_id = create_and_dispatch_bulk_audit_job(
+                logged_in_email,
+                domain_name,
+                domain_plan,
+                all_properties_wait_seconds,
+            )
+            if success:
+                dispatch_successes.append(f"{domain_name}: {job_id or response}")
+            else:
+                dispatch_errors.append(f"{domain_name}: {response}")
+        if dispatch_successes:
+            st.success(f"Dispatched {len(dispatch_successes)} properties.")
+            with st.expander("Dispatched jobs", expanded=False):
+                st.write("\n".join(dispatch_successes))
+        if dispatch_errors:
+            st.error("Some properties could not be dispatched.")
+            with st.expander("Dispatch errors", expanded=True):
+                st.write("\n".join(dispatch_errors))
         else:
-            st.error(response)
+            st.rerun()
 
     active_jobs = [
         job for job in jobs
@@ -15882,12 +15937,44 @@ if active_section == "Bulk Summary":
                     st.rerun()
                 else:
                     st.error(resume_message)
-    control_cols[3].caption(
-        "Pause stops the running worker and keeps completed rows. Continue creates a new job for only the URLs not yet completed."
+    refresh_clicked = control_cols[3].button(
+        "Refresh job status",
+        key="refresh_bulk_summary_jobs",
     )
+    if refresh_clicked:
+        st.rerun()
+    if active_jobs and st_autorefresh:
+        st_autorefresh(interval=10000, key="bulk_summary_active_jobs_autorefresh")
+
+    st.markdown("### Properties")
+    property_rows = sorted(property_summary.values(), key=lambda row: str(row.get("Property") or "").lower())
+    if not property_rows:
+        st.info("No property-level jobs found for this filter.")
+    else:
+        property_df = pd.DataFrame(property_rows)
+        st.dataframe(property_df, width="stretch", hide_index=True)
+        for property_row in property_rows:
+            domain_name = str(property_row.get("Property") or "").strip()
+            domain_slug = re.sub(r"[^a-zA-Z0-9_]+", "_", domain_name).strip("_") or "domain"
+            with st.container(border=True):
+                property_cols = st.columns([2.2, 1, 1, 1, 1.2])
+                property_cols[0].markdown(f"**{domain_name}**")
+                property_cols[1].metric("Jobs", int(property_row.get("Jobs") or 0))
+                property_cols[2].metric("Active", int(property_row.get("Active") or 0))
+                property_cols[3].metric("Completed", int(property_row.get("URLs completed") or 0))
+                if property_cols[4].button(
+                    "View in Domain Audit",
+                    key=f"open_domain_audit_summary_{domain_slug}",
+                ):
+                    st.session_state["active_section"] = "Domain Audit"
+                    st.session_state["domain_audit_selected_domain"] = domain_name
+                    st.session_state[f"domain_audit_show_jobs_{domain_slug}"] = True
+                    st.rerun()
 
     st.markdown("### Bulk audit jobs")
-    jobs_df = pd.DataFrame(job_summary_rows)
+    jobs_df = pd.DataFrame(
+        [row for row in job_summary_rows if str(row.get("Domain") or "") != "All properties"]
+    )
     if jobs_df.empty:
         st.info("No bulk jobs found for this filter.")
     else:
