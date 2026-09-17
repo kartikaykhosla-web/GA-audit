@@ -16053,8 +16053,6 @@ if active_section == "Bulk Summary":
     )
     if refresh_clicked:
         st.rerun()
-    if active_jobs and st_autorefresh:
-        st_autorefresh(interval=10000, key="bulk_summary_active_jobs_autorefresh")
 
     st.markdown("### Properties")
     property_rows = sorted(property_summary.values(), key=lambda row: str(row.get("Property") or "").lower())
