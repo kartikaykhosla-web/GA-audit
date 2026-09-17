@@ -4376,6 +4376,7 @@ DEFAULT_TEMPLATE_WORKSHEET = "Audit Templates"
 DEFAULT_TEMPLATE_RULES_WORKSHEET = "Audit Template Rules"
 DEFAULT_BULK_JOBS_WORKSHEET = "Bulk Audit Jobs"
 DEFAULT_BULK_RESULTS_WORKSHEET = "Bulk Audit Results"
+ACTIVE_BULK_JOB_STATUSES = {"queued", "dispatched", "running"}
 FIXED_LOG_HEADERS = [
     "date",
     "email_id",
@@ -5971,6 +5972,20 @@ def neon_create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[
         with conn.cursor() as cur:
             cur.execute(
                 """
+                SELECT *
+                FROM bulk_audit_jobs
+                WHERE lower(COALESCE(status, '')) = ANY(%s)
+                  AND (%s = 'All properties' OR domain_name = %s OR domain_name = 'All properties')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (list(ACTIVE_BULK_JOB_STATUSES), domain_name, domain_name),
+            )
+            active_job = cur.fetchone()
+            if active_job:
+                return False, describe_active_bulk_job(active_job)
+            cur.execute(
+                """
                 INSERT INTO bulk_audit_jobs (
                     job_id, domain_name, status, total_count, completed_count,
                     failed_count, requested_by, payload, error_message,
@@ -7181,6 +7196,11 @@ def create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict]
             if not sheet_storage_is_configured():
                 return False, str(exc)
     if sheet_storage_is_configured():
+        active_job, active_job_error = load_active_bulk_audit_job(domain_name)
+        if active_job:
+            return False, describe_active_bulk_job(active_job)
+        if active_job_error:
+            return False, active_job_error
         job_id = f"job_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
         compact_plan = _compact_plan_for_storage(domain_name, plan_rows)
         if not compact_plan:
@@ -7217,6 +7237,11 @@ def create_bulk_audit_job(email_id: str, domain_name: str, plan_rows: List[dict]
 
     if not supabase_is_configured():
         return False, "Supabase is not configured yet."
+    active_job, active_job_error = load_active_bulk_audit_job(domain_name)
+    if active_job:
+        return False, describe_active_bulk_job(active_job)
+    if active_job_error:
+        return False, active_job_error
     job_id = f"job_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     compact_plan = []
     for row in compact_domain_audit_plan(plan_rows):
@@ -7290,6 +7315,53 @@ def load_bulk_audit_jobs(domain_name: str = "", limit: int = 10) -> Tuple[List[d
         return supabase_request("GET", SUPABASE_BULK_JOB_TABLE, params=params), ""
     except Exception as exc:
         return [], str(exc)
+
+
+def bulk_job_is_active(job: Optional[dict]) -> bool:
+    return str((job or {}).get("status") or "").strip().lower() in ACTIVE_BULK_JOB_STATUSES
+
+
+def describe_active_bulk_job(job: Optional[dict]) -> str:
+    job = job or {}
+    job_id = str(job.get("job_id") or "").strip()
+    status = str(job.get("status") or "").strip() or "active"
+    completed = int(job.get("completed_count") or 0)
+    total = int(job.get("total_count") or 0)
+    domain_name = str(job.get("domain_name") or "").strip() or "this property"
+    short_job_id = job_id[-12:] if job_id else "-"
+    return f"{domain_name} already has an active bulk audit ({status}, {completed}/{total}, job {short_job_id})."
+
+
+def load_active_bulk_audit_job(domain_name: str) -> Tuple[Optional[dict], str]:
+    domain_name = str(domain_name or "").strip()
+    jobs_to_check: List[dict] = []
+    errors: List[str] = []
+
+    if domain_name == "All properties":
+        jobs, error = load_bulk_audit_jobs("", limit=500)
+        if error:
+            return None, error
+        jobs_to_check.extend(jobs)
+    else:
+        for lookup_domain in [domain_name, "All properties"]:
+            if not lookup_domain:
+                continue
+            jobs, error = load_bulk_audit_jobs(lookup_domain, limit=25)
+            if error:
+                errors.append(error)
+                continue
+            jobs_to_check.extend(jobs)
+
+    seen_job_ids: Set[str] = set()
+    for job in jobs_to_check:
+        job_id = str(job.get("job_id") or "").strip()
+        if job_id and job_id in seen_job_ids:
+            continue
+        if job_id:
+            seen_job_ids.add(job_id)
+        if bulk_job_is_active(job):
+            return job, ""
+    return None, "; ".join(errors)
 
 
 def cancel_bulk_audit_job(job_id: str, job_record: Optional[dict] = None) -> Tuple[bool, str]:
@@ -15256,15 +15328,22 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     "Bulk audit worker is not configured. Configure Cloud Run Jobs with GCP_PROJECT_ID, GCP_REGION, and CLOUD_RUN_JOB_NAME."
                 )
 
+            active_domain_job, active_domain_job_error = load_active_bulk_audit_job(selected_domain)
+            active_domain_job_message = describe_active_bulk_job(active_domain_job) if active_domain_job else active_domain_job_error
             run_cols = st.columns([1, 3])
             run_clicked = run_cols[0].button(
                 "Run audit",
                 key=f"start_bulk_domain_audit_{domain_state_key}",
-                disabled=not audit_plan or not (neon_is_configured() or sheet_storage_is_configured() or supabase_is_configured()) or not bulk_audit_launcher_is_configured(),
+                disabled=not audit_plan
+                or bool(active_domain_job)
+                or bool(active_domain_job_error)
+                or not (neon_is_configured() or sheet_storage_is_configured() or supabase_is_configured())
+                or not bulk_audit_launcher_is_configured(),
                 type="primary",
             )
             run_cols[1].caption(
-                f"The selected templates will be processed by {get_bulk_audit_launcher_name()} with bounded parallelism."
+                active_domain_job_message
+                or f"The selected templates will be processed by {get_bulk_audit_launcher_name()} with bounded parallelism."
             )
             if run_clicked:
                 success, response = create_bulk_audit_job(
@@ -15343,7 +15422,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                 elif milestone_key not in st.session_state:
                     st.session_state[milestone_key] = progress_milestone
 
-                active_job_statuses = {"queued", "dispatched", "running"}
+                active_job_statuses = ACTIVE_BULK_JOB_STATUSES
                 if job_status in active_job_statuses and st_autorefresh:
                     st.caption("Auto-refreshing job status while this audit is in progress.")
                     if job_status in {"queued", "dispatched"}:
@@ -15461,6 +15540,12 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                         rerun_disabled_reason = "Bulk audit worker is not configured."
                     elif not rerun_plan:
                         rerun_disabled_reason = "No failed URLs are available to rerun."
+                    else:
+                        active_rerun_job, active_rerun_job_error = load_active_bulk_audit_job(report_domain)
+                        if active_rerun_job:
+                            rerun_disabled_reason = describe_active_bulk_job(active_rerun_job)
+                        elif active_rerun_job_error:
+                            rerun_disabled_reason = active_rerun_job_error
 
                     rerun_cols = st.columns([1.4, 4])
                     rerun_all_clicked = rerun_cols[0].button(
@@ -15695,7 +15780,7 @@ if active_section == "Bulk Summary":
     job_summary_rows = []
     issue_rows: List[dict] = []
     property_summary: Dict[str, Dict[str, Any]] = {}
-    running_statuses = {"queued", "dispatched", "running"}
+    running_statuses = ACTIVE_BULK_JOB_STATUSES
 
     for job in jobs:
         status = str(job.get("status") or "").strip().lower() or "unknown"
@@ -15829,14 +15914,24 @@ if active_section == "Bulk Summary":
     )
     all_properties_plan_count = sum(len(plan_rows) for plan_rows in all_properties_plans_by_domain.values())
     domains_in_all_plan = sorted(all_properties_plans_by_domain, key=str.lower)
+    active_any_bulk_job, active_any_bulk_job_error = load_active_bulk_audit_job("All properties")
+    all_properties_block_message = (
+        describe_active_bulk_job(active_any_bulk_job)
+        if active_any_bulk_job
+        else active_any_bulk_job_error
+    )
     st.caption(
-        f"{all_properties_plan_count} template URL(s) across {len(domains_in_all_plan)} properties are available for an all-property run."
+        all_properties_block_message
+        or f"{all_properties_plan_count} template URL(s) across {len(domains_in_all_plan)} properties are available for an all-property run."
     )
     control_cols = st.columns([1.2, 1.2, 1.2, 1.2, 1.2])
     run_all_clicked = control_cols[0].button(
         "Run all properties",
         key="run_all_properties_bulk_audit",
-        disabled=not all_properties_plan_count or not bulk_audit_launcher_is_configured(),
+        disabled=not all_properties_plan_count
+        or bool(active_any_bulk_job)
+        or bool(active_any_bulk_job_error)
+        or not bulk_audit_launcher_is_configured(),
         type="primary",
     )
     if run_all_clicked:
