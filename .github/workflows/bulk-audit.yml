@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       job_id:
-        description: Supabase bulk_audit_jobs.job_id to process
+        description: Postgres bulk_audit_jobs.job_id to process
         required: true
         type: string
       chunk_index:
@@ -23,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
       BULK_AUDIT_CONCURRENCY: ${{ vars.BULK_AUDIT_CONCURRENCY || '1' }}

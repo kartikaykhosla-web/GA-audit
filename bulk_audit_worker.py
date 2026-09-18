@@ -246,8 +246,7 @@ NEON_SCHEMA_READY = False
 def get_neon_settings() -> Dict[str, str]:
     return {
         "database_url": (
-            os.environ.get("NEON_DATABASE_URL")
-            or os.environ.get("DATABASE_URL")
+            os.environ.get("DATABASE_URL")
             or os.environ.get("POSTGRES_URL")
             or ""
         ).strip(),
@@ -261,7 +260,7 @@ def neon_is_configured() -> bool:
 def neon_connect():
     database_url = get_neon_settings().get("database_url")
     if not database_url:
-        raise RuntimeError("NEON_DATABASE_URL, DATABASE_URL, or POSTGRES_URL is required.")
+        raise RuntimeError("DATABASE_URL or POSTGRES_URL is required.")
     if not psycopg or not dict_row:
         raise RuntimeError("psycopg is not installed.")
     return psycopg.connect(database_url, row_factory=dict_row)
@@ -726,7 +725,7 @@ def supabase_is_configured() -> bool:
 
 def configured_storage_backend() -> str:
     if neon_is_configured():
-        return "neon"
+        return "postgres"
     if sheet_storage_is_configured():
         return "google_sheets"
     if supabase_is_configured():
@@ -742,7 +741,7 @@ def require_storage_backend() -> str:
     raise RuntimeError(
         "Bulk audit worker storage is not configured. Add matching GitHub Actions "
         "repository secrets for the storage backend used by Streamlit: "
-        "NEON_DATABASE_URL/DATABASE_URL/POSTGRES_URL, or "
+        "DATABASE_URL/POSTGRES_URL, or "
         "GCP_SERVICE_ACCOUNT_JSON plus GOOGLE_SHEET_ID/SHEETS_SPREADSHEET_ID, or "
         "SUPABASE_URL plus SUPABASE_SERVICE_ROLE_KEY."
     )
@@ -833,7 +832,7 @@ def refresh_plan_rules_from_store(plan: List[dict]) -> List[dict]:
         try:
             active_by_template, rules_by_template = neon_load_template_state_batch(template_ids)
         except Exception as exc:
-            print(f"Could not batch refresh template rules from Neon: {exc}", flush=True)
+            print(f"Could not batch refresh template rules from Postgres: {exc}", flush=True)
         else:
             refreshed_plan = []
             for plan_row in plan or []:

@@ -5457,7 +5457,7 @@ def sheet_storage_is_configured() -> bool:
 
 
 # -------------------------
-# Neon/Postgres persistence
+# Postgres persistence
 # -------------------------
 
 NEON_SCHEMA_SQL = """
@@ -5545,8 +5545,7 @@ CREATE INDEX IF NOT EXISTS idx_bulk_audit_results_job_created
 def get_neon_settings() -> Dict[str, str]:
     settings = {
         "database_url": (
-            os.environ.get("NEON_DATABASE_URL")
-            or os.environ.get("DATABASE_URL")
+            os.environ.get("DATABASE_URL")
             or os.environ.get("POSTGRES_URL")
             or ""
         ).strip(),
@@ -5555,7 +5554,7 @@ def get_neon_settings() -> Dict[str, str]:
         secrets = st.secrets
     except Exception:
         secrets = {}
-    for section_name in ("neon", "postgres", "database"):
+    for section_name in ("postgres", "database"):
         try:
             raw = secrets.get(section_name, {})
         except Exception:
@@ -5570,8 +5569,7 @@ def get_neon_settings() -> Dict[str, str]:
             ).strip()
     try:
         settings["database_url"] = settings["database_url"] or str(
-            secrets.get("NEON_DATABASE_URL")
-            or secrets.get("DATABASE_URL")
+            secrets.get("DATABASE_URL")
             or secrets.get("POSTGRES_URL")
             or ""
         ).strip()
@@ -5587,7 +5585,7 @@ def neon_is_configured() -> bool:
 def neon_connect():
     database_url = get_neon_settings().get("database_url")
     if not database_url:
-        raise RuntimeError("Neon is not configured. Add NEON_DATABASE_URL, DATABASE_URL, or POSTGRES_URL.")
+        raise RuntimeError("Postgres is not configured. Add DATABASE_URL or POSTGRES_URL.")
     if not psycopg or not dict_row:
         raise RuntimeError("psycopg is not installed.")
     return psycopg.connect(database_url, row_factory=dict_row)
@@ -6303,7 +6301,7 @@ def get_active_template_store() -> str:
 
 def get_active_template_store_label() -> str:
     labels = {
-        "neon": "Neon/Postgres",
+        "neon": "Postgres",
         "sheet": "Google Sheets",
         "supabase": "Supabase",
     }
@@ -10436,14 +10434,14 @@ def render_sidebar_session(email_id: str):
 
         st.markdown("### Storage")
         if neon_is_configured():
-            st.success("Neon Postgres configured")
+            st.success("Postgres storage configured")
         elif sheet_storage_is_configured():
             st.success("Google Sheets storage configured")
         elif supabase_is_configured():
             st.warning("Supabase configured")
         else:
             st.warning("Storage not configured")
-            st.caption("Add `neon.database_url` to Streamlit secrets.")
+            st.caption("Add `DATABASE_URL` to Cloud Run environment variables.")
 
         build_identity = get_build_identity()
         st.markdown("### Build")
