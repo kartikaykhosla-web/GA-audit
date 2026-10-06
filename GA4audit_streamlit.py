@@ -40,10 +40,6 @@ except Exception:
     dict_row = None
     Jsonb = None
 try:
-    from streamlit_autorefresh import st_autorefresh
-except Exception:
-    st_autorefresh = None
-try:
     import extra_streamlit_components as stx
 except Exception:
     stx = None
@@ -52,7 +48,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.action_chains import ActionChains
 
-AUTO_REFRESH_INTERVAL_MS = 60 * 60 * 1000
 from selenium.common.exceptions import JavascriptException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
@@ -4352,8 +4347,6 @@ def audit_single_url(
 # Streamlit app
 
 st.set_page_config(page_title="GA4 / dataLayer Auditor", layout="wide")
-if st_autorefresh:
-    st_autorefresh(interval=AUTO_REFRESH_INTERVAL_MS, key="ga_audit_hourly_autorefresh")
 st.title("GA4 / dataLayer Auditor")
 st.markdown(
     """
@@ -15396,13 +15389,11 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                     st.session_state[milestone_key] = progress_milestone
 
                 active_job_statuses = ACTIVE_BULK_JOB_STATUSES
-                if job_status in active_job_statuses and st_autorefresh:
-                    st.caption("Auto-refreshing job status while this audit is in progress.")
+                if job_status in active_job_statuses:
                     if job_status in {"queued", "dispatched"}:
                         st.caption(
                             f"{get_bulk_audit_launcher_name()} is starting the worker. The first status update can take about a minute while the worker starts."
                         )
-                    st_autorefresh(interval=10000, key=f"bulk_audit_autorefresh_{selected_job_id}")
 
                 st.progress((job_completed / job_total) if job_total else 0)
                 metric_cols = st.columns(4)
