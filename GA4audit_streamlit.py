@@ -10704,13 +10704,14 @@ auditable_templates = [
     if template_rules_by_template.get(str(template.get("template_id") or "").strip())
 ]
 
-tab_labels = ["Audit URLs", "Domain Audit", "Bulk Summary", "Compare Prod vs Stage"]
+tab_labels = ["Overview", "Audit URLs", "Domain Audit", "Bulk Summary", "Compare Prod vs Stage"]
 if is_template_admin(logged_in_email):
     tab_labels.append("Template Manager")
 
 active_section_state = st.session_state.get("active_section", tab_labels[0])
 active_section_index = tab_labels.index(active_section_state) if active_section_state in tab_labels else 0
 section_labels = {
+    "Overview": ":material/space_dashboard: Overview",
     "Audit URLs": ":material/search: Audit URLs",
     "Domain Audit": ":material/language: Domain audit",
     "Bulk Summary": ":material/dashboard: Bulk summary",
@@ -14672,6 +14673,166 @@ def style_prod_stage_compare_table(dataframe: pd.DataFrame, status_column: str):
         return [""] * len(row)
 
     return dataframe.style.apply(row_style, axis=1)
+
+
+if active_section == "Overview":
+    st.markdown(
+        """
+<div class="ga-section">
+  <div class="ga-section-title">Overview</div>
+  <div class="ga-section-copy">A command-center view of audit volume, property health, and recent bulk activity.</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    today = datetime.now(LOG_TIMEZONE).date()
+    default_start = today - timedelta(days=6)
+    overview_domains = sorted(
+        {get_template_domain_label(template) for template in auditable_templates},
+        key=str.lower,
+    )
+    filter_cols = st.columns([1.3, 1.8, 1.1])
+    overview_date_range = filter_cols[0].date_input(
+        "Date range",
+        value=(default_start, today),
+        key="overview_date_range",
+    )
+    overview_selected_domains = filter_cols[1].multiselect(
+        "Domain",
+        overview_domains,
+        default=[],
+        placeholder="All domains",
+        key="overview_domain_filter",
+    )
+    if filter_cols[2].button("Refresh", key="overview_refresh", width="stretch"):
+        st.rerun()
+
+    if isinstance(overview_date_range, tuple) and len(overview_date_range) == 2:
+        overview_start, overview_end = overview_date_range
+    else:
+        overview_start = overview_end = overview_date_range
+    if overview_start > overview_end:
+        overview_start, overview_end = overview_end, overview_start
+
+    overview_jobs, overview_error = load_bulk_audit_jobs_for_summary(
+        overview_start,
+        overview_end,
+        domains=overview_selected_domains,
+        statuses=[],
+        requested_by="",
+        limit=300,
+    )
+    if overview_error:
+        st.warning(overview_error)
+        overview_jobs = []
+
+    status_counts: Dict[str, int] = {}
+    daily_rows: Dict[str, Dict[str, int]] = {}
+    property_summary: Dict[str, Dict[str, Any]] = {}
+    total_planned = 0
+    total_completed = 0
+    total_failed = 0
+    active_count = 0
+
+    for job in overview_jobs:
+        status = str(job.get("status") or "").strip().lower() or "unknown"
+        domain_name = str(job.get("domain_name") or "").strip() or "Unknown"
+        total_count = int(job.get("total_count") or 0)
+        completed_count = int(job.get("completed_count") or 0)
+        failed_count = int(job.get("failed_count") or 0)
+        total_planned += total_count
+        total_completed += completed_count
+        total_failed += failed_count
+        active_count += 1 if status in ACTIVE_BULK_JOB_STATUSES else 0
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+        created_at = parse_bulk_timestamp(job.get("created_at"))
+        day_key = created_at.astimezone(LOG_TIMEZONE).date().isoformat() if created_at else "Unknown"
+        day_bucket = daily_rows.setdefault(day_key, {"Jobs": 0, "URLs completed": 0, "Failed rows": 0})
+        day_bucket["Jobs"] += 1
+        day_bucket["URLs completed"] += completed_count
+        day_bucket["Failed rows"] += failed_count
+
+        if domain_name != "All properties":
+            bucket = property_summary.setdefault(
+                domain_name,
+                {
+                    "Property": domain_name,
+                    "Last run": "",
+                    "Jobs": 0,
+                    "Pass %": 0.0,
+                    "URLs completed": 0,
+                    "Failed rows": 0,
+                    "Active": 0,
+                    "Status": "Idle",
+                },
+            )
+            bucket["Jobs"] += 1
+            bucket["URLs completed"] += completed_count
+            bucket["Failed rows"] += failed_count
+            bucket["Active"] += 1 if status in ACTIVE_BULK_JOB_STATUSES else 0
+            if str(job.get("created_at") or "") > str(bucket.get("Last run") or ""):
+                bucket["Last run"] = str(job.get("created_at") or "")
+            completed_for_property = int(bucket.get("URLs completed") or 0)
+            failed_for_property = int(bucket.get("Failed rows") or 0)
+            bucket["Pass %"] = round(((completed_for_property - failed_for_property) / completed_for_property) * 100, 1) if completed_for_property else 0.0
+            bucket["Status"] = "Running" if bucket["Active"] else ("Needs attention" if failed_for_property else "Healthy")
+
+    issue_rate = round((total_failed / total_completed) * 100, 1) if total_completed else 0.0
+    kpi_cols = st.columns(4)
+    kpi_cols[0].metric("Total audits", len(overview_jobs), border=True)
+    kpi_cols[1].metric("URLs tested", total_completed, border=True)
+    kpi_cols[2].metric("Issue rate", f"{issue_rate}%", border=True)
+    kpi_cols[3].metric("Active jobs", active_count, border=True)
+
+    daily_df = pd.DataFrame(
+        [{"Date": date_key, **values} for date_key, values in sorted(daily_rows.items())]
+    )
+    chart_col1, chart_col2 = st.columns(2)
+    with chart_col1:
+        with st.container(border=True):
+            st.subheader("Audits per day")
+            if daily_df.empty:
+                st.info("No audits in this date range.")
+            else:
+                st.bar_chart(daily_df, x="Date", y="Jobs")
+    with chart_col2:
+        with st.container(border=True):
+            st.subheader("Pass/fail trend")
+            if daily_df.empty:
+                st.info("No URL data in this date range.")
+            else:
+                st.line_chart(daily_df, x="Date", y=["URLs completed", "Failed rows"])
+
+    property_rows = sorted(property_summary.values(), key=lambda row: str(row.get("Property") or "").lower())
+    with st.container(border=True):
+        st.subheader("Property health")
+        if property_rows:
+            property_df = pd.DataFrame(property_rows)
+            st.dataframe(property_df, width="stretch", hide_index=True)
+        else:
+            st.info("No property activity found.")
+
+    recent_rows = []
+    for job in overview_jobs[:12]:
+        status = str(job.get("status") or "").strip().lower()
+        recent_rows.append(
+            {
+                "Created": job.get("created_at") or "",
+                "Property": job.get("domain_name") or "",
+                "Status": status.title() if status else "",
+                "Completed": f"{int(job.get('completed_count') or 0)}/{int(job.get('total_count') or 0)}",
+                "Failed": int(job.get("failed_count") or 0),
+                "Job ID": job.get("job_id") or "",
+            }
+        )
+    with st.container(border=True):
+        st.subheader("Latest audit results")
+        if recent_rows:
+            st.dataframe(pd.DataFrame(recent_rows), width="stretch", hide_index=True)
+        else:
+            st.info("No recent jobs found.")
 
 
 if active_section == "Audit URLs":
