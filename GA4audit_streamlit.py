@@ -6873,7 +6873,7 @@ def cancel_cloud_run_execution(execution_name: str) -> Tuple[bool, str]:
             "Content-Type": "application/json",
         },
         json={},
-        timeout=30,
+        timeout=float(os.environ.get("CLOUD_RUN_CANCEL_TIMEOUT_SECONDS", "3") or "3"),
     )
     if response.status_code in {200, 201, 202}:
         return True, f"Cancelled {execution_name.rsplit('/', 1)[-1]}"
@@ -7342,14 +7342,22 @@ def load_active_bulk_audit_job(domain_name: str) -> Tuple[Optional[dict], str]:
     return None, "; ".join(errors)
 
 
-def cancel_bulk_audit_job(job_id: str, job_record: Optional[dict] = None) -> Tuple[bool, str]:
+def _append_best_effort_cancel_message(message: str, job_record: Optional[dict]) -> str:
     cloud_cancel_success, cloud_cancel_message = cancel_cloud_run_executions_for_job(job_record)
+    if not cloud_cancel_message:
+        return message
+    if cloud_cancel_success:
+        return f"{message} {cloud_cancel_message}"
+    return f"{message} Worker will stop at the next checkpoint. {cloud_cancel_message}"
+
+
+def cancel_bulk_audit_job(job_id: str, job_record: Optional[dict] = None) -> Tuple[bool, str]:
     if neon_is_configured():
         try:
             success, message = neon_cancel_bulk_audit_job(job_id)
-            if cloud_cancel_message:
-                message = f"{message} {cloud_cancel_message}"
-            return success and cloud_cancel_success, message
+            if success:
+                message = _append_best_effort_cancel_message(message, job_record)
+            return success, message
         except Exception as exc:
             if not sheet_storage_is_configured():
                 return False, str(exc)
@@ -7371,9 +7379,8 @@ def cancel_bulk_audit_job(job_id: str, job_record: Optional[dict] = None) -> Tup
                 },
             )
             message = "Bulk audit stop requested."
-            if cloud_cancel_message:
-                message = f"{message} {cloud_cancel_message}"
-            return cloud_cancel_success, message
+            message = _append_best_effort_cancel_message(message, job_record)
+            return True, message
         except Exception as exc:
             return False, str(exc)
 
@@ -7393,15 +7400,13 @@ def cancel_bulk_audit_job(job_id: str, job_record: Optional[dict] = None) -> Tup
             prefer="return=minimal",
         )
         message = "Bulk audit stop requested."
-        if cloud_cancel_message:
-            message = f"{message} {cloud_cancel_message}"
-        return cloud_cancel_success, message
+        message = _append_best_effort_cancel_message(message, job_record)
+        return True, message
     except Exception as exc:
         return False, str(exc)
 
 
 def pause_bulk_audit_job(job_id: str, job_record: Optional[dict] = None) -> Tuple[bool, str]:
-    cloud_cancel_success, cloud_cancel_message = cancel_cloud_run_executions_for_job(job_record)
     if neon_is_configured():
         try:
             ensure_neon_ready()
@@ -7416,9 +7421,8 @@ def pause_bulk_audit_job(job_id: str, job_record: Optional[dict] = None) -> Tupl
                         ("paused", datetime.now(timezone.utc).isoformat(), job_id),
                     )
             message = "Bulk audit paused."
-            if cloud_cancel_message:
-                message = f"{message} {cloud_cancel_message}"
-            return cloud_cancel_success, message
+            message = _append_best_effort_cancel_message(message, job_record)
+            return True, message
         except Exception as exc:
             if not sheet_storage_is_configured():
                 return False, str(exc)
@@ -7440,9 +7444,8 @@ def pause_bulk_audit_job(job_id: str, job_record: Optional[dict] = None) -> Tupl
                 },
             )
             message = "Bulk audit paused."
-            if cloud_cancel_message:
-                message = f"{message} {cloud_cancel_message}"
-            return cloud_cancel_success, message
+            message = _append_best_effort_cancel_message(message, job_record)
+            return True, message
         except Exception as exc:
             return False, str(exc)
 
@@ -7462,9 +7465,8 @@ def pause_bulk_audit_job(job_id: str, job_record: Optional[dict] = None) -> Tupl
             prefer="return=minimal",
         )
         message = "Bulk audit paused."
-        if cloud_cancel_message:
-            message = f"{message} {cloud_cancel_message}"
-        return cloud_cancel_success, message
+        message = _append_best_effort_cancel_message(message, job_record)
+        return True, message
     except Exception as exc:
         return False, str(exc)
 
