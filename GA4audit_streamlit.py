@@ -4363,6 +4363,15 @@ st.markdown(
     --ga-coral: #ff4b5c;
     --ga-green: #22c55e;
     --ga-amber: #f59e0b;
+    color-scheme: dark;
+}
+
+html,
+body,
+[data-testid="stAppViewContainer"],
+.stApp {
+    background-color: #0c1118 !important;
+    color: var(--ga-text) !important;
 }
 
 .stApp {
@@ -4370,6 +4379,18 @@ st.markdown(
         radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 28rem),
         linear-gradient(180deg, #0c1118 0%, #090d13 100%);
     color: var(--ga-text);
+}
+
+header[data-testid="stHeader"],
+div[data-testid="stToolbar"],
+div[data-testid="stDecoration"],
+div[data-testid="stStatusWidget"],
+div[data-testid="stAppViewBlockContainer"] {
+    background: transparent !important;
+}
+
+header[data-testid="stHeader"] {
+    height: 0 !important;
 }
 
 section[data-testid="stSidebar"] {
@@ -4535,6 +4556,7 @@ div[data-testid="stRadio"] label {
     background: transparent;
     border-radius: 10px;
     padding: 0.45rem 0.7rem;
+    color: #dbe7f5 !important;
 }
 
 div[data-testid="stRadio"] label:has(input:checked) {
@@ -4579,6 +4601,58 @@ div[data-testid="stTextInput"] > label,
 div[data-testid="stSlider"] > label {
     color: #cbd5e1 !important;
     font-weight: 700 !important;
+}
+
+input,
+textarea,
+select,
+div[data-baseweb="input"],
+div[data-baseweb="select"],
+div[data-baseweb="textarea"],
+div[data-baseweb="base-input"],
+div[data-baseweb="datepicker"],
+div[data-baseweb="popover"] {
+    background-color: #121922 !important;
+    color: #e5edf7 !important;
+    border-color: var(--ga-border-strong) !important;
+}
+
+div[data-baseweb="input"] input,
+div[data-baseweb="textarea"] textarea,
+div[data-baseweb="select"] span,
+div[data-baseweb="select"] div,
+div[data-baseweb="base-input"] input {
+    color: #e5edf7 !important;
+    -webkit-text-fill-color: #e5edf7 !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: #94a3b8 !important;
+    opacity: 1 !important;
+}
+
+ul[role="listbox"],
+div[role="listbox"],
+li[role="option"],
+div[data-baseweb="menu"],
+div[data-baseweb="popover"] > div {
+    background-color: #121922 !important;
+    color: #e5edf7 !important;
+    border-color: var(--ga-border) !important;
+}
+
+li[role="option"]:hover,
+div[role="option"]:hover {
+    background-color: #1d2a3d !important;
+}
+
+label,
+p,
+span,
+div[data-testid="stMarkdownContainer"],
+div[data-testid="stCaptionContainer"] {
+    color: inherit;
 }
 
 div[data-testid="stAlert"] {
