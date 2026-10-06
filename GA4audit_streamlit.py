@@ -4,6 +4,7 @@ import json
 import io
 import time
 import base64
+import html
 import shutil
 import subprocess
 import sys
@@ -4346,17 +4347,263 @@ def audit_single_url(
 
 # Streamlit app
 
-st.set_page_config(page_title="GA4 / dataLayer Auditor", layout="wide")
-st.title("GA4 / dataLayer Auditor")
+st.set_page_config(page_title="GA4 Audit Console", page_icon=":material/analytics:", layout="wide")
 st.markdown(
     """
 <style>
+:root {
+    --ga-bg: #0c1118;
+    --ga-panel: #121922;
+    --ga-panel-2: #172130;
+    --ga-border: rgba(148, 163, 184, 0.18);
+    --ga-border-strong: rgba(148, 163, 184, 0.28);
+    --ga-text: #e5edf7;
+    --ga-muted: #94a3b8;
+    --ga-blue: #3b82f6;
+    --ga-coral: #ff4b5c;
+    --ga-green: #22c55e;
+    --ga-amber: #f59e0b;
+}
+
+.stApp {
+    background:
+        radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 28rem),
+        linear-gradient(180deg, #0c1118 0%, #090d13 100%);
+    color: var(--ga-text);
+}
+
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #101722 0%, #0d131c 100%);
+    border-right: 1px solid var(--ga-border);
+}
+
+section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+    color: var(--ga-muted);
+    font-size: 0.74rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.block-container {
+    padding-top: 1.8rem;
+    max-width: 1480px;
+}
+
+.ga-topbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+    margin-bottom: 1.1rem;
+}
+
+.ga-brand {
+    display: flex;
+    gap: 0.85rem;
+    align-items: center;
+}
+
+.ga-logo {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, #2563eb, #38bdf8);
+    color: white;
+    font-weight: 800;
+    box-shadow: 0 14px 40px rgba(37, 99, 235, 0.35);
+}
+
+.ga-title {
+    margin: 0;
+    font-size: 2.35rem;
+    line-height: 1.05;
+    font-weight: 800;
+    letter-spacing: 0;
+}
+
+.ga-subtitle {
+    margin-top: 0.35rem;
+    color: var(--ga-muted);
+    font-size: 0.98rem;
+}
+
+.ga-build {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.48rem 0.72rem;
+    border: 1px solid var(--ga-border);
+    border-radius: 999px;
+    color: var(--ga-muted);
+    background: rgba(18, 25, 34, 0.7);
+    font-size: 0.82rem;
+}
+
+.ga-sidebar-brand {
+    padding: 0.25rem 0 1rem;
+}
+
+.ga-sidebar-title {
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: var(--ga-text);
+}
+
+.ga-sidebar-subtitle {
+    color: var(--ga-muted);
+    font-size: 0.82rem;
+    margin-top: 0.15rem;
+}
+
+.ga-status-card {
+    border: 1px solid var(--ga-border);
+    background: rgba(18, 25, 34, 0.74);
+    border-radius: 12px;
+    padding: 0.85rem 0.95rem;
+    margin: 0.55rem 0 1rem;
+}
+
+.ga-section {
+    border: 1px solid var(--ga-border);
+    background: rgba(18, 25, 34, 0.68);
+    border-radius: 14px;
+    padding: 1.1rem 1.15rem;
+    margin: 0.95rem 0;
+}
+
+.ga-section-title {
+    font-size: 1.32rem;
+    font-weight: 760;
+    margin-bottom: 0.25rem;
+}
+
+.ga-section-copy {
+    color: var(--ga-muted);
+    font-size: 0.95rem;
+}
+
+.ga-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.24rem 0.58rem;
+    border-radius: 999px;
+    font-size: 0.76rem;
+    font-weight: 700;
+    border: 1px solid var(--ga-border);
+}
+.ga-badge-green { background: rgba(34, 197, 94, 0.14); color: #86efac; border-color: rgba(34, 197, 94, 0.28); }
+.ga-badge-blue { background: rgba(59, 130, 246, 0.14); color: #93c5fd; border-color: rgba(59, 130, 246, 0.28); }
+.ga-badge-red { background: rgba(255, 75, 92, 0.14); color: #fca5a5; border-color: rgba(255, 75, 92, 0.3); }
+.ga-badge-amber { background: rgba(245, 158, 11, 0.14); color: #fcd34d; border-color: rgba(245, 158, 11, 0.3); }
+
+div[data-testid="stMetric"],
+div[data-testid="stMetric"][data-testid="stMetric"] {
+    background: linear-gradient(180deg, rgba(23, 33, 48, 0.9), rgba(18, 25, 34, 0.92));
+    border: 1px solid var(--ga-border);
+    border-radius: 14px;
+    padding: 1rem 1.05rem;
+    box-shadow: 0 18px 55px rgba(0, 0, 0, 0.18);
+}
+
+div[data-testid="stMetricLabel"] {
+    color: var(--ga-muted);
+}
+
+div[data-testid="stMetricValue"] {
+    color: #f8fafc;
+    font-weight: 760;
+}
+
+div[data-testid="stRadio"] > label {
+    display: none;
+}
+
+div[data-testid="stRadio"] div[role="radiogroup"] {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.35rem;
+    border: 1px solid var(--ga-border);
+    background: rgba(18, 25, 34, 0.7);
+    border-radius: 14px;
+    width: fit-content;
+    flex-wrap: wrap;
+}
+
+div[data-testid="stRadio"] label {
+    background: transparent;
+    border-radius: 10px;
+    padding: 0.45rem 0.7rem;
+}
+
+div[data-testid="stRadio"] label:has(input:checked) {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.35), rgba(37, 99, 235, 0.2));
+    box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.25);
+}
+
+.stButton > button,
+.stDownloadButton > button,
+button[kind="secondary"],
+button[kind="primary"] {
+    border-radius: 10px !important;
+    border: 1px solid var(--ga-border-strong) !important;
+    min-height: 2.55rem;
+    font-weight: 720 !important;
+}
+
+button[kind="primary"],
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #ff4b5c, #ff736c) !important;
+    border-color: rgba(255, 115, 108, 0.65) !important;
+    box-shadow: 0 16px 40px rgba(255, 75, 92, 0.22);
+}
+
+div[data-testid="stDataFrame"] {
+    border: 1px solid var(--ga-border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
 div[data-testid="stDataFrame"] div[role="columnheader"],
 div[data-testid="stDataFrame"] div[role="gridcell"] {
     font-size: 0.82rem !important;
     line-height: 1.2 !important;
 }
+
+div[data-testid="stSelectbox"] > label,
+div[data-testid="stMultiSelect"] > label,
+div[data-testid="stDateInput"] > label,
+div[data-testid="stNumberInput"] > label,
+div[data-testid="stTextInput"] > label,
+div[data-testid="stSlider"] > label {
+    color: #cbd5e1 !important;
+    font-weight: 700 !important;
+}
+
+div[data-testid="stAlert"] {
+    border-radius: 12px;
+}
+
+hr {
+    border-color: var(--ga-border);
+}
 </style>
+""",
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+<div class="ga-topbar">
+  <div class="ga-brand">
+    <div class="ga-logo">GA</div>
+    <div>
+      <h1 class="ga-title">GA4 Audit Console</h1>
+      <div class="ga-subtitle">Monitor tags, templates, bulk jobs, and stage comparisons from one workspace.</div>
+    </div>
+  </div>
+</div>
 """,
     unsafe_allow_html=True,
 )
@@ -10400,13 +10647,31 @@ def get_build_identity() -> Dict[str, str]:
 
 def render_sidebar_session(email_id: str):
     with st.sidebar:
+        st.markdown(
+            """
+<div class="ga-sidebar-brand">
+  <div class="ga-sidebar-title">Audit Console</div>
+  <div class="ga-sidebar-subtitle">Tagging QA operations</div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
         st.markdown("### Storage")
         if neon_is_configured():
-            st.success("Postgres storage configured")
+            st.markdown(
+                '<div class="ga-status-card"><span class="ga-badge ga-badge-green">Postgres connected</span></div>',
+                unsafe_allow_html=True,
+            )
         elif sheet_storage_is_configured():
-            st.success("Google Sheets storage configured")
+            st.markdown(
+                '<div class="ga-status-card"><span class="ga-badge ga-badge-green">Sheets connected</span></div>',
+                unsafe_allow_html=True,
+            )
         elif supabase_is_configured():
-            st.warning("Supabase configured")
+            st.markdown(
+                '<div class="ga-status-card"><span class="ga-badge ga-badge-amber">Supabase configured</span></div>',
+                unsafe_allow_html=True,
+            )
         else:
             st.warning("Storage not configured")
             st.caption("Add `DATABASE_URL` to Cloud Run environment variables.")
@@ -10445,6 +10710,13 @@ if is_template_admin(logged_in_email):
 
 active_section_state = st.session_state.get("active_section", tab_labels[0])
 active_section_index = tab_labels.index(active_section_state) if active_section_state in tab_labels else 0
+section_labels = {
+    "Audit URLs": ":material/search: Audit URLs",
+    "Domain Audit": ":material/language: Domain audit",
+    "Bulk Summary": ":material/dashboard: Bulk summary",
+    "Compare Prod vs Stage": ":material/compare_arrows: Stage vs prod",
+    "Template Manager": ":material/tune: Templates",
+}
 active_section = st.radio(
     "Section",
     tab_labels,
@@ -10452,6 +10724,7 @@ active_section = st.radio(
     key="active_section",
     horizontal=True,
     label_visibility="collapsed",
+    format_func=lambda label: section_labels.get(label, label),
 )
 
 
@@ -15130,10 +15403,13 @@ This capture is split into three layers:
 if active_section == "Domain Audit":
     st.markdown(
         """
-Run a domain-level audit from saved templates.
-
-Choose a domain, select templates, and click Run audit. The browser work runs in an external worker and writes results back to storage, so Streamlit stays lightweight.
+<div class="ga-section">
+  <div class="ga-section-title">Domain audit</div>
+  <div class="ga-section-copy">Choose a property, review its saved templates, and dispatch a bulk audit worker. Results are written back to storage so the app remains responsive.</div>
+</div>
 """
+        ,
+        unsafe_allow_html=True,
     )
 
     if template_load_error:
@@ -15258,9 +15534,15 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                 all_templates=auditable_templates,
                 rules_by_template=template_rules_by_template,
             )
-            st.caption(
-                f"{len(audit_plan)} template URL(s) selected for {selected_domain}. "
-                f"{get_bulk_audit_launcher_name()} will process them with bounded parallel workers."
+            st.markdown(
+                f"""
+<div class="ga-section">
+  <span class="ga-badge ga-badge-blue">{len(audit_plan)} URLs selected</span>
+  <span class="ga-badge ga-badge-green">{html.escape(str(selected_domain))}</span>
+  <div class="ga-section-copy" style="margin-top:0.65rem;">{html.escape(get_bulk_audit_launcher_name())} will process this run with bounded parallel workers.</div>
+</div>
+""",
+                unsafe_allow_html=True,
             )
 
             if audit_plan:
@@ -15284,10 +15566,9 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                 with st.expander("Selected URL plan", expanded=False):
                     st.dataframe(plan_preview_df, use_container_width=True, hide_index=True)
 
-            st.markdown("### Run Bulk Audit")
+            st.markdown("### Run bulk audit")
             st.caption(
-                f"This runs in {get_bulk_audit_launcher_name()}. Streamlit creates the job and reads stored results, "
-                "so the app should not hit Selenium memory limits."
+                f"This runs in {get_bulk_audit_launcher_name()}. Streamlit creates the job and reads stored results."
             )
             if not bulk_audit_launcher_is_configured():
                 st.warning(
@@ -15347,7 +15628,7 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
             if jobs_error:
                 st.warning(jobs_error)
             elif jobs:
-                st.markdown("### Bulk Audit Jobs")
+                st.markdown("### Bulk audit jobs")
                 job_options = {
                     f"{job.get('created_at', '')} | {job.get('status', '')} | {job.get('completed_count', 0)}/{job.get('total_count', 0)} | {job.get('job_id')}": job
                     for job in jobs
@@ -15395,6 +15676,16 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
                             f"{get_bulk_audit_launcher_name()} is starting the worker. The first status update can take about a minute while the worker starts."
                         )
 
+                st.markdown(
+                    f"""
+<div class="ga-section">
+  <span class="ga-badge {'ga-badge-green' if job_status == 'completed' else 'ga-badge-red' if job_status in {'failed', 'cancelled'} else 'ga-badge-amber'}">{html.escape(str(selected_job.get('status') or 'unknown').title())}</span>
+  <span class="ga-badge ga-badge-blue">Job {html.escape(selected_job_id[-12:] if selected_job_id else '-')}</span>
+  <div class="ga-section-copy" style="margin-top:0.65rem;">Completed {job_completed} of {job_total} URLs.</div>
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
                 st.progress((job_completed / job_total) if job_total else 0)
                 metric_cols = st.columns(4)
                 metric_cols[0].metric("Status", str(selected_job.get("status") or ""))
@@ -15671,7 +15962,15 @@ Choose a domain, select templates, and click Run audit. The browser work runs in
 
 
 if active_section == "Bulk Summary":
-    st.markdown("View bulk audit activity, filter recent runs, and control cross-property audits.")
+    st.markdown(
+        """
+<div class="ga-section">
+  <div class="ga-section-title">Bulk summary</div>
+  <div class="ga-section-copy">Track audit volume, property health, open jobs, and recent issue patterns across the selected date range.</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
     today = datetime.now(LOG_TIMEZONE).date()
     default_start = today - timedelta(days=6)
@@ -15837,6 +16136,7 @@ if active_section == "Bulk Summary":
         )
 
     avg_duration = (sum(durations_minutes) / len(durations_minutes)) if durations_minutes else 0
+    st.markdown("### Performance snapshot")
     metric_cols = st.columns(6)
     metric_cols[0].metric("Bulk jobs", len(jobs), border=True)
     metric_cols[1].metric("URLs planned", total_urls_planned, border=True)
@@ -15884,9 +16184,15 @@ if active_section == "Bulk Summary":
         if active_any_bulk_job
         else active_any_bulk_job_error
     )
-    st.caption(
-        all_properties_block_message
-        or f"{all_properties_plan_count} template URL(s) across {len(domains_in_all_plan)} properties are available for an all-property run."
+    st.markdown(
+        f"""
+<div class="ga-section">
+  <span class="ga-badge {'ga-badge-amber' if all_properties_block_message else 'ga-badge-green'}">{html.escape(all_properties_block_message or 'Ready')}</span>
+  <span class="ga-badge ga-badge-blue">{all_properties_plan_count} URLs</span>
+  <span class="ga-badge ga-badge-blue">{len(domains_in_all_plan)} properties</span>
+</div>
+""",
+        unsafe_allow_html=True,
     )
     control_cols = st.columns([1.2, 1.2, 1.2, 1.2, 1.2])
     run_all_clicked = control_cols[0].button(
