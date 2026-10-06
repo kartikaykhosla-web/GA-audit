@@ -4370,6 +4370,7 @@ div[data-testid="stDataFrame"] div[role="gridcell"] {
 
 JAGRAN_EMAIL_DOMAIN = "@jagrannewmedia.com"
 TEMPLATE_ADMIN_EMAIL = f"kartikay.khosla{JAGRAN_EMAIL_DOMAIN}"
+DEFAULT_APP_USER_EMAIL = os.environ.get("GA_AUDIT_USER_EMAIL", TEMPLATE_ADMIN_EMAIL).strip() or TEMPLATE_ADMIN_EMAIL
 DEFAULT_LOG_SHEET_ID = "1e_fp0fAOeEAHaRtFJUv-rt-i0sqUOhszYOrOk7Cv5QU"
 DEFAULT_LOG_WORKSHEET = "Audit Logs"
 DEFAULT_TEMPLATE_WORKSHEET = "Audit Templates"
@@ -4743,29 +4744,8 @@ def build_login_email(username: str):
 
 
 def require_login():
-    logged_in_email = st.session_state.get("logged_in_email")
-    if logged_in_email:
-        return logged_in_email
-
-    cookie_email = read_login_cookie()
-    if cookie_email.endswith(JAGRAN_EMAIL_DOMAIN):
-        st.session_state["logged_in_email"] = cookie_email
-        return cookie_email
-
-    st.subheader("Login")
-    st.info(f"Use your Jagran username. The app will identify you as `username{JAGRAN_EMAIL_DOMAIN}`.")
-    with st.form("login_form", clear_on_submit=False):
-        username = st.text_input("Username")
-        submitted = st.form_submit_button("Continue")
-    if submitted:
-        email, error = build_login_email(username)
-        if error:
-            st.error(error)
-        else:
-            st.session_state["logged_in_email"] = email
-            write_login_cookie(email)
-            st.rerun()
-    st.stop()
+    st.session_state["logged_in_email"] = DEFAULT_APP_USER_EMAIL
+    return DEFAULT_APP_USER_EMAIL
 
 
 def get_service_account_info():
@@ -10425,13 +10405,6 @@ def get_build_identity() -> Dict[str, str]:
 
 def render_sidebar_session(email_id: str):
     with st.sidebar:
-        st.markdown("### Session")
-        st.write(email_id)
-        if st.button("Log out"):
-            st.session_state.pop("logged_in_email", None)
-            clear_login_cookie()
-            st.rerun()
-
         st.markdown("### Storage")
         if neon_is_configured():
             st.success("Postgres storage configured")
